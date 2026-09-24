@@ -97,9 +97,9 @@ end
 |-------|------|-------------|-------------|
 | `operation` | string | Always | The operation triggering the check: `"create"`, `"update"`, `"delete"`, `"trash"` (soft delete), `"undelete"`, `"unpublish"`, `"restore"`, `"find"`, `"find_by_id"`, `"count"`, `"search"`, `"get"` (global read), `"read"` (admin read-gating), `"subscribe"`, … Lets one shared function gate several operations. |
 | `collection` | string | Always | The collection (or global) slug this check is for — so a function reused across collections can tell which one it's gating. |
-| `user` | table or nil | Always | Full user document from the auth collection. `nil` if no auth or anonymous. |
+| `user` | table or nil | Always | Full user document from the auth collection. `nil` if no auth or anonymous. A NULL field is `nil`; reading one and then returning a filter table is denied (see [NULL user fields fail closed](filter-constraints.md#null-user-fields-fail-closed)). |
 | `id` | string or nil | update, delete, find_by_id | Document ID |
-| `data` | table or nil | create, update | The **incoming** data being written — *not* the existing stored row. To gate on existing persisted values (e.g. "users may only edit their own rows"), return a **filter table** (e.g. `return { author_id = ctx.user.id }`); the system enforces that the target row matches it. |
+| `data` | table or nil | create, update | The **incoming** data being written — *not* the existing stored row. On an update it is the **patch**: only the fields the request sends, chosen by the caller. Never decide ownership from it (`ctx.data.author == ctx.user.id` lets anyone claim a document by sending their own id). To gate on existing persisted values (e.g. "users may only edit their own rows"), return a **filter table** (e.g. `return { author_id = ctx.user.id }`); the system enforces that the target row matches it. `ctx.data` is for rules about the change itself — e.g. refusing a patch that sets `author` to someone else. |
 | `options` | table or nil | When the rule was registered as `{ ref = "...", options = { ... } }` | The static options table attached to the hook ref — lets one access function serve several collections with different parameters. |
 | `document` | — | *Never at collection level* | Collection rules see only `data` (the incoming write). `ctx.document` (the stored row) exists **only in field-level rules** — see [Field-Level](field-level.md). To gate on stored values at collection level, return a filter table. |
 | `locale` | string or nil | When localization enabled | The content locale this read/write targets — the requested locale, or the default locale when none was given. `nil` when localization is disabled. Available at both collection and field level. |
@@ -144,13 +144,16 @@ Access functions run with transaction context — they can call `crap.collection
 >     local count = crap.collections.items.count({ override_access = true })
 >     return count < 100  -- allow if under limit
 > end
+> ```
 >
 > A CRUD call made from an access function runs with **no identity**: the
 > nested call's own access rules see `ctx.user == nil`, and it carries no
 > event or cache infrastructure. Treat it as a raw lookup (hence
 > `override_access = true`), not as an action performed by the user being
-> checked.
-> ```
+> checked. The example's `access/team_or_admin.lua` uses this to check
+> membership in the **stored** project's has-many `team` (read at
+> `depth = 0`, where it is a list of ids) — a check a filter table cannot
+> express, since access constraints must name a flat own column.
 
 ## Programmatic Access Checks
 

@@ -1,7 +1,7 @@
 //! Miscellaneous hook tests for crap-cms hook lifecycle.
 //!
 //! Tests for: `hook_ctx_to_string_map`, `call_row_label`, `call_display_condition`,
-//! `run_before_render`, `run_system_hooks`, `run_hooks` (no conn), `run_migration`,
+//! `run_before_render`, `run_system_hooks_in_tx`, `run_hooks` (no conn), `run_migration`,
 //! `run_job_handler`, and related standalone lifecycle tests.
 
 #![allow(
@@ -30,7 +30,7 @@ use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::ConditionContext;
 use crap_cms::hooks::lifecycle::{
-    HookContext, HookEvent, HookRunner, RenderCrud, RenderInfo, RenderParams,
+    HookContext, HookEvent, HookRunner, MigrationCall, RenderCrud, RenderInfo, RenderParams,
 };
 use serde_json::json;
 
@@ -261,14 +261,13 @@ fn run_before_render_no_hooks_returns_same() {
     assert_eq!(result, context);
 }
 
-// ── 6P. run_system_hooks_with_conn ───────────────────────────────────────────
+// ── 6P. run_system_hooks_in_tx ───────────────────────────────────────────────
 
 #[test]
 fn run_system_hooks_empty_refs() {
     let (_tmp, pool, _registry, runner) = setup();
 
-    let conn = pool.get().expect("DB connection");
-    let result = runner.run_system_hooks_with_conn(&[], &conn);
+    let result = runner.run_system_hooks_in_tx(&[], &pool, None);
     assert!(result.is_ok(), "Empty refs should succeed");
 }
 
@@ -276,9 +275,8 @@ fn run_system_hooks_empty_refs() {
 fn run_system_hooks_with_valid_ref() {
     let (_tmp, pool, _registry, runner) = setup();
 
-    let conn = pool.get().expect("DB connection");
     let refs = vec!["hooks.field_hooks.system_init".to_string()];
-    let result = runner.run_system_hooks_with_conn(&refs, &conn);
+    let result = runner.run_system_hooks_in_tx(&refs, &pool, None);
     assert!(result.is_ok(), "System hook with valid ref should succeed");
 }
 
@@ -286,9 +284,8 @@ fn run_system_hooks_with_valid_ref() {
 fn run_system_hooks_with_invalid_ref_fails() {
     let (_tmp, pool, _registry, runner) = setup();
 
-    let conn = pool.get().expect("DB connection");
     let refs = vec!["hooks.nonexistent.function".to_string()];
-    let result = runner.run_system_hooks_with_conn(&refs, &conn);
+    let result = runner.run_system_hooks_in_tx(&refs, &pool, None);
     assert!(result.is_err(), "System hook with invalid ref should fail");
 }
 
@@ -358,16 +355,17 @@ fn run_migration_executes_lua_file() {
     )
     .expect("write migration");
 
-    let mut conn = pool.get().expect("DB connection");
-    let tx = conn.transaction().expect("tx");
-
-    let result = runner.run_migration(&migration_path, "up", &tx);
+    let result = runner.run_migration(
+        &MigrationCall::new(&migration_path, "up"),
+        &pool,
+        None,
+        |_| Ok(()),
+    );
     assert!(
         result.is_ok(),
         "Migration should succeed: {:?}",
         result.err()
     );
-    tx.commit().unwrap();
 
     // Verify the migration ran by checking the article was created
     let def = registry.get_collection("articles").unwrap().clone();
@@ -393,8 +391,12 @@ fn run_migration_invalid_direction_fails() {
     )
     .expect("write migration");
 
-    let conn = pool.get().expect("DB connection");
-    let result = runner.run_migration(&migration_path, "down", &conn);
+    let result = runner.run_migration(
+        &MigrationCall::new(&migration_path, "down"),
+        &pool,
+        None,
+        |_| Ok(()),
+    );
     assert!(
         result.is_err(),
         "Migration with missing direction function should fail"
@@ -614,9 +616,13 @@ fn run_migration_up_standalone() {
     )
     .unwrap();
 
-    let conn = pool.get().expect("conn");
     runner
-        .run_migration(&migration_path, "up", &conn)
+        .run_migration(
+            &MigrationCall::new(&migration_path, "up"),
+            &pool,
+            None,
+            |_| Ok(()),
+        )
         .expect("migration up should succeed");
 
     // Verify the document was created

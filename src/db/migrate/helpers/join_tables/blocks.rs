@@ -7,6 +7,7 @@ use crate::config::LocaleConfig;
 use crate::db::DbConnection;
 use crate::db::migrate::helpers::column_specs::{ensure_locale_column, locale_column_definition};
 use crate::db::migrate::helpers::introspection::table_exists;
+use crate::db::migrate::helpers::join_tables::parent_index::sync_row_parent_index;
 use crate::db::query::helpers::join_table;
 
 /// Sync a blocks join table (create or ensure locale column).
@@ -47,7 +48,7 @@ pub(super) fn sync_blocks_table(
         ensure_locale_column(conn, &table_name, &locale_config.default_locale)?;
     }
 
-    Ok(())
+    sync_row_parent_index(conn, &table_name, has_locale_col)
 }
 
 #[cfg(test)]

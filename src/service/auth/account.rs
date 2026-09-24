@@ -4,9 +4,13 @@
 //! to keep call-site code path-agnostic between admin and gRPC.
 
 use crate::{
+    core::Document,
     db::{AccessResult, query},
     hooks::AccessCheckInput,
-    service::{ServiceContext, ServiceError, helpers::enforce_access_constraints},
+    service::{
+        ServiceContext, ServiceError,
+        helpers::{EmptyPassword, enforce_access_constraints, validate_password_policy},
+    },
 };
 
 /// An administrative account-state action on another user's auth document.
@@ -79,6 +83,24 @@ pub fn perform_account_action(
 ) -> Result<(), ServiceError> {
     check_account_action_access(ctx, id, action)?;
 
+    apply_account_action(ctx, id, action)
+}
+
+/// Perform an account-state action WITHOUT the access check — the write half
+/// of [`perform_account_action`], for the operator's CLI, whose commands
+/// bypass collection access by design. Every action goes through its service
+/// op, so a lock or an unverify still bumps the session version and tears
+/// down the user's live streams (when `ctx` carries an invalidation
+/// transport).
+///
+/// # Errors
+///
+/// Returns a backend error if the DB connection or update fails.
+pub fn apply_account_action(
+    ctx: &ServiceContext,
+    id: &str,
+    action: AccountAction,
+) -> Result<(), ServiceError> {
     match action {
         AccountAction::Lock => lock_user(ctx, id),
         AccountAction::Unlock => unlock_user(ctx, id),
@@ -216,6 +238,34 @@ pub fn mark_unverified(ctx: &ServiceContext, id: &str) -> Result<(), ServiceErro
     Ok(())
 }
 
+/// Set a user's password as the operator — no current password is asked for
+/// (the CLI's `user change-password`). The new password must pass the
+/// context's password policy (the default policy without one).
+///
+/// The write bumps `_session_version` and clears any pending reset link in one
+/// statement (see `query::update_password`), and the user's open live-update
+/// streams are torn down, exactly like [`lock_user`] or a password reset: every
+/// session opened with the old password ends.
+///
+/// # Errors
+///
+/// Returns a validation error when the password fails the policy, or a backend
+/// error if the DB connection or update fails.
+pub fn set_password(ctx: &ServiceContext, id: &str, password: &str) -> Result<(), ServiceError> {
+    validate_password_policy(
+        true,
+        Some(password),
+        ctx.password_policy,
+        EmptyPassword::IsRejected,
+    )?;
+
+    let conn = ctx.resolve_conn()?;
+    query::update_password(conn.as_ref(), ctx.slug, id, password)?;
+    ctx.publish_user_invalidation(id);
+
+    Ok(())
+}
+
 /// Check whether a user account is locked.
 ///
 /// # Errors
@@ -256,12 +306,47 @@ pub fn user_exists(ctx: &ServiceContext, id: &str) -> Result<bool, ServiceError>
     Ok(query::user_exists(conn.as_ref(), ctx.slug, id)?)
 }
 
+/// Read the stored document of user `id` in `ctx`'s auth collection, in the
+/// default locale — the one reader every authenticated request's user comes
+/// from (bearer token, session cookie, custom strategy, claims reload), so
+/// `ctx.user` is the same document whichever method authenticated it: every
+/// stored field present, a NULL one as `null`. `None` for a missing or trashed
+/// user.
+///
+/// `ctx` must be a collection context carrying a `conn` and, for a localized
+/// auth collection, the `locale_config`.
+///
+/// # Errors
+///
+/// Returns a backend error if the DB connection or query fails.
+pub fn load_user(ctx: &ServiceContext, id: &str) -> Result<Option<Document>, ServiceError> {
+    let conn = ctx.resolve_conn()?;
+    let def = ctx.collection_def()?;
+    let locale_ctx = ctx.default_locale_ctx();
+
+    Ok(query::find_by_id(
+        conn.as_ref(),
+        ctx.slug,
+        def,
+        id,
+        locale_ctx.as_ref(),
+    )?)
+}
+
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use tokio::time::timeout;
+
     use super::*;
-    use crate::core::event::{InProcessInvalidationBus, SharedInvalidationTransport};
-    use crate::service::auth::test_support::setup;
-    use std::sync::Arc;
+    use crate::{
+        core::event::{InProcessInvalidationBus, SharedInvalidationTransport},
+        service::auth::{
+            AccountAction::{Lock, Unlock, Unverify, Verify},
+            test_support::setup,
+        },
+    };
 
     /// Regression: the two account-action flags are derived from the action, so
     /// they can't contradict it. Pins the full truth table — especially
@@ -270,8 +355,6 @@ mod tests {
     /// session).
     #[test]
     fn account_action_flags_match_the_action() {
-        use AccountAction::{Lock, Unlock, Unverify, Verify};
-
         assert_eq!(
             (Lock.invalidates_sessions(), Lock.is_verification_action()),
             (true, false)
@@ -313,7 +396,7 @@ mod tests {
 
         lock_user(&ctx, "u1").unwrap();
 
-        let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+        let received = timeout(Duration::from_secs(1), rx.recv())
             .await
             .expect("recv timed out")
             .expect("expected invalidation signal");
@@ -406,7 +489,7 @@ mod tests {
 
         bump_session_version(&ctx, "u1").unwrap();
 
-        let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+        let received = timeout(Duration::from_secs(1), rx.recv())
             .await
             .expect("recv timed out")
             .expect("expected invalidation signal");
@@ -428,5 +511,47 @@ mod tests {
         assert_eq!(v1, v0 + 1);
         let v2 = bump_session_version(&ctx, "u1").unwrap();
         assert_eq!(v2, v1 + 1);
+    }
+
+    /// Regression: the CLI changed passwords with a bare query write, so the
+    /// user's open live-update streams kept running on the old password's
+    /// session. The service op tears them down.
+    #[tokio::test]
+    async fn set_password_publishes_invalidation_and_bumps_the_session() {
+        let (conn, def, _) = setup();
+        let bus = Arc::new(InProcessInvalidationBus::new());
+        let transport: SharedInvalidationTransport = bus;
+        let mut rx = transport.subscribe();
+
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .invalidation_transport(Some(transport))
+            .build();
+
+        let before = get_session_version(&ctx, "u1").unwrap();
+
+        set_password(&ctx, "u1", "a-long-new-password").unwrap();
+
+        let received = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("recv timed out")
+            .expect("expected invalidation signal");
+        assert_eq!(received, "u1");
+        assert!(get_session_version(&ctx, "u1").unwrap() > before);
+    }
+
+    /// A password the policy rejects is never written.
+    #[test]
+    fn set_password_enforces_the_password_policy() {
+        let (conn, def, _) = setup();
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+
+        let before = get_session_version(&ctx, "u1").unwrap();
+
+        assert!(set_password(&ctx, "u1", "short").is_err());
+        assert!(set_password(&ctx, "u1", "").is_err());
+        assert_eq!(get_session_version(&ctx, "u1").unwrap(), before);
     }
 }

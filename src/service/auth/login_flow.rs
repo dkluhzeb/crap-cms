@@ -26,7 +26,10 @@ use crate::{
         HookRunner,
         lifecycle::{AuthStrategyInput, MfaWhenInput},
     },
-    service::{AppInfra, ServiceContext, ServiceError, auth::authenticate_local},
+    service::{
+        AppInfra, ServiceContext, ServiceError,
+        auth::{authenticate_local, get_session_version, is_locked, is_verified, load_user},
+    },
 };
 
 /// Verified credentials: the user document and its current session version.
@@ -138,21 +141,31 @@ pub fn verify_login(
 
     // Fallback: custom auth strategies (Lua). Credentials and the client
     // address are exposed so a strategy can verify against an external system.
-    if let Some(user) = try_strategy_auth(&conn, req, &infra.hook_runner) {
-        let ctx = ServiceContext::slug_only(req.slug).conn(&conn).build();
+    if let Some(named) = try_strategy_auth(&conn, req, &infra.hook_runner) {
+        let ctx = ServiceContext::collection(req.slug, req.def)
+            .conn(&conn)
+            .locale_config(Some(&infra.locale_config))
+            .build();
+
+        // The strategy's table only names the user; the login continues with
+        // the stored document, read as every authenticated request reads its
+        // user. An id naming no stored, non-trashed user is refused.
+        let Some(user) = load_user(&ctx, &named.id)? else {
+            return Ok(LoginOutcome::Denied);
+        };
 
         // Strategy-authenticated users still need locked/verified checks. A
         // lookup failure must fail CLOSED (deny) — letting a locked account
         // in on a transient DB error is an auth bypass.
-        if crate::service::auth::is_locked(&ctx, &user.id)? {
+        if is_locked(&ctx, &user.id)? {
             return Ok(LoginOutcome::Denied);
         }
 
-        if require_verified && !crate::service::auth::is_verified(&ctx, &user.id)? {
+        if require_verified && !is_verified(&ctx, &user.id)? {
             return Ok(LoginOutcome::Denied);
         }
 
-        let session_version = crate::service::auth::get_session_version(&ctx, &user.id)?;
+        let session_version = get_session_version(&ctx, &user.id)?;
 
         return Ok(mfa_gate(
             infra,

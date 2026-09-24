@@ -3,7 +3,7 @@
 
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc, format::StrftimeItems};
-use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Value as LuaValue};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value as LuaValue};
 use nanoid::nanoid;
 use serde_json::Value;
 
@@ -181,7 +181,8 @@ lua_table! {
 
 // ── crap.json ────────────────────────────────────────────────────────
 
-/// Encode a Lua value as a JSON string.
+/// Encode a Lua value as a JSON string. `crap.null` encodes as `null` (a
+/// `nil`-valued key is simply absent).
 #[lua_fn(path = "crap.json.encode", returns_doc = "JSON string.")]
 fn json_encode_fn(
     _: &Lua,
@@ -192,7 +193,9 @@ fn json_encode_fn(
         .map_err(|e| RuntimeError(format!("JSON encode error: {e:#}")))
 }
 
-/// Decode a JSON string into a Lua value.
+/// Decode a JSON string into a Lua value. A `null` object field decodes to
+/// `nil` (the key is absent); a `null` array element decodes to `crap.null`,
+/// so the array keeps its length.
 #[lua_fn(
     path = "crap.json.decode",
     returns = "any",
@@ -212,13 +215,45 @@ lua_table! {
     fns: [json_encode_fn, json_decode_fn],
 }
 
+// ── crap.null ────────────────────────────────────────────────────────
+
+/// Type annotation for `crap.null`, appended to the static `types/crap.lua`
+/// after the `crap.json` section.
+const CRAP_NULL_LUA: &str = "\
+-- ── crap.null ────────────────────────────────────────────────
+
+--- Opaque sentinel type of `crap.null`.
+--- @class crap.Null
+
+--- An explicit JSON `null`. Lua `nil` cannot be stored in a table (assigning
+--- it erases the key or leaves a hole in an array), so use `crap.null` wherever
+--- data handed back to the CMS must carry a null: `{ field = crap.null }` in
+--- hook/CRUD write data clears the field, and a route response or job result
+--- keeps the key as `null`. Reading data, a null object field is `nil`, while
+--- a null array element is `crap.null` so the array keeps its length (also
+--- from `crap.json.decode`). The sentinel is truthy — compare with
+--- `v == crap.null`.
+--- @type crap.Null
+crap.null = nil
+
+";
+
+/// Render the `crap.null` annotation block into the static types file.
+pub fn render_crap_null_lua(out: &mut String) {
+    out.push_str(CRAP_NULL_LUA);
+}
+
 // ── Registration ─────────────────────────────────────────────────────
 
-/// Register `crap.util` and `crap.json`. Parent `crap` must already be
-/// in globals (`register_api` sets it up-front).
+/// Register `crap.util`, `crap.json`, and the `crap.null` sentinel. Parent
+/// `crap` must already be in globals (`register_api` sets it up-front).
 pub(super) fn register_util(lua: &Lua) -> Result<()> {
     register_crap_util(lua, ())?;
     register_crap_json(lua, ())?;
+
+    let crap: Table = lua.globals().get("crap")?;
+    crap.set("null", LuaValue::NULL)?;
+
     Ok(())
 }
 
@@ -245,8 +280,61 @@ fn slugify(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::hooks::lifecycle::InitPhase;
+
+    /// A VM with `crap.util`, `crap.json` and `crap.null` registered.
+    fn util_vm() -> Lua {
+        let lua = Lua::new();
+        lua.globals()
+            .set("crap", lua.create_table().unwrap())
+            .unwrap();
+        register_util(&lua).unwrap();
+
+        lua
+    }
+
+    /// `crap.null` is the explicit-null sentinel: it encodes as `null` in an
+    /// object field and an array slot, and it is the one null light-userdata
+    /// every Lua→JSON conversion reads as `null`.
+    #[test]
+    fn crap_null_encodes_as_json_null() {
+        let lua = util_vm();
+
+        let encoded: String = lua
+            .load("return crap.json.encode({ a = crap.null, list = { 1, crap.null, 3 } })")
+            .eval()
+            .unwrap();
+
+        let back: Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(back, json!({ "a": null, "list": [1, null, 3] }));
+    }
+
+    /// `crap.json.decode` keeps a null array element as `crap.null` (no hole,
+    /// so `#t` / `ipairs` see every element) and a null object field as `nil`.
+    #[test]
+    fn crap_json_decode_null_array_element_is_the_sentinel() {
+        let lua = util_vm();
+
+        let ok: bool = lua
+            .load(
+                r#"
+                local list = crap.json.decode('[1, null, 3]')
+                local obj = crap.json.decode('{"x": null, "y": 1}')
+                local n = 0
+                for _ in ipairs(list) do n = n + 1 end
+
+                return #list == 3 and n == 3 and list[2] == crap.null
+                    and obj.x == nil and obj.y == 1
+                "#,
+            )
+            .eval()
+            .unwrap();
+
+        assert!(ok);
+    }
 
     /// The shared error converter renders the FULL anyhow cause chain (`{:#}`),
     /// so a bare error → `RuntimeError` keeps its causes uniformly across the

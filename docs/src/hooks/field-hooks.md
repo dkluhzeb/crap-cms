@@ -24,7 +24,7 @@ end
 |-------|------|-------------|
 | `field_name` | string | Name of the field being processed |
 | `collection` | string | Collection slug |
-| `operation` | string | `"create"`, `"update"`, `"find"`, `"find_by_id"` |
+| `operation` | string | `"create"` / `"update"` on a write; `"find"`, `"find_by_id"` or `"get"` (a global) on a read; for an `after_read` shaping a live event, that event's operation (`"create"`, `"update"`, `"delete"`, `"undelete"`, `"unpublish"`, `"restore"`) |
 | `id` | string/nil | Document id on `update` / read; nil on `create` |
 | `data` | table | The **nearest scope** (read-only snapshot): the group object for a field inside a group, the current row for a field inside an array/blocks row, or the full document at the top level. Groups are nested objects (`ctx.data.title` for a `seo.title` sub-field) |
 | `document` | table | The **full document** being written or read — a read-only snapshot taken before any field hook in this pass ran (it does not reflect earlier field hooks' changes). Matches `data` at the top level; for a sub-field hook inside an array/blocks row it's the parent document, so the hook can cross-reference fields outside its row |
@@ -39,9 +39,14 @@ The type generator (`crap-cms typegen`) emits per-collection field hook contexts
 with typed `data` fields:
 
 - **Collections:** `crap.field_hook.{PascalCase}` — e.g., `crap.field_hook.Posts`
-  has `data: crap.data.Posts`
+  has `document: crap.data.Posts`
 - **Globals:** `crap.field_hook.global_{slug}` — e.g., `crap.field_hook.global_site_settings`
-  has `data: crap.global_data.SiteSettings`
+  has `document: crap.global_data.SiteSettings`
+
+Each also carries `id`, `locale`, `user`, `ui_locale` and `options`. `data` is
+typed `crap.data.{PascalCase}|table<string, any>`: it is the document only for a
+top-level field; for a field nested in a group or an array/blocks row it is that
+group object or row.
 
 Use the typed context when a hook is specific to one collection:
 
@@ -50,8 +55,8 @@ Use the typed context when a hook is specific to one collection:
 ---@param context crap.field_hook.Inquiries
 ---@return number|nil
 return function(value, context)
-    -- context.data is typed as crap.data.Inquiries
-    -- IDE autocompletes context.data.name, context.data.email, etc.
+    -- context.document is typed as crap.data.Inquiries
+    -- IDE autocompletes context.document.name, context.document.email, etc.
     return value
 end
 ```

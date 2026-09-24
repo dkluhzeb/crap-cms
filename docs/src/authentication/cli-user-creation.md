@@ -18,7 +18,10 @@ Confirm password: ********
 Created user abc123 in 'users'
 ```
 
-If required fields have no default value, you'll be prompted for those too.
+If required fields have no default value, you'll be prompted for those too —
+including a required field inside a `row`, `collapsible` or `tabs` wrapper, which
+is filled exactly like a top-level field. The `init` wizard's first-user step
+uses the same prompts.
 
 ## Non-Interactive Mode
 
@@ -50,18 +53,26 @@ prints a warning when you use it.
 ## Behavior
 
 - Runs after Lua definitions are loaded and database schema is synced
-- **No hooks are fired** (this is a bootstrap/admin tool)
-- Creates the user in a single transaction
+- Creates the user through the same service write as the admin UI and the API, in a single transaction: field validation, `[auth.password_policy]`, has-many and array values, the version snapshot, reference counting, the search index and the live event all apply. On a collection with `verify_email`, the verification email is queued
+- **Lifecycle hooks don't run** — no `before_*`/`after_*` collection or field hooks (this is a bootstrap/admin tool: the first user is created before any hook can rely on one). Validation still runs
+- **The live event is still published**, like every other write: the collection's `live` filter and its `before_broadcast` hooks run on it before it reaches subscribers
+- Collection access rules don't apply to the operator's CLI
 - Hashes the password with Argon2id
 - Exits after creating the user (does not start the server)
 
 ## Field Handling
 
+- Layout wrappers (`row`, `collapsible`, `tabs`) are transparent: a field inside one is prompted for and passed with `-f` by its own name
 - Required fields with `default_value` — uses the default, prompts with `[default]` if interactive
 - Required fields without defaults — prompts for input, fails if empty
-- Optional fields — skipped unless provided via `-f`
+- Groups holding a required sub-field — prompted as one JSON object (`address (required, JSON object)`)
+- Prompts for array/blocks, group and list fields name the JSON format they take (`JSON array of rows`, `JSON object`, `JSON array`)
+- Optional fields — skipped unless provided via `-f`; an optional field with `default_value` gets its default
 - Checkbox fields — skipped (absent = false)
 - Email field — always required (handled separately from `-f`)
+- Array, blocks and group fields take JSON: `-f links='[{"url":"https://example.com"}]'`. A value that isn't JSON is an error
+- List fields (has-many relationships, uploads and `has_many` text/number/select) take a JSON array: `-f roles='["admin","editor"]'`. A has-many relationship or upload also takes comma-separated ids: `-f teams=t1,t2`
+- Every other value is text; the write converts it to the field's type (`-f age=42`) and validates it
 
 ## Examples
 

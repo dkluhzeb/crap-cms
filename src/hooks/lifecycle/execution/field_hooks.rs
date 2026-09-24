@@ -12,7 +12,7 @@
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
-use mlua::{Lua, LuaSerdeExt as _, Value};
+use mlua::{Lua, Value};
 use serde_json::Value as JsonValue;
 use tracing::debug;
 
@@ -358,7 +358,7 @@ pub(crate) fn call_field_hook_ref(
         ui_locale: locale_ctx_ref.as_ref().and_then(|c| c.0.as_deref()),
         options: hook.options(),
     };
-    let ctx_table = lua.to_value(&ctx)?;
+    let ctx_table = lua_api::to_lua_value(lua, &ctx)?;
 
     // Call: new_value = hook(value, context)
     let result: Value = func.call((lua_value, ctx_table))?;
@@ -502,6 +502,44 @@ mod tests {
             Some("hi"),
             "sub-field values must be preserved through the group-level hook"
         );
+    }
+
+    /// Regression: the field-hook context was serialized with mlua's defaults,
+    /// so a null sibling field and an absent id reached the hook as the
+    /// truthy `NULL` sentinel instead of `nil`.
+    #[test]
+    fn field_hook_context_null_values_are_nil() {
+        let lua = mlua::Lua::new();
+        lua.load(
+            r#"
+            package.loaded["hooks.null_probe"] = function(value, ctx)
+                return ctx.data.x == nil and not ctx.data.x and ctx.document.x == nil
+                    and ctx.id == nil and ctx.options == nil and value == nil
+            end
+        "#,
+        )
+        .exec()
+        .unwrap();
+
+        let data: DocumentFields = [("x".to_string(), json!(null))].into_iter().collect();
+        let meta = FieldHookMeta {
+            collection: "posts",
+            operation: "create",
+            id: None,
+            locale: None,
+        };
+
+        let result = call_field_hook_ref(
+            &lua,
+            &HookRef::new("hooks.null_probe"),
+            &json!(null),
+            "x",
+            &meta,
+            &data,
+            &data,
+        )
+        .unwrap();
+        assert_eq!(result, json!(true), "every null must reach the hook as nil");
     }
 
     #[test]

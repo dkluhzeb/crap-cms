@@ -12,11 +12,12 @@ use crate::{
     db::query,
 };
 
-use super::helpers::deny_unknown_keys;
+use super::helpers::{deny_unknown_keys, get_table};
 use super::shared::{
-    parse_access_config, parse_fields_section, parse_hooks_section, parse_labels,
-    parse_live_setting, parse_mcp_section, parse_versions_config, validate_shared_nested_keys,
-    warn_access_keys_without_features, warn_deep_nesting,
+    COLLECTION_HOOK_KEYS, GLOBAL_HOOK_KEYS, parse_access_config, parse_fields_section,
+    parse_hooks_section, parse_labels, parse_live_setting, parse_mcp_section,
+    parse_versions_config, validate_shared_nested_keys, warn_access_keys_without_features,
+    warn_deep_nesting,
 };
 
 /// Every key accepted at the top level of `crap.globals.define(slug, {...})`.
@@ -37,6 +38,7 @@ pub fn parse_global_definition(lua: &Lua, slug: &str, config: &Table) -> Result<
     query::reject_reserved_tool_prefix(slug)?;
     deny_unknown_keys(config, "global", GLOBAL_CONFIG_KEYS)?;
     validate_shared_nested_keys(config)?;
+    reject_global_only_hook_keys(config, slug)?;
 
     let labels = parse_labels(config);
     let fields = parse_fields_section(lua, config)?;
@@ -96,6 +98,29 @@ fn reject_global_only_access_keys(access: &Access, slug: &str) -> Result<()> {
                  access.draft, access.update, or the access.versions toggle."
             );
         }
+    }
+
+    Ok(())
+}
+
+/// Reject hook events that can never fire on a global. A global is never
+/// deleted, so `before_delete` / `after_delete` hooks would silently never
+/// run — rejected at load like the delete-side access keys.
+fn reject_global_only_hook_keys(config: &Table, slug: &str) -> Result<()> {
+    let Ok(hooks) = get_table(config, "hooks") else {
+        return Ok(());
+    };
+
+    for key in COLLECTION_HOOK_KEYS {
+        if GLOBAL_HOOK_KEYS.contains(key) || !hooks.contains_key(*key)? {
+            continue;
+        }
+
+        bail!(
+            "Global '{slug}': hooks.{key} is not supported — a global is never \
+             deleted. Supported hooks: {}.",
+            GLOBAL_HOOK_KEYS.join(", ")
+        );
     }
 
     Ok(())
@@ -168,6 +193,40 @@ mod tests {
             );
         }
         assert_eq!(ACCESS_KEYS.len(), GLOBAL_ACCESS_KEYS.len() + rejected.len());
+    }
+
+    /// Regression: a global accepted `hooks.before_delete` / `after_delete`,
+    /// which never fire (a global is never deleted). They are rejected at
+    /// load, and the global hook keys are the collection ones minus those two.
+    #[test]
+    fn global_rejects_delete_hooks() {
+        for key in ["before_delete", "after_delete"] {
+            let lua = Lua::new();
+            let config = lua.create_table().unwrap();
+            let hooks = lua.create_table().unwrap();
+            hooks.set(key, vec!["hooks.audit"]).unwrap();
+            config.set("hooks", hooks).unwrap();
+
+            let err = parse_global_definition(&lua, "site_settings", &config)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(&format!("hooks.{key}")), "{err}");
+        }
+
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        let hooks = lua.create_table().unwrap();
+        hooks.set("before_change", vec!["hooks.audit"]).unwrap();
+        config.set("hooks", hooks).unwrap();
+        parse_global_definition(&lua, "site_settings", &config).expect("before_change is valid");
+
+        let rejected = ["before_delete", "after_delete"];
+        for key in COLLECTION_HOOK_KEYS {
+            assert!(
+                GLOBAL_HOOK_KEYS.contains(key) != rejected.contains(key),
+                "hook key '{key}' must be in exactly one of GLOBAL_HOOK_KEYS / the reject list"
+            );
+        }
     }
 
     #[test]

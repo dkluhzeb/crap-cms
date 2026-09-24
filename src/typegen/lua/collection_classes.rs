@@ -6,21 +6,19 @@ use crate::{
         CollectionDefinition,
         upload::{read_shape_fields, writable_fields, write_shape_fields},
     },
+    hooks::lifecycle::operation::{collection_hook_operations, collection_read_hook_operations},
     typegen::helpers::{COLLECTION_TAG_KEY, declares_collection_tag, to_pascal_case, w},
 };
 
 use super::{
     accessor::{render_collection_accessor, render_collection_typing_factories},
     classes::{
-        render_sub_type_classes, write_fields, write_hook_context_tail, write_system_fields,
+        literal_union, render_sub_type_classes, write_field_hook_context, write_fields,
+        write_hook_context_tail, write_system_fields,
     },
     field::LuaShape,
     query_classes::render_query_classes,
 };
-
-/// The operations an `after_read` hook of a collection runs for: the reads,
-/// and the write that produced a live event.
-const READ_HOOK_OPERATIONS: &str = r#""find" | "find_by_id" | "create" | "update" | "delete""#;
 
 /// `crap.input.*`, `crap.partial_many.*` and `crap.partial.*` — what `create`,
 /// `update_many` and `update` accept: the write shape (no virtual `Join`, no
@@ -93,16 +91,16 @@ fn render_doc_class(out: &mut String, col: &CollectionDefinition, pascal: &str) 
     out.push('\n');
 }
 
-/// `crap.data.*` — hook `ctx.data`: the stored fields. `id` and timestamps
-/// are emitted as OPTIONAL because the table is reused across hooks where
-/// they may or may not be populated (e.g. `before_validate` on create has no
-/// id yet; `after_change` does). Optional types let user code reach for
-/// `data.id` without `LuaLS` complaining, while still flagging unconditional
-/// dereferences without a nil check.
+/// `crap.data.*` — hook `ctx.data`: the stored fields, EVERY one optional.
+/// An update's before-hooks see only the fields the request sends (a partial
+/// update of `title` carries no other field, required or not), so no key can
+/// be promised. `id` and timestamps are optional for the same reason: the
+/// table is reused across hooks where they may or may not be populated (e.g.
+/// `before_validate` on create has no id yet; `after_change` does).
 fn render_data_class(out: &mut String, col: &CollectionDefinition, pascal: &str) {
     w!(out, "---@class crap.data.{pascal}");
     w!(out, "---@field id? string");
-    write_fields(out, &col.fields, pascal, LuaShape::Input);
+    write_fields(out, &col.fields, pascal, LuaShape::Partial);
     if col.timestamps {
         w!(out, "---@field created_at? string");
         w!(out, "---@field updated_at? string");
@@ -119,14 +117,19 @@ fn render_hook_classes(out: &mut String, col: &CollectionDefinition, pascal: &st
     w!(out, "---@field collection \"{}\"", col.slug);
     w!(
         out,
-        "---@field operation \"create\" | \"update\" | \"delete\" | \"find\" | \"find_by_id\""
+        "---@field operation {}",
+        literal_union(&collection_hook_operations())
     );
     w!(out, "---@field data crap.data.{pascal}");
     write_hook_context_tail(out);
 
     w!(out, "---@class crap.read_hook.{pascal}");
     w!(out, "---@field collection \"{}\"", col.slug);
-    w!(out, "---@field operation {READ_HOOK_OPERATIONS}");
+    w!(
+        out,
+        "---@field operation {}",
+        literal_union(&collection_read_hook_operations())
+    );
     w!(out, "---@field data crap.doc.{pascal}");
     write_hook_context_tail(out);
 
@@ -190,15 +193,10 @@ pub(super) fn render_collection(out: &mut String, col: &CollectionDefinition) {
     render_hook_classes(out, col, &pascal);
     render_fn_aliases(out, &pascal);
 
-    // crap.field_hook.* — typed FieldHookContext (data = full document)
+    // crap.field_hook.* — the typed `crap.FieldHookContext`.
     w!(out, "---@class crap.field_hook.{pascal}");
-    w!(out, "---@field field_name string");
     w!(out, "---@field collection \"{}\"", col.slug);
-    w!(out, "---@field operation string");
-    w!(out, "---@field data crap.data.{pascal}");
-    w!(out, "---@field user? table");
-    w!(out, "---@field ui_locale? string");
-    out.push('\n');
+    write_field_hook_context(out, &format!("crap.data.{pascal}"));
 
     render_query_classes(out, col, &pascal);
     render_collection_accessor(out, &col.slug, &pascal);
@@ -216,19 +214,53 @@ mod tests {
     };
 
     /// The generated hook contexts name exactly the operations the runtime
-    /// passes: collection hooks include `delete`.
+    /// passes: collection hooks include `delete` and the state-change
+    /// `undelete`; `after_read` every live-event operation, `unpublish` and
+    /// `restore` included.
     #[test]
     fn hook_context_operations_match_the_runtime() {
         let mut col = CollectionDefinition::new("posts");
         col.fields = vec![text_field("title", true)];
         let mut out = String::new();
         render_collection(&mut out, &col);
+
+        let hook = class_block(&out, "---@class crap.hook.Posts");
         assert!(
-            out.contains(
-                r#"---@field operation "create" | "update" | "delete" | "find" | "find_by_id""#
+            hook.contains(
+                r#"---@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id""#
             ),
-            "{out}"
+            "{hook}"
         );
+
+        let read_hook = class_block(&out, "---@class crap.read_hook.Posts");
+        assert!(
+            read_hook.contains(
+                r#"---@field operation "find" | "find_by_id" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore""#
+            ),
+            "{read_hook}"
+        );
+    }
+
+    /// Regression: the typed field-hook context lacked `id`, `locale`,
+    /// `document` and `options`, and typed `data` as the full document
+    /// although a nested field's `data` is its group object or row.
+    #[test]
+    fn field_hook_context_carries_the_runtime_keys() {
+        let mut col = CollectionDefinition::new("posts");
+        col.fields = vec![text_field("title", true)];
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+
+        let block = class_block(&out, "---@class crap.field_hook.Posts");
+        for line in [
+            "---@field id? string",
+            "---@field locale? string",
+            "---@field document crap.data.Posts",
+            "---@field data crap.data.Posts|table<string, any>",
+            "---@field options? table",
+        ] {
+            assert!(block.contains(line), "{line}: {block}");
+        }
     }
 
     /// Regression: `after_read` hooks were typed with the stored-shape hook
@@ -247,7 +279,10 @@ mod tests {
             "{read_hook}"
         );
         assert!(
-            read_hook.contains(&format!("---@field operation {READ_HOOK_OPERATIONS}")),
+            read_hook.contains(&format!(
+                "---@field operation {}",
+                literal_union(&collection_read_hook_operations())
+            )),
             "{read_hook}"
         );
         assert!(
@@ -343,8 +378,12 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
 
-        assert!(out.contains("---@class crap.data.Posts"));
-        assert!(out.contains("---@field title string"));
+        // Hook data may lack any field (an update's before-hooks see only the
+        // fields the request sends); the create payload keeps `required`.
+        let data = class_block(&out, "---@class crap.data.Posts");
+        assert!(data.contains("---@field title? string"), "{data}");
+        let input = class_block(&out, "---@class crap.input.Posts");
+        assert!(input.contains("---@field title string"), "{input}");
         assert!(out.contains("---@field content? string"));
         assert!(out.contains("---@field status \"draft\" | \"published\""));
         assert!(out.contains("---@field active? boolean"));

@@ -30,6 +30,10 @@ pub struct LuaFnSpec {
     /// Return value spec. `None` for `()`-returning fns (no `--- @return`
     /// emitted).
     pub returns: Option<LuaReturn>,
+
+    /// Extra `--- @overload` signatures (`fun(...)` literals), emitted after
+    /// the `@param` / `@return` lines. Empty for most functions.
+    pub overloads: &'static [&'static str],
 }
 
 /// One Lua-facing parameter on a `#[lua_fn]`.
@@ -86,6 +90,7 @@ mod tests {
             ty: "string",
             doc: "",
         }),
+        overloads: &[],
     };
 
     #[test]
@@ -100,6 +105,7 @@ mod tests {
             doc: &[],
             params: &[],
             returns: None,
+            overloads: &[],
         };
         assert_eq!(spec.last_segment(), "crap");
     }

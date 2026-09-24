@@ -1,0 +1,5 @@
+# Methods the codebase routes through one chokepoint instead.
+disallowed-methods = [
+    { path = "mlua::LuaSerdeExt::to_value", reason = "use `hooks::lua_api::to_lua_value`: mlua's serializer turns JSON null into the truthy NULL sentinel, so `ctx.x == nil` breaks" },
+    { path = "mlua::LuaSerdeExt::to_value_with", reason = "use `hooks::lua_api::to_lua_value`: mlua's serializer turns JSON null into the truthy NULL sentinel, so `ctx.x == nil` breaks" },
+]

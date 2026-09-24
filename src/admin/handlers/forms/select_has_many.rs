@@ -1,13 +1,13 @@
 //! Normalize `has_many` select/radio/text/number form values into JSON array strings.
 //!
 //! Two input shapes are accepted:
-//! - Comma-separated (`"a,b,c"`) — produced by traditional HTML form submission
-//!   after `parse_form` collapses duplicate keys into a joined string.
-//! - JSON array (`"[\"a\",\"b\"]"`) — produced by the `<crap-validate-form>` JSON
-//!   endpoint, where `values_to_string_map` serializes array values with
-//!   `Value::to_string()`. Forwarding these intact avoids a double-encoding bug
-//!   where each JSON-quoted element (`"a"`) was split on the trailing comma and
-//!   re-wrapped as a literal string value.
+//! - JSON array (`"[\"a\",\"b\"]"`) — what `parse_form` makes of a name the
+//!   form submitted more than once (`<select multiple>`), what the tag widget
+//!   writes, and what the `<crap-validate-form>` JSON endpoint forwards
+//!   (`values_to_string_map` serializes array values with `Value::to_string()`).
+//! - Any other text — exactly one value (a `<select multiple>` with a single
+//!   option picked). It is never split on commas, so an option value that
+//!   contains a comma survives.
 
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -59,7 +59,7 @@ pub(crate) fn transform_select_has_many(
 /// nested inside array/blocks rows (which this module's top-level walk doesn't
 /// descend into).
 pub(super) fn canonical_json_array(val: &str) -> String {
-    if val.is_empty() {
+    if val.trim().is_empty() {
         return "[]".to_string();
     }
 
@@ -69,20 +69,15 @@ pub(super) fn canonical_json_array(val: &str) -> String {
         return canonical;
     }
 
-    // Traditional HTML form — comma-separated.
-    let values: Vec<&str> = val
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    json!(values).to_string()
+    // Any other text is one value — a single picked option, whose own commas
+    // are part of the value.
+    json!([val]).to_string()
 }
 
 /// If `val` parses as a JSON array, return a canonical JSON **string** array —
 /// every element stringified (numbers/bools rendered as text, nulls dropped).
 /// A non-array JSON value, or text that doesn't parse as JSON, returns `None`
-/// so the caller falls back to comma-separated parsing.
+/// so the caller treats the text as one value.
 ///
 /// Elements are stringified rather than requiring all-strings: a number
 /// `has_many` posts `[1, 2]` from the JSON endpoint, and comma-splitting the
@@ -117,9 +112,9 @@ mod tests {
     }
 
     #[test]
-    fn transform_select_has_many_converts_comma_separated() {
+    fn transform_select_has_many_passes_a_repeated_key_array_through() {
         let mut form = HashMap::new();
-        form.insert("tags".to_string(), "red,blue,green".to_string());
+        form.insert("tags".to_string(), r#"["red","blue","green"]"#.to_string());
 
         let mut field = make_field("tags", FieldType::Select);
         field.has_many = true;
@@ -131,6 +126,20 @@ mod tests {
 
         transform_select_has_many(&mut form, &[field]);
         assert_eq!(form.get("tags").unwrap(), r#"["red","blue","green"]"#);
+    }
+
+    /// Regression: a single picked option whose value holds a comma was split
+    /// into two values.
+    #[test]
+    fn transform_select_has_many_keeps_a_single_value_with_a_comma_whole() {
+        let mut form = HashMap::new();
+        form.insert("sizes".to_string(), "10,5 cm".to_string());
+
+        let mut field = make_field("sizes", FieldType::Select);
+        field.has_many = true;
+
+        transform_select_has_many(&mut form, &[field]);
+        assert_eq!(form.get("sizes").unwrap(), r#"["10,5 cm"]"#);
     }
 
     #[test]
@@ -183,7 +192,7 @@ mod tests {
     #[test]
     fn transform_select_has_many_in_group() {
         let mut form = HashMap::new();
-        form.insert("meta__tags".to_string(), "a,b".to_string());
+        form.insert("meta__tags".to_string(), r#"["a","b"]"#.to_string());
 
         let mut tag_field = make_field("tags", FieldType::Select);
         tag_field.has_many = true;
@@ -198,7 +207,7 @@ mod tests {
     #[test]
     fn transform_has_many_in_group_collapsible() {
         let mut form = HashMap::new();
-        form.insert("config__tags".to_string(), "a,b".to_string());
+        form.insert("config__tags".to_string(), r#"["a","b"]"#.to_string());
 
         let mut tag_field = make_field("tags", FieldType::Select);
         tag_field.has_many = true;
@@ -216,7 +225,7 @@ mod tests {
     #[test]
     fn transform_has_many_in_nested_groups() {
         let mut form = HashMap::new();
-        form.insert("outer__inner__tags".to_string(), "x,y".to_string());
+        form.insert("outer__inner__tags".to_string(), r#"["x","y"]"#.to_string());
 
         let mut tag_field = make_field("tags", FieldType::Text);
         tag_field.has_many = true;
@@ -322,10 +331,9 @@ mod tests {
         );
     }
 
-    /// A comma-separated value that merely *starts* with `[` must not be
-    /// misidentified as JSON — fall back to comma splitting.
+    /// Text that merely *starts* with `[` but is no JSON array is one value.
     #[test]
-    fn transform_select_has_many_comma_separated_with_bracket_prefix() {
+    fn transform_select_has_many_bracket_prefixed_text_is_one_value() {
         let mut form = HashMap::new();
         form.insert("tags".to_string(), "[legacy,tag".to_string());
 
@@ -333,6 +341,6 @@ mod tests {
         field.has_many = true;
 
         transform_select_has_many(&mut form, &[field]);
-        assert_eq!(form.get("tags").unwrap(), r#"["[legacy","tag"]"#);
+        assert_eq!(form.get("tags").unwrap(), r#"["[legacy,tag"]"#);
     }
 }

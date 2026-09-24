@@ -12,6 +12,6 @@ pub use dispatch::run;
 pub use helpers::UserLookup;
 pub use list::user_list;
 pub use modify::{
-    UserChangePasswordParams, UserDeleteParams, user_change_password, user_delete, user_lock,
-    user_reset_totp, user_unlock,
+    UserChangePasswordParams, UserDeleteParams, user_account_action, user_change_password,
+    user_delete, user_reset_totp,
 };

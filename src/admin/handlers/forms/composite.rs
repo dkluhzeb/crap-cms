@@ -116,7 +116,7 @@ fn parse_row(entries: Vec<(String, String)>, flat_defs: &[&FieldDefinition]) -> 
     // Normalize `has_many` scalar leaves (select/radio/text/number) into a
     // canonical JSON-array string — the same shape top-level `has_many` fields
     // use. The top-level normalizer doesn't descend into array/blocks rows, so
-    // without this a nested multi-value field stays a collapsed `"a,b"` string
+    // without this a nested single-value pick stays a bare `"a"` string
     // the renderer can't parse (`from_str` fails → empty selection on reload).
     for def in flat_defs {
         if !def.has_many
@@ -591,21 +591,25 @@ mod tests {
 
     /// Regression: a `has_many` select nested in an array row is normalized to
     /// a canonical JSON-array string (like top-level `has_many`), so it round-trips
-    /// instead of staying a collapsed `"a,b"` the renderer can't parse.
+    /// instead of staying a bare `"a"` the renderer can't parse. A single picked
+    /// value is one element even when it holds a comma.
     #[test]
     fn has_many_select_in_array_row_normalizes_to_json_array() {
         let mut form = HashMap::new();
         form.insert("items[0][title]".to_string(), "T".to_string());
-        form.insert("items[0][tags]".to_string(), "a,b,c".to_string());
+        form.insert("items[0][tags]".to_string(), r#"["a","b","c"]"#.to_string());
+        form.insert("items[1][title]".to_string(), "U".to_string());
+        form.insert("items[1][tags]".to_string(), "10,5 cm".to_string());
 
         let mut tags = make_field("tags", FieldType::Select);
         tags.has_many = true;
         let sub_defs = vec![make_field("title", FieldType::Text), tags];
 
         let result = parse_composite_form_data(&form, "items", &sub_defs);
-        assert_eq!(result.len(), 1);
+        assert_eq!(result.len(), 2);
         assert_eq!(result[0]["title"], "T");
         assert_eq!(result[0]["tags"], r#"["a","b","c"]"#);
+        assert_eq!(result[1]["tags"], r#"["10,5 cm"]"#);
     }
 
     /// An unknown `_block_type` (or none) falls back to empty defs — the row

@@ -336,6 +336,7 @@ class CrapLiveEvents extends HTMLElement {
           type: 'button',
           class: 'stale-warning__dismiss',
           text: '×',
+          'aria-label': t('close'),
           onClick: () => banner.remove(),
         }),
       ),

@@ -100,6 +100,7 @@ markup.
 | `partials/logo.hbs` | Brand SVG. Caller passes `class`. |
 | `partials/meta-tags.hbs` | `<head>` metadata: charset, viewport, theme-color, favicon link. |
 | `partials/icon-font.hbs` | Material Symbols stylesheet `<link>`. Override for self-hosting / privacy. |
+| `partials/i18n-island.hbs` | The `#crap-i18n` JSON data island holding the translations the admin JavaScript reads. Rendered by `layout/base.hbs` and `layout/auth.hbs`; a custom layout that loads `/static/components/index.js` must include it, or components show raw translation keys. |
 | `partials/field.hbs` | Block-form wrapper around field inputs (label, required indicator, error, help). |
 | `partials/breadcrumb.hbs` | Page breadcrumb trail. |
 | `partials/pagination.hbs` | List-view next/previous controls. |

@@ -38,6 +38,7 @@
 
 import { h } from './_internal/h.js';
 import { parseJsonAttribute } from './_internal/util/json.js';
+import { EV_CHANGE } from './events.js';
 import { openLinkModal } from './richtext/link-modal.js';
 import { openNodeEditModal } from './richtext/node-modal.js';
 import { CustomNodeView } from './richtext/node-view.js';
@@ -161,12 +162,13 @@ class CrapRichtext extends HTMLElement {
         return schema.topNodeType.createAndFill();
       }
     }
-    // SAFETY: innerHTML on a detached element is the standard ProseMirror
-    // pattern for HTML deserialization. Detached elements don't fire event
-    // handlers or execute scripts — no XSS risk from parsing stored content.
-    const container = document.createElement('div');
-    container.innerHTML = textarea.value || '';
-    return PM.DOMParser.fromSchema(schema).parse(container);
+    // Parse the stored HTML into an inert document: `DOMParser` output has
+    // no browsing context, so nothing in it loads or runs (no `<img onerror>`,
+    // no scripts). An element made by `document.createElement` belongs to
+    // the live document, where assigning `innerHTML` starts image loads and
+    // fires their error handlers even while the element is detached.
+    const inert = new window.DOMParser().parseFromString(textarea.value || '', 'text/html');
+    return PM.DOMParser.fromSchema(schema).parse(inert.body);
   }
 
   /**
@@ -215,9 +217,13 @@ class CrapRichtext extends HTMLElement {
         if (!this._view) return;
         const newState = this._view.state.apply(tr);
         this._view.updateState(newState);
-        if (tr.docChanged) {
-          textarea.value = this._serializeDoc(PM, schema, newState.doc, format);
-        }
+        if (!tr.docChanged) return;
+
+        textarea.value = this._serializeDoc(PM, schema, newState.doc, format);
+        // Setting `.value` fires no event: announce the edit so the dirty
+        // guard and display conditions see typing, toolbar commands and
+        // pastes alike.
+        this.dispatchEvent(new Event(EV_CHANGE, { bubbles: true }));
       },
     });
   }

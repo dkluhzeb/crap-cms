@@ -30,14 +30,17 @@ use tracing::{debug, warn};
 
 use crate::config::LocaleConfig;
 use crate::core::{
-    AuthUser, Claims, Document, Registry, Slug, StrategyEntry,
+    AuthUser, Claims, CollectionDefinition, Document, Registry, Slug, StrategyEntry,
     auth::{ClaimsBuilder, TokenProvider},
     collection::{Auth, Surface},
     json_truthy,
 };
-use crate::db::{DbConnection, LocaleContext, query};
+use crate::db::{DbConnection, query};
 use crate::hooks::{HookRunner, lifecycle::AuthStrategyInput};
-use crate::service::{self, AppInfra, ServiceContext, ServiceError};
+use crate::service::{
+    AppInfra, ServiceContext, ServiceError,
+    auth::{is_locked, is_verified, load_user},
+};
 
 /// Per-request inputs for [`evaluate`].
 ///
@@ -392,7 +395,8 @@ fn try_strategy(
         return None;
     }
 
-    let user = build_strategy_authuser(doc, &entry.slug, auth.token_expiry)?;
+    let stored = stored_strategy_user(&doc, &user_ctx(def, deps.conn, deps.locale_config))?;
+    let user = build_strategy_authuser(stored, &entry.slug, auth.token_expiry)?;
 
     Some(Resolution::Authenticated(Box::new(
         AuthenticatedResolution {
@@ -403,6 +407,51 @@ fn try_strategy(
             },
         },
     )))
+}
+
+/// The stored document of the user a strategy authenticated, read through
+/// [`load_user`] exactly as a bearer or cookie request reads its user. The
+/// strategy's table only names the user: a Lua table cannot hold a NULL field
+/// (its key is dropped), and a document found through a Lua read lacks its
+/// hidden fields, so access rules would judge a different `ctx.user` than for
+/// the same user signed in with a token. `None` — refusing the user — when the
+/// id names no stored, non-trashed user of the collection, or the read fails.
+/// `ctx` is the auth collection's [`user_ctx`].
+fn stored_strategy_user(doc: &Document, ctx: &ServiceContext<'_>) -> Option<Document> {
+    match load_user(ctx, &doc.id) {
+        Ok(Some(user)) => Some(user),
+        Ok(None) => {
+            warn!(
+                collection = %ctx.slug,
+                user = %doc.id,
+                "strategy returned a user that is not stored in the collection; refusing"
+            );
+
+            None
+        }
+        Err(e) => {
+            warn!(
+                collection = %ctx.slug,
+                user = %doc.id,
+                error = %e,
+                "reading the strategy's user failed; refusing"
+            );
+
+            None
+        }
+    }
+}
+
+/// A context for reading a user of the auth collection `def`.
+fn user_ctx<'a>(
+    def: &'a CollectionDefinition,
+    conn: &'a dyn DbConnection,
+    locale_config: &'a LocaleConfig,
+) -> ServiceContext<'a> {
+    ServiceContext::collection(&def.slug, def)
+        .conn(conn)
+        .locale_config(Some(locale_config))
+        .build()
 }
 
 /// The account state that refuses a strategy's user, if any: `"a locked"`,
@@ -419,7 +468,7 @@ fn strategy_refusal(
     let ctx = ServiceContext::slug_only(slug).conn(conn).build();
 
     let locked = bool_flag(doc, "_locked")
-        || match service::auth::is_locked(&ctx, &doc.id) {
+        || match is_locked(&ctx, &doc.id) {
             Ok(locked) => locked,
             Err(e) => return Some(unreadable_account(slug, &doc.id, &e)),
         };
@@ -432,7 +481,7 @@ fn strategy_refusal(
     }
 
     let verified = bool_flag(doc, "_verified")
-        || match service::auth::is_verified(&ctx, &doc.id) {
+        || match is_verified(&ctx, &doc.id) {
             Ok(verified) => verified,
             Err(e) => return Some(unreadable_account(slug, &doc.id, &e)),
         };
@@ -493,14 +542,8 @@ where
         return TokenOutcome::NotAccepted;
     }
 
-    let locale_ctx = LocaleContext::default_for(deps.locale_config);
-    let doc = match query::find_by_id(
-        deps.conn,
-        &claims.collection,
-        def,
-        &claims.sub,
-        locale_ctx.as_ref(),
-    ) {
+    let ctx = user_ctx(def, deps.conn, deps.locale_config);
+    let doc = match load_user(&ctx, &claims.sub) {
         Ok(Some(d)) => d,
         Ok(None) => {
             debug!(user = %claims.sub, collection = %claims.collection, "user missing");
@@ -572,16 +615,9 @@ pub fn load_authenticated_user(
     locale_config: &LocaleConfig,
 ) -> Option<AuthUser> {
     let def = registry.get_collection(&claims.collection)?;
-    let locale_ctx = LocaleContext::default_for(locale_config);
-    let doc = query::find_by_id(
-        conn,
-        &claims.collection,
-        def,
-        &claims.sub,
-        locale_ctx.as_ref(),
-    )
-    .ok()
-    .flatten()?;
+    let doc = load_user(&user_ctx(def, conn, locale_config), &claims.sub)
+        .ok()
+        .flatten()?;
 
     check_account(conn, claims).ok()?;
 
@@ -822,5 +858,109 @@ mod tests {
         let user = build_strategy_authuser(doc, &slug, 7200).expect("well-formed doc");
         assert_eq!(user.claims.sub, "u1");
         assert_eq!(user.claims.email, "a@x.com");
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod strategy_user_tests {
+    use mlua::Lua;
+    use rusqlite::Connection;
+    use serde_json::Value;
+
+    use super::*;
+    use crate::{
+        core::{FieldDefinition, FieldType, HookRef},
+        db::AccessResult,
+        hooks::lifecycle::{AccessCheckInput, access::check_collection_access},
+    };
+
+    /// A `users` auth collection with a `tenant_id` field, holding `u1`
+    /// whose `tenant_id` is NULL.
+    fn tenantless_users() -> (Connection, CollectionDefinition) {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                email TEXT,
+                tenant_id TEXT,
+                _locked INTEGER DEFAULT 0,
+                _verified INTEGER DEFAULT 0,
+                _session_version INTEGER DEFAULT 0,
+                _ref_count INTEGER DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO users (id, email) VALUES ('u1', 'u1@x.com');",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("users");
+        def.auth = Some(Auth::new(true));
+        def.fields = vec![
+            FieldDefinition::builder("email", FieldType::Email).build(),
+            FieldDefinition::builder("tenant_id", FieldType::Text).build(),
+        ];
+
+        (conn, def)
+    }
+
+    /// `{ tenant_id = ctx.user.tenant_id, archived = false }` for `user`.
+    fn tenant_rule(user: &Document) -> AccessResult {
+        let lua = Lua::new();
+        lua.load(
+            r#"package.loaded["rules"] = {
+                tenant = function(ctx)
+                    return { tenant_id = ctx.user.tenant_id, archived = false }
+                end,
+            }"#,
+        )
+        .exec()
+        .unwrap();
+
+        check_collection_access(
+            &lua,
+            &AccessCheckInput::builder("find", "posts")
+                .access(Some(&HookRef::new("rules.tenant")))
+                .user(Some(user))
+                .build(),
+        )
+        .unwrap()
+    }
+
+    /// Regression: a strategy's user reached access rules as the table the
+    /// strategy returned, where a NULL field's key is dropped — so the NULL-read
+    /// guard had nothing to guard and a tenant rule widened to
+    /// `{ archived = false }`, every tenant's rows. The user is now the stored
+    /// document, read like a token user's, and the rule is denied.
+    #[test]
+    fn a_strategy_user_with_a_null_tenant_is_denied_a_tenant_constraint() {
+        let (conn, def) = tenantless_users();
+        let locale_config = LocaleConfig::default();
+        let ctx = user_ctx(&def, &conn, &locale_config);
+
+        // What the strategy's Lua table carries: no `tenant_id` key at all.
+        let returned = Document::builder("u1").build();
+        assert!(
+            matches!(tenant_rule(&returned), AccessResult::Constrained(_)),
+            "the returned table alone widens the rule"
+        );
+
+        let stored = stored_strategy_user(&returned, &ctx).expect("stored user");
+        assert_eq!(stored.fields.get("tenant_id"), Some(&Value::Null));
+
+        let result = tenant_rule(&stored);
+        assert!(matches!(result, AccessResult::Denied), "{result:?}");
+    }
+
+    /// A strategy may only name a stored user of its collection.
+    #[test]
+    fn a_strategy_user_that_is_not_stored_is_refused() {
+        let (conn, def) = tenantless_users();
+        let locale_config = LocaleConfig::default();
+        let ctx = user_ctx(&def, &conn, &locale_config);
+
+        let synthesized = Document::builder("nobody").build();
+
+        assert!(stored_strategy_user(&synthesized, &ctx).is_none());
     }
 }

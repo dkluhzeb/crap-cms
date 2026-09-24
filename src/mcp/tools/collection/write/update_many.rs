@@ -9,7 +9,7 @@ use crate::{
     db::LocaleContext,
     mcp::tools::{
         ToolExecCtx,
-        collection::helpers::{extract_data_from_args, parse_where_filters},
+        collection::helpers::{extract_collection_data, parse_where_filters},
         jobs::{QueuedFields, queue_bulk_tool},
     },
     service::{
@@ -53,7 +53,7 @@ pub(in crate::mcp::tools) fn exec_update_many(
         anyhow::bail!("Cannot set a password via update_many. Use the single update tool instead.");
     }
 
-    let data = extract_data_from_args(&data_obj, &[], &def.fields)?;
+    let data = extract_collection_data(&data_obj, &[], def)?;
 
     let run_hooks = args
         .get("hooks")

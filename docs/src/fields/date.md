@@ -147,7 +147,13 @@ This pre-selects the timezone in the admin dropdown for any date field with `tim
 
 ## Notes
 
-- Pure dates are stored with UTC noon (`T12:00:00.000Z`) so timezone offsets up to ±12h never flip the calendar date
-- When `timezone = true` with `dayOnly`, noon is calculated in the selected timezone then converted to UTC
+- Pure dates are stored with UTC noon (`T12:00:00.000Z`), so reading one back in any timezone within ±12h of UTC shows the same calendar date
+- A bare date (`2026-01-15`) written to a `timezone = true` field is that zone's local noon, converted to UTC. For a zone more than 12 hours from UTC — UTC+13 / +14 (e.g. `Pacific/Auckland` in summer, `Pacific/Kiritimati`) or UTC−12 — local noon falls on the neighbouring UTC day (`2026-01-14T22:00:00.000Z` in `Pacific/Kiritimati`)
 - Comparison operators (`greater_than`, `less_than`) work correctly on the normalized ISO string representation
 - The `picker_appearance` option controls whether the picker shows date-only or date+time
+
+## Filtering
+
+A filter operand is normalized like a written value, except a bare day: `2026-01-15` covers the whole **UTC** day `[2026-01-15T00:00:00.000Z, 2026-01-16T00:00:00.000Z)` instead of standing for its noon. `equals` matches any instant on the day — a `dayOnly` value (stored at noon) and a `dayAndTime` value alike — `greater_than` starts at the next midnight, `less_than_or_equal` includes the whole day, and `in` / `not_in` treat each listed day the same way. An operand with a time keeps its exact comparison.
+
+The day is the UTC day of the stored value, also for a `timezone = true` field (its value is stored in UTC; the `_tz` companion is not consulted — reading each row's local day would need the IANA zone rules inside the query, which SQLite does not have). A value stored for a zone more than 12 hours from UTC can therefore sit on the neighbouring UTC day of its local date (see Notes). To filter a local day, send the zone's midnights with an offset (`greater_than_or_equal = "2026-01-15T00:00:00-05:00"`, `less_than = "2026-01-16T00:00:00-05:00"`). The same rule applies to the `created_at` / `updated_at` timestamps — see [Dates](../query-and-filters/overview.md#dates-a-bare-day-covers-the-whole-day).

@@ -22,30 +22,37 @@ use crate::{
     db::{DbConnection, LocaleContext, query::poly_ref},
 };
 
-/// Extract polymorphic "collection/id" refs from a field value.
-fn extract_polymorphic_refs(
-    doc_fields: &DocumentFields,
-    field_name: &str,
-    has_many: bool,
-) -> Vec<(String, String)> {
-    if has_many {
-        match doc_fields.get(field_name) {
-            Some(Value::Array(arr)) => arr
-                .iter()
-                .filter_map(|v| v.as_str().and_then(poly_ref::parse))
-                .collect(),
-            _ => Vec::new(),
+/// Extract polymorphic "collection/id" refs from a field value. A has-many
+/// value is a JSON array of refs, or — on the validation-error re-render,
+/// which feeds form-extracted data — that array as a JSON string.
+fn extract_polymorphic_refs(value: Option<&Value>, has_many: bool) -> Vec<(String, String)> {
+    let refs: Vec<String> = match value {
+        Some(Value::Array(arr)) if has_many => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
+        Some(Value::String(s)) if has_many => {
+            serde_json::from_str::<Vec<String>>(s).unwrap_or_default()
         }
-    } else {
-        match doc_fields.get(field_name) {
-            Some(Value::String(s)) if !s.is_empty() => poly_ref::parse(s).into_iter().collect(),
-            _ => Vec::new(),
-        }
-    }
+        Some(Value::String(s)) if !s.is_empty() => vec![s.clone()],
+        _ => Vec::new(),
+    };
+
+    refs.iter().filter_map(|r| poly_ref::parse(r)).collect()
 }
 
-/// Resolve a single polymorphic ref to a typed item with id, label, and collection.
-fn resolve_polymorphic_ref(
+/// Resolve a single polymorphic ref to a typed item with id, label, and
+/// collection. A ref the viewer cannot resolve (unknown collection, or a
+/// target they may not read) keeps its composite id as an unavailable item.
+fn resolve_polymorphic_ref(col: &str, id: &str, ctx: &EnrichCtx) -> RelationshipSelectedItem {
+    resolve_readable_polymorphic_ref(col, id, ctx).unwrap_or_else(|| RelationshipSelectedItem {
+        collection: Some(col.to_string()),
+        ..RelationshipSelectedItem::unavailable(poly_ref::format(col, id))
+    })
+}
+
+/// The labelled item for polymorphic ref `col/id`, when the viewer may read it.
+fn resolve_readable_polymorphic_ref(
     col: &str,
     id: &str,
     ctx: &EnrichCtx,
@@ -82,10 +89,20 @@ pub fn enrich_polymorphic_selected(
     doc_fields: &DocumentFields,
     ctx: &EnrichCtx,
 ) -> Vec<RelationshipSelectedItem> {
-    let refs = extract_polymorphic_refs(doc_fields, field_name, rc.has_many);
+    polymorphic_selected_from_value(rc, doc_fields.get(field_name), ctx)
+}
+
+/// Build `selected_items` for a polymorphic relationship from its raw value —
+/// the top-level field's document value or a nested field's row value.
+pub(in crate::admin::handlers::field_context) fn polymorphic_selected_from_value(
+    rc: &RelationshipConfig,
+    value: Option<&Value>,
+    ctx: &EnrichCtx,
+) -> Vec<RelationshipSelectedItem> {
+    let refs = extract_polymorphic_refs(value, rc.has_many);
 
     refs.iter()
-        .filter_map(|(col, id)| resolve_polymorphic_ref(col, id, ctx))
+        .map(|(col, id)| resolve_polymorphic_ref(col, id, ctx))
         .collect()
 }
 
@@ -263,12 +280,12 @@ mod tests {
     use super::*;
     use crate::{
         admin::handlers::field_context::enrich::test_helpers::{
-            build_value_contexts, enrich_field_contexts_values, make_field, make_test_state,
-            make_test_state_with_registry,
+            build_value_contexts, enrich_field_contexts_values, enrich_nested_fields_values,
+            make_field, make_test_state, make_test_state_with_registry,
         },
         core::{
             BlockDefinition, CollectionDefinition, DocumentFields, FieldTab, FieldType,
-            LocalizedString, Registry, RelationshipConfig,
+            LocalizedString, Registry, RelationshipConfig, upload::CollectionUpload,
         },
         db::LocaleMode,
     };
@@ -667,6 +684,145 @@ mod tests {
             contexts[0]["collection_singular_name"], "Tag",
             "relationship enrichment must expose the target's singular label"
         );
+    }
+
+    /// Regression: a stored reference the viewer cannot resolve (unreadable,
+    /// trashed, or otherwise unfetchable target) was dropped from
+    /// `selected_items`, so the form submitted nothing for it and a save
+    /// cleared the reference. Every stored id stays selected — an unresolvable
+    /// one as an `unavailable` item carrying no label.
+    #[test]
+    fn unresolvable_references_stay_selected_as_unavailable() {
+        let mut registry = Registry::default();
+        registry.register_collection(CollectionDefinition::new("tags"));
+        let mut media = CollectionDefinition::new("media");
+        media.upload = Some(CollectionUpload::new());
+        registry.register_collection(media);
+
+        let reference = |name: &str, ft: FieldType, target: &str, has_many: bool| {
+            let mut field = FieldDefinition::builder(name, ft).build();
+            field.relationship = Some(RelationshipConfig::new(target, has_many));
+            field
+        };
+        let field_defs = vec![
+            reference("tag", FieldType::Relationship, "tags", false),
+            reference("tags", FieldType::Relationship, "tags", true),
+            reference("image", FieldType::Upload, "media", false),
+            reference("images", FieldType::Upload, "media", true),
+        ];
+
+        let values = HashMap::from([
+            ("tag".to_string(), "t1".to_string()),
+            ("image".to_string(), "m1".to_string()),
+        ]);
+        let errors = HashMap::new();
+        let mut contexts = build_value_contexts(&field_defs, &values, &errors, false, false);
+
+        let mut doc_fields = DocumentFields::new();
+        doc_fields.insert("tag".to_string(), json!("t1"));
+        doc_fields.insert("tags".to_string(), json!(["t1", "t2"]));
+        doc_fields.insert("image".to_string(), json!("m1"));
+        doc_fields.insert("images".to_string(), json!(["m1"]));
+
+        // The test database has no `tags` / `media` tables: no target resolves.
+        let state = make_test_state_with_registry(registry);
+        enrich_field_contexts_values(
+            &mut contexts,
+            &field_defs,
+            &doc_fields,
+            &state,
+            &EnrichOptions::builder(&errors).build(),
+        );
+
+        let expected = [
+            ("tag", vec!["t1"]),
+            ("tags", vec!["t1", "t2"]),
+            ("image", vec!["m1"]),
+            ("images", vec!["m1"]),
+        ];
+        for (idx, (name, ids)) in expected.iter().enumerate() {
+            let items = contexts[idx]["selected_items"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{name}: selected_items"));
+
+            let got: Vec<&str> = items.iter().filter_map(|i| i["id"].as_str()).collect();
+            assert_eq!(&got, ids, "{name}: every stored id stays selected");
+
+            for item in items {
+                assert_eq!(item["unavailable"], true, "{name}: {item}");
+                assert_eq!(item["label"], "", "{name}: no label is surfaced");
+            }
+        }
+    }
+
+    /// Regression: a polymorphic relationship inside a row was not resolved —
+    /// has-many left with no selection, has-one looked up against the first
+    /// target collection — so the form submitted nothing and a save cleared
+    /// the stored `collection/id` refs. Each ref now resolves in its own
+    /// collection, and one that cannot be resolved stays as an unavailable item.
+    #[test]
+    fn nested_polymorphic_refs_resolve_per_collection_and_are_kept() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE users (
+                id TEXT PRIMARY KEY, name TEXT,
+                _status TEXT DEFAULT 'published', created_at TEXT, updated_at TEXT
+            );
+            INSERT INTO users (id, name) VALUES ('u1', 'Alice');",
+        )
+        .unwrap();
+
+        let mut users = CollectionDefinition::new("users");
+        users.fields = vec![make_field("name", FieldType::Text)];
+        users.admin.use_as_title = Some("name".to_string());
+
+        let mut registry = Registry::new();
+        registry.register_collection(CollectionDefinition::new("ghosts"));
+        registry.register_collection(users);
+
+        let poly = |name: &str, has_many: bool| {
+            let mut rc = RelationshipConfig::new("ghosts", has_many);
+            rc.polymorphic = vec!["ghosts".into(), "users".into()];
+            let mut field = make_field(name, FieldType::Relationship);
+            field.relationship = Some(rc);
+            field
+        };
+        let field_defs = vec![poly("one", false), poly("many", true)];
+
+        let mut sub_fields = vec![
+            json!({
+                "name": "items[0][one]",
+                "field_type": "relationship",
+                "value": "users/u1",
+                "relationship_collection": "ghosts",
+            }),
+            json!({
+                "name": "items[0][many]",
+                "field_type": "relationship",
+                "value": ["users/u1", "ghosts/g1"],
+                "relationship_collection": "ghosts",
+                "has_many": true,
+            }),
+        ];
+
+        enrich_nested_fields_values(&mut sub_fields, &field_defs, &conn, &registry, None);
+
+        let one = sub_fields[0]["selected_items"]
+            .as_array()
+            .expect("has-one items");
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0]["id"], "users/u1");
+        assert_eq!(one[0]["label"], "Alice");
+
+        let many = sub_fields[1]["selected_items"]
+            .as_array()
+            .expect("has-many items");
+        assert_eq!(many.len(), 2);
+        assert_eq!(many[0]["id"], "users/u1");
+        assert_eq!(many[0]["label"], "Alice");
+        assert_eq!(many[1]["id"], "ghosts/g1");
+        assert_eq!(many[1]["unavailable"], true);
+        assert_eq!(many[1]["collection"], "ghosts");
     }
 
     /// The array edit form round-trips each row's stored junction id: enrichment

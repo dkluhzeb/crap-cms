@@ -11,7 +11,7 @@ use serde::Serialize;
 use tracing::{error, warn};
 
 use crate::{
-    admin::{AdminState, server::evaluate_admin_request},
+    admin::{AdminState, FormParseError, server::evaluate_admin_request},
     core::{AuthUser, Document, HookRef},
     db::AccessResult,
     hooks::AccessCheckInput,
@@ -108,6 +108,22 @@ pub fn extract_bearer_user(
         Resolution::Anonymous => Ok(None),
         Resolution::Invalid(failure) => Err(Box::new(auth_failure_response(failure))),
     }
+}
+
+/// The response to a multipart body that could not be read: `413` when it
+/// exceeded the request size limit (an upload over the configured maximum),
+/// `400` for anything else.
+pub(super) fn multipart_error_response(err: &FormParseError) -> Response {
+    error!("Upload multipart parse failed: {err}");
+
+    if err.is_too_large() {
+        return json_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Request body exceeds the upload size limit",
+        );
+    }
+
+    json_error(StatusCode::BAD_REQUEST, "Invalid multipart request")
 }
 
 /// Return a JSON error response.

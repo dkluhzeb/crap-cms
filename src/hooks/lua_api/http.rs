@@ -16,7 +16,10 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 use url::Url;
 
-use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
+use crate::{
+    hooks::lua_api::to_lua_value,
+    typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
+};
 
 const MAX_REDIRECTS: u8 = 10;
 const ALLOWED_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"];
@@ -48,7 +51,7 @@ impl FromLua for HttpRequest {
 
 /// Response returned by `crap.http.request(opts)`. Both `LuaAnnotation`
 /// (for `types/crap.lua`) and `Serialize` (for the runtime
-/// `lua.to_value(&self)` conversion); the same Rust struct is the
+/// `to_lua_value` conversion); the same Rust struct is the
 /// single source of truth.
 #[derive(Serialize, LuaAnnotation)]
 #[lua(class = "crap.HttpResponse")]
@@ -141,10 +144,10 @@ fn http_request(
         }
 
         let response = build_response_struct(resp, state.max_response_bytes)?;
-        let value = lua.to_value(&response)?;
+        let value = to_lua_value(lua, &response)?;
         let Value::Table(tbl) = value else {
             return Err(RuntimeError(
-                "lua.to_value did not produce a table for HttpResponse".into(),
+                "to_lua_value did not produce a table for HttpResponse".into(),
             ));
         };
         return Ok(tbl);

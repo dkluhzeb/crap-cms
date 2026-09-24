@@ -245,15 +245,7 @@ pub(crate) fn run_scoped_tx<R>(
     let dq: DeferredQueue = Rc::new(RefCell::new(Vec::new()));
     let prev_infra = lua.app_data_ref::<LuaCrudInfra>().map(|r| (*r).clone());
 
-    let mut infra = prev_infra.clone().unwrap_or(LuaCrudInfra {
-        event_transport: None,
-        cache: None,
-        event_queue: None,
-        verification_queue: None,
-        deferred: None,
-        file_cleanup: None,
-        cache_dirty: None,
-    });
+    let mut infra = prev_infra.clone().unwrap_or_default();
     infra.deferred = Some(dq.clone());
 
     let queues = ScopedQueues::install(&mut infra);

@@ -1,14 +1,15 @@
 //! Shared helpers for Lua table serializers.
 
-use mlua::{Lua, Table, Value};
-use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
+use serde::Serialize;
+use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue, to_value};
 
 use crate::core::{HookRef, LocalizedString, max_nesting_depth};
 
 /// Serialize a [`HookRef`] back to Lua — a bare string when it carries no
 /// options, or a `{ ref, options }` table otherwise. Inverse of the parse-side
 /// `parse_hook_ref`, so a config round-trips through serialize→parse unchanged.
-pub(super) fn hook_ref_to_lua(lua: &Lua, hook: &HookRef) -> mlua::Result<Value> {
+pub(super) fn hook_ref_to_lua(lua: &Lua, hook: &HookRef) -> LuaResult<Value> {
     let Some(options) = hook.options() else {
         return Ok(Value::String(lua.create_string(hook.reference())?));
     };
@@ -22,7 +23,7 @@ pub(super) fn hook_ref_to_lua(lua: &Lua, hook: &HookRef) -> mlua::Result<Value> 
 
 /// Serialize a list of [`HookRef`]s to a Lua array (each entry a string or
 /// `{ ref, options }` table).
-pub(super) fn hook_ref_list_to_lua(lua: &Lua, hooks: &[HookRef]) -> mlua::Result<Table> {
+pub(super) fn hook_ref_list_to_lua(lua: &Lua, hooks: &[HookRef]) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
 
     for (i, hook) in hooks.iter().enumerate() {
@@ -33,7 +34,7 @@ pub(super) fn hook_ref_list_to_lua(lua: &Lua, hooks: &[HookRef]) -> mlua::Result
 }
 
 /// Convert a `LocalizedString` to a Lua value (string or locale table).
-pub(super) fn localized_string_to_lua(lua: &Lua, ls: &LocalizedString) -> mlua::Result<Value> {
+pub(super) fn localized_string_to_lua(lua: &Lua, ls: &LocalizedString) -> LuaResult<Value> {
     match ls {
         LocalizedString::Plain(s) => Ok(Value::String(lua.create_string(s)?)),
         LocalizedString::Localized(map) => {
@@ -49,14 +50,20 @@ pub(super) fn localized_string_to_lua(lua: &Lua, ls: &LocalizedString) -> mlua::
 }
 
 /// Convert a Lua value to a JSON value.
-pub fn lua_to_json(value: &Value) -> mlua::Result<JsonValue> {
+///
+/// `nil` and the `crap.null` sentinel both become `null`. `crap.null` is
+/// mlua's null light-userdata ([`Value::NULL`]) — the same value the serde
+/// deserializer behind `lua.from_value` reads as `null` — and since
+/// assigning `nil` erases a table key, it is the only way a script keeps a
+/// present-null key or array slot.
+pub fn lua_to_json(value: &Value) -> LuaResult<JsonValue> {
     lua_to_json_inner(value, 0)
 }
 
-fn lua_to_json_inner(value: &Value, depth: usize) -> mlua::Result<JsonValue> {
+fn lua_to_json_inner(value: &Value, depth: usize) -> LuaResult<JsonValue> {
     let max = max_nesting_depth();
     if depth > max {
-        return Err(mlua::Error::RuntimeError(format!(
+        return Err(RuntimeError(format!(
             "Table nesting exceeds maximum depth of {max}"
         )));
     }
@@ -66,66 +73,90 @@ fn lua_to_json_inner(value: &Value, depth: usize) -> mlua::Result<JsonValue> {
         Value::Integer(i) => Ok(JsonValue::Number((*i).into())),
         Value::Number(n) => JsonNumber::from_f64(*n)
             .map(JsonValue::Number)
-            .ok_or_else(|| mlua::Error::RuntimeError("Invalid float value".into())),
+            .ok_or_else(|| RuntimeError("Invalid float value".into())),
         Value::String(s) => Ok(JsonValue::String(s.to_str()?.to_string())),
-        Value::Table(t) => {
-            let len = t.raw_len();
-
-            if len > 0 {
-                let has_string_keys = t
-                    .clone()
-                    .pairs::<Value, Value>()
-                    .any(|pair| matches!(pair, Ok((Value::String(_), _))));
-
-                if has_string_keys {
-                    let mut map = JsonMap::new();
-
-                    for pair in t.clone().pairs::<Value, Value>() {
-                        let (k, v) = pair?;
-                        let key = match k {
-                            Value::String(s) => s.to_str()?.to_string(),
-                            Value::Integer(i) => i.to_string(),
-                            Value::Number(n) => n.to_string(),
-                            _ => continue,
-                        };
-                        map.insert(key, lua_to_json_inner(&v, depth + 1)?);
-                    }
-
-                    Ok(JsonValue::Object(map))
-                } else {
-                    let mut arr = Vec::new();
-
-                    for i in 1..=len {
-                        let v: Value = t.raw_get(i)?;
-                        arr.push(lua_to_json_inner(&v, depth + 1)?);
-                    }
-
-                    Ok(JsonValue::Array(arr))
-                }
-            } else {
-                let mut map = JsonMap::new();
-
-                for pair in t.clone().pairs::<String, Value>() {
-                    let (k, v) = pair?;
-                    map.insert(k, lua_to_json_inner(&v, depth + 1)?);
-                }
-
-                Ok(JsonValue::Object(map))
-            }
-        }
+        Value::Table(t) => lua_table_to_json(t, depth),
+        // `nil`, the `crap.null` sentinel, and non-data values (functions,
+        // userdata, threads).
         _ => Ok(JsonValue::Null),
     }
 }
 
+/// Convert a Lua table: a non-empty sequence without string keys is an
+/// array, anything else an object.
+fn lua_table_to_json(t: &Table, depth: usize) -> LuaResult<JsonValue> {
+    let len = t.raw_len();
+
+    if len == 0 {
+        let mut map = JsonMap::new();
+
+        for pair in t.pairs::<String, Value>() {
+            let (k, v) = pair?;
+            map.insert(k, lua_to_json_inner(&v, depth + 1)?);
+        }
+
+        return Ok(JsonValue::Object(map));
+    }
+
+    let has_string_keys = t
+        .pairs::<Value, Value>()
+        .any(|pair| matches!(pair, Ok((Value::String(_), _))));
+
+    if !has_string_keys {
+        let mut arr = Vec::with_capacity(len);
+
+        for i in 1..=len {
+            let v: Value = t.raw_get(i)?;
+            arr.push(lua_to_json_inner(&v, depth + 1)?);
+        }
+
+        return Ok(JsonValue::Array(arr));
+    }
+
+    let mut map = JsonMap::new();
+
+    for pair in t.pairs::<Value, Value>() {
+        let (k, v) = pair?;
+        let key = match k {
+            Value::String(s) => s.to_str()?.to_string(),
+            Value::Integer(i) => i.to_string(),
+            Value::Number(n) => n.to_string(),
+            _ => continue,
+        };
+        map.insert(key, lua_to_json_inner(&v, depth + 1)?);
+    }
+
+    Ok(JsonValue::Object(map))
+}
+
+/// Serialize a Rust value into the Lua value a script reads. The one
+/// Rust→Lua serde conversion: every context, argument and result table
+/// handed to Lua goes through it, and it shares [`json_to_lua`]'s null
+/// rules — a null object field (JSON `null`, absent `Option`, unit) is
+/// `nil`, a null array element is `crap.null` — so every surface agrees.
+/// (mlua's own serializer would emit its truthy null light-userdata for
+/// every null, making `if ctx.data.x then` take the branch for a null
+/// field.)
+pub fn to_lua_value<T: Serialize + ?Sized>(lua: &Lua, value: &T) -> LuaResult<Value> {
+    let json = to_value(value).map_err(|e| RuntimeError(format!("serialize error: {e:#}")))?;
+
+    json_to_lua(lua, &json)
+}
+
 /// Convert a JSON value to a Lua value.
-pub fn json_to_lua(lua: &Lua, value: &JsonValue) -> mlua::Result<Value> {
+///
+/// Null handling: a bare `null` and a null object field are `nil` (the key is
+/// simply absent), while a null **array element** becomes `crap.null` so the
+/// array keeps its length — a `nil` slot would leave a hole that truncates
+/// `#t` / `ipairs` and every later conversion back to JSON.
+pub fn json_to_lua(lua: &Lua, value: &JsonValue) -> LuaResult<Value> {
     json_to_lua_inner(lua, value, 0)
 }
 
-fn json_to_lua_inner(lua: &Lua, value: &JsonValue, depth: usize) -> mlua::Result<Value> {
+fn json_to_lua_inner(lua: &Lua, value: &JsonValue, depth: usize) -> LuaResult<Value> {
     let max = max_nesting_depth();
     if depth > max {
-        return Err(mlua::Error::RuntimeError(format!(
+        return Err(RuntimeError(format!(
             "JSON nesting exceeds maximum depth of {max}"
         )));
     }
@@ -133,23 +164,17 @@ fn json_to_lua_inner(lua: &Lua, value: &JsonValue, depth: usize) -> mlua::Result
     match value {
         JsonValue::Null => Ok(Value::Nil),
         JsonValue::Bool(b) => Ok(Value::Boolean(*b)),
-        JsonValue::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Ok(Value::Integer(i))
-            } else if let Some(f) = n.as_f64() {
-                Ok(Value::Number(f))
-            } else {
-                Err(mlua::Error::RuntimeError(format!(
-                    "JSON number {n} cannot be represented as i64 or f64"
-                )))
-            }
-        }
+        JsonValue::Number(n) => json_number_to_lua(n),
         JsonValue::String(s) => Ok(Value::String(lua.create_string(s)?)),
         JsonValue::Array(arr) => {
-            let tbl = lua.create_table()?;
+            let tbl = lua.create_table_with_capacity(arr.len(), 0)?;
 
             for (i, v) in arr.iter().enumerate() {
-                tbl.set(i + 1, json_to_lua_inner(lua, v, depth + 1)?)?;
+                let element = match v {
+                    JsonValue::Null => Value::NULL,
+                    other => json_to_lua_inner(lua, other, depth + 1)?,
+                };
+                tbl.raw_set(i + 1, element)?;
             }
 
             Ok(Value::Table(tbl))
@@ -166,11 +191,24 @@ fn json_to_lua_inner(lua: &Lua, value: &JsonValue, depth: usize) -> mlua::Result
     }
 }
 
+/// A JSON number as a Lua integer when it fits `i64`, else a float.
+fn json_number_to_lua(n: &JsonNumber) -> LuaResult<Value> {
+    if let Some(i) = n.as_i64() {
+        return Ok(Value::Integer(i));
+    }
+
+    n.as_f64().map(Value::Number).ok_or_else(|| {
+        RuntimeError(format!(
+            "JSON number {n} cannot be represented as i64 or f64"
+        ))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::LocalizedString;
-    use mlua::Lua;
+    use mlua::LuaSerdeExt;
     use proptest::prelude::*;
     use serde_json::json;
     use std::collections::HashMap;
@@ -291,6 +329,86 @@ mod tests {
         let f = lua.create_function(|_, ()| Ok(())).unwrap();
         let result = lua_to_json(&Value::Function(f)).unwrap();
         assert_eq!(result, json!(null));
+    }
+
+    /// Every null shape a serialized context can carry in an object field —
+    /// a JSON null inside a map, an absent `Option`, a unit — reaches Lua as
+    /// `nil`, never as the truthy null light-userdata mlua emits by default.
+    /// A null *array element* is the `crap.null` sentinel instead, so the
+    /// array keeps its length.
+    #[test]
+    fn to_lua_value_maps_null_fields_to_nil_and_null_elements_to_the_sentinel() {
+        #[derive(Serialize)]
+        struct Ctx {
+            data: JsonValue,
+            user: Option<String>,
+            unit: (),
+        }
+
+        let lua = Lua::new();
+        let ctx = Ctx {
+            data: json!({ "x": null, "list": [1, null, 3] }),
+            user: None,
+            unit: (),
+        };
+        lua.globals()
+            .set("ctx", to_lua_value(&lua, &ctx).unwrap())
+            .unwrap();
+        lua.globals().set("null", Value::NULL).unwrap();
+
+        let all_nil: bool = lua
+            .load(
+                "return ctx.data.x == nil and ctx.user == nil and ctx.unit == nil \
+                 and not ctx.data.x",
+            )
+            .eval()
+            .unwrap();
+        assert!(all_nil, "a null object field must reach Lua as nil");
+
+        let list_intact: bool = lua
+            .load(
+                "return #ctx.data.list == 3 and ctx.data.list[2] == null and ctx.data.list[3] == 3",
+            )
+            .eval()
+            .unwrap();
+        assert!(list_intact, "a null array element must keep its slot");
+    }
+
+    /// `crap.null` (mlua's null light-userdata) is JSON `null` on every
+    /// Lua→Rust path: in an object field (where `nil` would erase the key),
+    /// in an array slot, bare, and through the serde deserializer behind
+    /// `lua.from_value`.
+    #[test]
+    fn the_null_sentinel_converts_to_json_null() {
+        let lua = Lua::new();
+        lua.globals().set("null", Value::NULL).unwrap();
+
+        let tbl: Value = lua
+            .load("return { cleared = null, kept = 1, list = { 1, null, 3 } }")
+            .eval()
+            .unwrap();
+
+        let expected = json!({ "cleared": null, "kept": 1, "list": [1, null, 3] });
+        assert_eq!(lua_to_json(&tbl).unwrap(), expected);
+        assert_eq!(lua_to_json(&Value::NULL).unwrap(), json!(null));
+
+        let via_serde: JsonValue = lua.from_value(tbl).unwrap();
+        assert_eq!(via_serde, expected);
+    }
+
+    /// A JSON array with null elements keeps its length in Lua (`#t`,
+    /// `ipairs`), each null slot holding the sentinel.
+    #[test]
+    fn json_to_lua_keeps_null_array_elements() {
+        let lua = Lua::new();
+        let Value::Table(tbl) = json_to_lua(&lua, &json!([null, "a", null])).unwrap() else {
+            panic!("expected a table");
+        };
+
+        assert_eq!(tbl.raw_len(), 3);
+        assert_eq!(tbl.raw_get::<Value>(1).unwrap(), Value::NULL);
+        assert_eq!(tbl.raw_get::<String>(2).unwrap(), "a");
+        assert_eq!(tbl.raw_get::<Value>(3).unwrap(), Value::NULL);
     }
 
     #[test]
@@ -515,17 +633,20 @@ mod tests {
         ]
     }
 
-    /// JSON values that must survive the Lua round-trip unchanged. Two
-    /// shapes are deliberately absent because Lua cannot represent them —
-    /// each is pinned by its own named test below:
+    /// JSON values that must survive the Lua round-trip unchanged, including
+    /// null array elements (carried as the `crap.null` sentinel). Two shapes
+    /// are deliberately absent because Lua cannot represent them — each is
+    /// pinned by its own named test below:
     ///
-    /// - `null`, because assigning `nil` in Lua erases the key it is stored
-    ///   under (and the array slot it occupies),
+    /// - a null *object field*, because assigning `nil` in Lua erases the key
+    ///   it is stored under,
     /// - `[]`, because an empty Lua table is indistinguishable from `{}`.
     fn round_trippable_json() -> impl Strategy<Value = JsonValue> {
         json_scalar().prop_recursive(4, 32, 4, |inner| {
+            let element = prop_oneof![4 => inner.clone(), 1 => Just(JsonValue::Null)];
+
             prop_oneof![
-                prop::collection::vec(inner.clone(), 1..4).prop_map(JsonValue::Array),
+                prop::collection::vec(element, 1..4).prop_map(JsonValue::Array),
                 prop::collection::vec((json_key(), inner), 0..4)
                     .prop_map(|entries| JsonValue::Object(entries.into_iter().collect())),
             ]
@@ -577,14 +698,17 @@ mod tests {
         );
     }
 
-    /// Pinned non-identity: a *bare* null is Lua `nil`, which converts back
-    /// to null — only a null stored under a key or in an array slot is
-    /// lost. A sole-element null array therefore empties out and, being
-    /// empty, comes back as an object.
+    /// A bare null is Lua `nil`, which converts back to null, and a null
+    /// array element is the `crap.null` sentinel, which does too — only a
+    /// null stored under an object key is lost (pinned above).
     #[test]
-    fn a_bare_null_round_trips_but_a_null_element_does_not() {
+    fn a_bare_null_and_a_null_element_round_trip() {
         assert_eq!(round_trip(&json!(null)), json!(null));
-        assert_eq!(round_trip(&json!([null])), json!({}));
+        assert_eq!(round_trip(&json!([null])), json!([null]));
+        assert_eq!(
+            round_trip(&json!({ "tags": ["a", null, "b"] })),
+            json!({ "tags": ["a", null, "b"] })
+        );
     }
 
     /// Pinned non-identity: an integer above `i64::MAX` has no Lua integer

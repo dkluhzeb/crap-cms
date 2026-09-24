@@ -96,7 +96,7 @@ impl HookRunner {
                 infra,
             );
 
-            let ctx_value = lua.to_value(&input.context())?;
+            let ctx_value = lua_api::to_lua_value(&lua, &input.context())?;
             let func = resolve_hook_function(&lua, handler.reference())?;
             let ret: Value = func.call(ctx_value)?;
 
@@ -139,7 +139,7 @@ impl HookRunner {
             None,
         );
 
-        let ctx_value = lua.to_value(&input.context())?;
+        let ctx_value = lua_api::to_lua_value(&lua, &input.context())?;
         let func = resolve_hook_function(&lua, access.reference())?;
         let ret: Value = func.call(ctx_value)?;
 

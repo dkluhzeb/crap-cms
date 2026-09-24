@@ -558,6 +558,18 @@ crap.collections.define("posts", {
         "#,
     )
     .unwrap();
+    // Relationship targets must be registered collections (checked at load).
+    for target in ["users", "tags"] {
+        std::fs::write(
+            collections_dir.join(format!("{target}.lua")),
+            format!(
+                r#"crap.collections.define("{target}", {{
+    fields = {{ {{ name = "title", type = "text" }} }},
+}})"#
+            ),
+        )
+        .unwrap();
+    }
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::test_default();

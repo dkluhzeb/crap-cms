@@ -17,6 +17,9 @@ The join table has columns:
 | *sub-fields* | varies | One column per sub-field |
 | `{name}_tz` | TEXT | Companion column for each date sub-field with `timezone = true` |
 
+The table is indexed on `parent_id` (`parent_id, _locale` when localized); see
+[Junction Tables](../database/overview.md#junction-tables).
+
 ## Definition
 
 ```lua

@@ -17,6 +17,9 @@ The join table has columns:
 | `_locale` | TEXT | Only when the blocks field is [localized](../locale/overview.md#localized-arraysblocksrelationships): the locale each row belongs to |
 | `data` | TEXT NOT NULL | JSON object containing the block's field values |
 
+The table is indexed on `parent_id` (`parent_id, _locale` when localized); see
+[Junction Tables](../database/overview.md#junction-tables).
+
 Unlike arrays (which have typed columns per sub-field), blocks use a single JSON `data` column because each block type can have a different schema.
 
 ## Definition

@@ -45,7 +45,9 @@ pub(in crate::admin::handlers::collections) fn build_filter_fields(
         fields.push(json!({
             "key": "_status",
             "label": "status",
-            "field_type": "select",
+            // Its own type: the server accepts only `equals` on `_status`,
+            // so the builder must not offer the select operators.
+            "field_type": "status",
             "options": [
                 { "label": "published", "value": "published" },
                 { "label": "draft", "value": "draft" },
@@ -354,6 +356,10 @@ mod tests {
 
         let fields = build_filter_fields(&def, &ListFieldAccess::default());
         let status_field = fields.iter().find(|f| f["key"] == "_status").unwrap();
+        assert_eq!(
+            status_field["field_type"], "status",
+            "`_status` gets its own equals-only operator list, not the select one"
+        );
         let opts = status_field["options"].as_array().unwrap();
         assert_eq!(opts.len(), 2);
         assert_eq!(opts[0]["value"], "published");

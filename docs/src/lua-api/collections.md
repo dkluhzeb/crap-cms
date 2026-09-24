@@ -335,8 +335,9 @@ An `after_read` hook sees the document as the read returns it — hidden
 fields stripped, an upload's per-size columns folded into `sizes`,
 relationships populated at the read's depth — so `context.data` is typed
 `crap.doc.<Pascal>`, not the stored-shape `crap.data.<Pascal>`.
-`context.operation` is `"find"` / `"find_by_id"`, or the write
-(`"create"` / `"update"` / `"delete"`) behind a live event.
+`context.operation` is `"find"` / `"find_by_id"`, or the operation of the
+live event it shapes (`"create"`, `"update"`, `"delete"`, `"undelete"`,
+`"unpublish"` or `"restore"`).
 
 ```lua
 -- hooks/posts/author_name.lua

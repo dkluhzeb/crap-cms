@@ -56,6 +56,16 @@ auth = {
 
 The function receives a context table and returns a user document (table) or `nil`/`false`.
 
+The returned table **names** the user by its `id`; the request then carries the
+user's **stored** document, read from the auth collection exactly as for a
+bearer-token or session-cookie request. `ctx.user` in hooks and access rules is
+therefore the same document whichever method authenticated the user — every
+stored field present, a NULL one as `nil` (and tracked by the
+[NULL-field access guard](../access-control/filter-constraints.md)), hidden
+fields included. Fields the strategy adds or changes on the returned table are
+not carried over. An `id` that names no stored user of the collection — or a
+trashed one — is refused, on the per-request path and on the login path alike.
+
 ```lua
 -- hooks/auth.lua
 local M = {}
@@ -153,7 +163,8 @@ Omit `bearer` similarly to refuse JWT authentication (rarely useful — usually 
   only runs when the activating header is present.
 - **Strategy returns are sanity-checked.** The evaluator refuses any
   returned document with an empty `id` (would silently break session-
-  version lookups downstream) and re-runs `is_locked` / `verify_email`
+  version lookups downstream) or one whose `id` names no stored,
+  non-trashed user of the collection, and re-runs `is_locked` / `verify_email`
   against the returned doc (so a strategy can't authenticate a locked
   or unverified user even if the strategy code overlooks the check).
 - **No session-version on strategy auth.** Bearer / cookie paths

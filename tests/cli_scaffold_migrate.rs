@@ -25,7 +25,7 @@ use crap_cms::commands::db::{BackupOpts, RestoreOpts};
 use crap_cms::config::CrapConfig;
 use crap_cms::core::DocumentFields;
 use crap_cms::db::{DbConnection, DbPool, DbValue, migrate, ops, pool, query};
-use crap_cms::hooks;
+use crap_cms::hooks::{self, MigrationCall};
 use crap_cms::scaffold;
 use crap_cms::typegen;
 use serde_json::{Value, json};
@@ -358,11 +358,11 @@ return M
         .unwrap();
     let filename = &pending[0];
     let path = migrations_dir.join(filename);
-    let mut conn = db_pool.get().unwrap();
-    let tx = conn.transaction().unwrap();
-    hook_runner.run_migration(&path, "up", &tx).unwrap();
-    migrate::record_migration(&tx, filename).unwrap();
-    tx.commit().unwrap();
+    hook_runner
+        .run_migration(&MigrationCall::new(&path, "up"), &db_pool, None, |conn| {
+            migrate::record_migration(conn, filename)
+        })
+        .unwrap();
 
     // Verify applied
     let applied = migrate::get_applied_migrations(&db_pool).unwrap();
@@ -406,15 +406,12 @@ return M
         .build()
         .unwrap();
     let filename = "20240101000000_rollback.lua";
-    {
-        let mut conn = db_pool.get().unwrap();
-        let tx = conn.transaction().unwrap();
-        hook_runner
-            .run_migration(&migrations_dir.join(filename), "up", &tx)
-            .unwrap();
-        migrate::record_migration(&tx, filename).unwrap();
-        tx.commit().unwrap();
-    }
+    let path = migrations_dir.join(filename);
+    hook_runner
+        .run_migration(&MigrationCall::new(&path, "up"), &db_pool, None, |conn| {
+            migrate::record_migration(conn, filename)
+        })
+        .unwrap();
     assert!(
         migrate::get_applied_migrations(&db_pool)
             .unwrap()
@@ -422,15 +419,11 @@ return M
     );
 
     // Rollback
-    {
-        let mut conn = db_pool.get().unwrap();
-        let tx = conn.transaction().unwrap();
-        hook_runner
-            .run_migration(&migrations_dir.join(filename), "down", &tx)
-            .unwrap();
-        migrate::remove_migration(&tx, filename).unwrap();
-        tx.commit().unwrap();
-    }
+    hook_runner
+        .run_migration(&MigrationCall::new(&path, "down"), &db_pool, None, |conn| {
+            migrate::remove_migration(conn, filename)
+        })
+        .unwrap();
     assert!(
         !migrate::get_applied_migrations(&db_pool)
             .unwrap()
@@ -1789,6 +1782,13 @@ fn init_with_locales_and_nested_localized_crud() {
 
     // Use slug (non-localized) as first scalar so use_as_title points to a real column,
     // then localized title + nested array with localized subfield
+    // `image:upload` targets `media`, which must be a registered upload collection.
+    let media_opts = scaffold::CollectionOptions {
+        upload: true,
+        ..scaffold::CollectionOptions::default()
+    };
+    scaffold::make_collection(&config_dir, "media", None, &media_opts).unwrap();
+
     let fields = scaffold::parse_fields_shorthand(
         "slug:text:required,title:text:localized,items:array(label:text:localized,image:upload)",
     )
@@ -1846,6 +1846,18 @@ fn make_collection_nested_blocks_via_binary() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("project");
     scaffold::init(Some(config_dir.clone()), &scaffold::InitOptions::default()).unwrap();
+
+    // The hero block's `img:upload` field targets `media`, which must exist.
+    let media = std::process::Command::new(crap_bin())
+        .env("CRAP_CONFIG_DIR", config_dir.to_str().unwrap())
+        .args(["make", "collection", "media", "--upload", "--no-input"])
+        .output()
+        .expect("failed to run binary");
+    assert!(
+        media.status.success(),
+        "make media failed: {}",
+        String::from_utf8_lossy(&media.stderr)
+    );
 
     let output = std::process::Command::new(crap_bin())
         .env("CRAP_CONFIG_DIR", config_dir.to_str().unwrap())
@@ -1979,6 +1991,13 @@ fn nested_fields_with_locales_e2e() {
     scaffold::init(Some(config_dir.clone()), &opts).unwrap();
 
     // Create a collection with a localized array
+    // `image:upload` targets `media`, which must be a registered upload collection.
+    let media_opts = scaffold::CollectionOptions {
+        upload: true,
+        ..scaffold::CollectionOptions::default()
+    };
+    scaffold::make_collection(&config_dir, "media", None, &media_opts).unwrap();
+
     let fields = scaffold::parse_fields_shorthand(
         "title:text:required:localized,items:array(label:text:required:localized,image:upload)",
     )

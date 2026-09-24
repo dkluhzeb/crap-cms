@@ -3,7 +3,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use anyhow::{Result, anyhow};
-use mlua::{LuaSerdeExt as _, Value};
+use mlua::Value;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::{
@@ -112,7 +112,7 @@ impl HookRunner {
             },
             options: handler.options(),
         };
-        let ctx_value = lua.to_value(&ctx)?;
+        let ctx_value = lua_api::to_lua_value(&lua, &ctx)?;
 
         // Resolve the handler function (e.g., "jobs.cleanup.run")
         let func = resolve_hook_function(&lua, handler.reference())?;

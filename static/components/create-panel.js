@@ -236,14 +236,14 @@ class CrapCreatePanel extends HTMLElement {
         headers: { 'X-Inline-Create': '1' },
       });
       if (!resp.ok) {
-        this._setBodyMessage('create-panel__error', t('error') || 'Error');
+        this._setBodyMessage('create-panel__error', t('error'));
         return;
       }
       const html = await resp.text();
       this._injectForm(html);
     } catch (e) {
       if (/** @type {Error} */ (e).name === 'AbortError') return;
-      this._setBodyMessage('create-panel__error', t('error') || 'Error');
+      this._setBodyMessage('create-panel__error', t('error'));
     }
   }
 
@@ -273,7 +273,7 @@ class CrapCreatePanel extends HTMLElement {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const form = /** @type {HTMLFormElement|null} */ (doc.querySelector('#edit-form'));
     if (!form) {
-      this._setBodyMessage('create-panel__error', t('error') || 'Error');
+      this._setBodyMessage('create-panel__error', t('error'));
       return;
     }
 
@@ -392,24 +392,15 @@ class CrapCreatePanel extends HTMLElement {
       }
 
       // Validation error: 200 OK with re-rendered form body (the swap
-      // already happened, htmx extracted #edit-form via hx-select). The
-      // server sets `X-Crap-Toast` with the validation summary; surface
-      // it so the user sees both the inline field errors and the
-      // global "please fix the errors" toast.
-      const toastHeader = xhr.getResponseHeader('X-Crap-Toast');
-      if (toastHeader) {
-        try {
-          const parsed = JSON.parse(toastHeader);
-          toast({ message: parsed.message, type: parsed.type || 'error' });
-          return;
-        } catch {
-          /* fall through */
-        }
-      }
+      // already happened, htmx extracted #edit-form via hx-select), or an
+      // error status. Its `X-Crap-Toast` is shown by the page-level
+      // `<crap-toast>`, which sees this same `htmx:afterRequest` as it
+      // bubbles — toasting it here too showed every message twice.
+      if (xhr.getResponseHeader('X-Crap-Toast')) return;
 
       // Network error / non-2xx without a structured response.
       if (!detail.successful) {
-        toast({ message: t('error') || 'Error', type: 'error' });
+        toast({ message: t('error'), type: 'error' });
       }
     });
 

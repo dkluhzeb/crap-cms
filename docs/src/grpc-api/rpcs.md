@@ -909,13 +909,16 @@ enum MutationOperation {
   MUTATION_OPERATION_CREATE = 1;
   MUTATION_OPERATION_UPDATE = 2;
   MUTATION_OPERATION_DELETE = 3;
+  MUTATION_OPERATION_UNDELETE = 4;   // restored from the trash
+  MUTATION_OPERATION_UNPUBLISH = 5;  // published document/global reverted to draft
+  MUTATION_OPERATION_RESTORE = 6;    // version snapshot restored over the live one
 }
 
 message MutationEvent {
   uint64 sequence = 1;
   string timestamp = 2;
   MutationTarget target = 3;       // COLLECTION or GLOBAL
-  MutationOperation operation = 4; // CREATE, UPDATE, or DELETE
+  MutationOperation operation = 4; // CREATE, UPDATE, DELETE, UNDELETE, UNPUBLISH or RESTORE
   string collection = 5;
   string document_id = 6;
   DataMap data = 7;

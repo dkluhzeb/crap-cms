@@ -221,6 +221,14 @@ async fn validation_error_on_required_field() {
         "[data-field-name=\"title\"] .form__error",
         "title field should have error",
     );
+
+    // The re-rendered form still holds unsaved input: the leave guard must
+    // start out armed, or navigating away drops the edits without a prompt.
+    html::assert_exists(
+        &doc,
+        "crap-dirty-form[data-unsaved]",
+        "the error re-render marks the form unsaved",
+    );
 }
 
 // ── 12. validation_error_on_array_sub_field ───────────────────────────────

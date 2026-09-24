@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use std::collections::HashMap;
 
-use crate::hooks::lua_api::utils::lua_err;
+use crate::hooks::lua_api::{to_lua_value, utils::lua_err};
 use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,10 @@ use crate::{
     db::LocaleContext,
     hooks::lua_api::crud::{
         get_tx_conn,
-        helpers::{ExtractedData, extract_data, hook_ui_locale, hook_user, resolve_collection},
+        helpers::{
+            ExtractedData, check_hook_depth, extract_data, hook_ui_locale, hook_user,
+            resolve_collection,
+        },
     },
     service::{
         LuaWriteHooks, ServiceContext,
@@ -104,8 +107,13 @@ fn collections_validate(
     // dry-run itself never touches it.
     let ExtractedData { data, password: _ } = extract_data(&data, &def)?;
 
+    // The dry-run runs `before_validate` hooks, so a hook that validates
+    // again is bounded by the same depth cap as every other Lua CRUD call.
+    let (hooks_enabled, _guard) = check_hook_depth(lua, true, &collection, "validate");
+
     let write_hooks = LuaWriteHooks::builder(lua, reg.as_ref())
         .override_access(opts.override_access)
+        .hooks_enabled(hooks_enabled)
         .build();
 
     let ctx = ServiceContext::collection(&collection, &def)
@@ -131,7 +139,7 @@ fn collections_validate(
         errors: outcome.map(|ve| ve.to_field_map()),
     };
 
-    let value = lua.to_value(&result)?;
+    let value = to_lua_value(lua, &result)?;
     let Value::Table(tbl) = value else {
         return Err(RuntimeError(
             "ValidateResult did not serialize to a table".into(),

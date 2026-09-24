@@ -43,7 +43,8 @@ function M.field(opts)
   -- Per-instance template binding — render this field with
   -- templates/fields/rating.hbs instead of the default fields/number.
   -- `admin.extra` carries config the rating template reads via
-  -- `{{admin.extra.<key>}}` so the same template + JS component can
+  -- `{{extra.<key>}}` (it lands on the top-level `extra` key of the
+  -- field's render context) so the same template + JS component can
   -- power multiple rating-shaped fields with different settings.
   admin.template = "fields/rating"
   admin.extra = admin.extra or {}

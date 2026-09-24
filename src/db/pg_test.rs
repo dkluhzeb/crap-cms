@@ -57,6 +57,8 @@ pub(crate) fn unique_slug(prefix: &str) -> String {
 mod cache_pool;
 mod errors_sql_cron;
 mod list_filters;
+mod localized_join_filters;
 mod queries;
+mod row_paths;
 mod soft_delete;
 mod support;

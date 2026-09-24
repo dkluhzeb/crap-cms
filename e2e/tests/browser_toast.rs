@@ -203,6 +203,33 @@ async fn window_crap_namespace_dispatches_toast() {
         "window.crap.toast should render a toast with the given message; got: '{result}'"
     );
 
+    // Screen readers hear toasts: the host is a live region, and an error
+    // toast is an alert of its own.
+    page.evaluate("() => window.crap.toast({ message: 'broken', type: 'error' })")
+        .await
+        .unwrap();
+    let mut a11y = String::new();
+    for _ in 0..60 {
+        a11y = page
+            .evaluate(
+                "() => { \
+                    const host = document.querySelector('crap-toast'); \
+                    const err = host.shadowRoot.querySelector('.toast--error'); \
+                    return [host.getAttribute('role'), host.getAttribute('aria-live'), \
+                        err ? err.getAttribute('role') : 'none'].join(','); \
+                }",
+            )
+            .await
+            .unwrap()
+            .into_value()
+            .unwrap();
+        if a11y.ends_with(",alert") {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(a11y, "status,polite,alert");
+
     server_handle.abort();
 }
 

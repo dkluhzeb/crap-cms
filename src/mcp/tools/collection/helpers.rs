@@ -4,7 +4,10 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
 
 use crate::{
-    core::{CollectionDefinition, Document, DocumentFields, FieldDefinition, writable_field_names},
+    core::{
+        CollectionDefinition, Document, DocumentFields, FieldDefinition,
+        upload::write_shape_fields, writable_field_names,
+    },
     db::{query, query::filter::decode_where_map},
 };
 
@@ -184,6 +187,24 @@ pub(in crate::mcp::tools) fn extract_data_from_args(
     Ok(data)
 }
 
+/// [`extract_data_from_args`] against a collection's write shape — the keys
+/// its write-tool schema advertises. An upload collection's server-derived
+/// columns (`filename`, `url`, `mime_type`, …) are no field a caller may send,
+/// so a value for one is rejected like any unknown key instead of being
+/// stripped later.
+///
+/// # Errors
+///
+/// Returns an error naming any key that is not a `skip_key` and not a field of
+/// the collection's write shape.
+pub(in crate::mcp::tools) fn extract_collection_data(
+    args: &Value,
+    skip_keys: &[&str],
+    def: &CollectionDefinition,
+) -> Result<DocumentFields> {
+    extract_data_from_args(args, skip_keys, &write_shape_fields(def))
+}
+
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
@@ -208,6 +229,7 @@ mod tests {
     use crate::{
         core::{
             DocumentFields, DocumentId, JoinConfig, Slug, collection::Auth, document::Document,
+            upload::CollectionUpload,
         },
         db::query,
     };
@@ -622,6 +644,29 @@ mod tests {
         // buys silence, since a present null is now meaningful (it clears).
         let args = json!({ "title": "Hi", "extra_null": null });
         assert!(extract_data_from_args(&args, &["locale"], &fields).is_err());
+    }
+
+    /// Regression: the strict extractor accepted an upload collection's
+    /// server-derived columns (`filename`, `url`, …), which the service then
+    /// stripped without a word. The collection extractor walks the write shape,
+    /// so they are rejected like any key the schema does not advertise.
+    #[test]
+    fn collection_extractor_rejects_derived_upload_columns() {
+        let mut def = CollectionDefinition::new("media");
+        def.fields = vec![text_field("filename"), text_field("url"), text_field("alt")];
+        def.upload = Some(CollectionUpload::new());
+
+        let data = extract_collection_data(&json!({ "alt": "a" }), &[], &def).unwrap();
+        assert_eq!(data.get("alt").and_then(Value::as_str), Some("a"));
+
+        for derived in ["filename", "url"] {
+            let args: Map<String, Value> =
+                [(derived.to_string(), json!("x"))].into_iter().collect();
+            let err = extract_collection_data(&Value::Object(args), &[], &def)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(derived), "{derived}: {err}");
+        }
     }
 
     /// Regression: an unknown/misspelled field name must fail loudly rather than

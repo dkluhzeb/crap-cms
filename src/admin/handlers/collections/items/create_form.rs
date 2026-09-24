@@ -13,12 +13,10 @@ use crate::{
         AdminState,
         context::{
             BasePageContext, Breadcrumb, CollectionContext, CollectionPermissions, PageMeta,
-            PageType,
-            field::FieldContext,
-            page::collections::{CollectionCreatePage, UploadFormContext},
+            PageType, field::FieldContext, page::collections::CollectionCreatePage,
         },
         handlers::{
-            collections::shared::password_field,
+            collections::shared::{password_field, upload_form_context},
             shared::{
                 EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
                 check_access_or_forbid, collection_base, editor_locale_ctx, enrich_field_contexts,
@@ -83,18 +81,6 @@ fn prepare_create_fields(
     split_sidebar_fields(fields)
 }
 
-/// Build the upload accept context for upload collection create forms.
-fn upload_accept_context(def: &CollectionDefinition) -> UploadFormContext {
-    UploadFormContext {
-        accept: def
-            .upload
-            .as_ref()
-            .filter(|u| !u.mime_types.is_empty())
-            .map(|u| u.mime_types.join(",")),
-        ..UploadFormContext::default()
-    }
-}
-
 /// GET /admin/collections/{slug}/create — show create form
 pub async fn create_form(
     State(state): State<AdminState>,
@@ -149,7 +135,7 @@ pub async fn create_form(
 
     let upload = def
         .is_upload_collection()
-        .then(|| upload_accept_context(&def));
+        .then(|| upload_form_context(&def, state.config.upload.max_file_size));
 
     let perms = CollectionPermissions::for_user(&state, &def, auth_user.as_ref());
 
@@ -171,34 +157,4 @@ pub async fn create_form(
         &ctx,
     )
     .await
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::core::upload::CollectionUpload;
-
-    use super::*;
-
-    #[test]
-    fn accept_joins_declared_mime_types() {
-        let mut def = CollectionDefinition::new("media");
-        def.upload = Some(CollectionUpload {
-            mime_types: vec!["image/png".into(), "image/jpeg".into()],
-            ..Default::default()
-        });
-        assert_eq!(
-            upload_accept_context(&def).accept.as_deref(),
-            Some("image/png,image/jpeg")
-        );
-    }
-
-    #[test]
-    fn accept_is_none_without_upload_or_with_no_mime_types() {
-        let no_upload = CollectionDefinition::new("posts");
-        assert!(upload_accept_context(&no_upload).accept.is_none());
-
-        let mut empty = CollectionDefinition::new("media");
-        empty.upload = Some(CollectionUpload::default()); // no mime types declared
-        assert!(upload_accept_context(&empty).accept.is_none());
-    }
 }

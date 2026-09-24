@@ -98,6 +98,13 @@ pub struct UploadFormContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accept: Option<String>,
 
+    /// The largest file the collection accepts, in bytes — the file input
+    /// refuses a larger pick before the form is sent.
+    pub max_file_size: u64,
+
+    /// The same limit, formatted for display (`50.0 MB`).
+    pub max_file_size_display: String,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub focal_x: Option<f64>,
 
@@ -197,6 +204,10 @@ pub struct CollectionFormErrorPage {
 
     pub editing: bool,
     pub has_drafts: bool,
+
+    /// Always `true`: the form re-renders a submission that was not saved, so
+    /// the unsaved-changes guard starts out armed.
+    pub unsaved: bool,
 
     /// Hidden upload inputs preserved from the submitted form — the focal point
     /// the edit page renders inside its file-preview block, which this slim

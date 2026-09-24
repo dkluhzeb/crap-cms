@@ -5,6 +5,7 @@ mod locale;
 mod read;
 pub(crate) mod save;
 
+pub(crate) use locale::join_rows_locale;
 pub use read::{hydrate_document, hydrate_documents};
 pub(crate) use save::{parse_id_list, parse_polymorphic_values};
 pub use save::{restore_join_table_data, save_join_table_data};

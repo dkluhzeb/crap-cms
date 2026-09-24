@@ -69,11 +69,9 @@ impl Operation for Find {
             fq.order_by = Some(query::TRASH_DEFAULT_ORDER.to_string());
         }
 
-        // Validate filter/order field names up front so a bad field is a
-        // 400-class error on EVERY surface. Previously only gRPC pre-checked;
-        // Lua/MCP/admin let the query runner's error surface as internal.
-        query::validate_query_fields(def, &fq, args.locale_ctx.as_ref())
-            .map_err(|e| ServiceError::HookError(e.to_string()))?;
+        // Unknown filter/sort fields and paths are rejected by the query
+        // itself — a typed validation error, invalid-argument on every surface
+        // and for every operation that filters (find, count, bulk writes).
 
         // `select` drives both the SQL column list (via the query) and the
         // post-process stripping (via the input) — derived from one source so

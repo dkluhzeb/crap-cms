@@ -30,5 +30,5 @@ pub(crate) mod validate;
 // depend on `admin::handlers::Foo` rather than the deeper
 // `admin::handlers::forms::Foo`. Stays `pub(crate)` because both consumers
 // live in this crate; a future workspace split would promote to `pub`.
-pub(crate) use forms::{FormData, parse_multipart_form};
+pub(crate) use forms::{FormData, FormParseError, parse_multipart_form};
 pub(crate) use shared::strip_locale_locked_form_fields;

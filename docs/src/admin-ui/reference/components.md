@@ -84,6 +84,12 @@ document.dispatchEvent(new CustomEvent('crap:toast-request', {
 }));
 ```
 
+The host is a polite live region (`role="status"`, `aria-live="polite"`)
+and an error toast carries `role="alert"`, so screen readers announce
+every message. An htmx response's `X-Crap-Toast` header is toasted by
+the host itself — a component that handles such a response must not
+toast the header again.
+
 ### `<crap-drawer>` — `instance.open(opts)` / `instance.close()`
 
 `opts`: `{ title }`. Opening clears the drawer body; the caller then
@@ -136,16 +142,22 @@ Some also dispatch a bubbling `crap:change` event on edit so
 
 ### `crap:change` event contract
 
-`<crap-tags>` and `<crap-relationship-search>` dispatch a bubbling
-`crap:change` event whenever the underlying form value changes;
+`<crap-tags>`, `<crap-relationship-search>`, `<crap-richtext>` and
+`<crap-focal-point>` dispatch a bubbling `crap:change` event whenever
+the underlying form value changes — for richtext that includes toolbar
+commands and pastes, which never reach the form as native events;
 `<crap-code>` dispatches one only when its **language picker** changes
 (content edits reach the form as native `input` events from the
-editor). No `detail` payload is guaranteed — tags and
-relationship-search dispatch a plain `Event`, code a `CustomEvent`
-with `{ name, value }` detail — so read the current value from the
-host element / its hidden input. This is the canonical signal for
-form-watchers (`<crap-dirty-form>` listens; `<crap-upload-preview>`
-relays it internally).
+editor). No `detail` payload is guaranteed — most dispatch a plain
+`Event`, code a `CustomEvent` with `{ name, value }` detail — so read
+the current value from the host element / its hidden input. This is
+the canonical signal for form-watchers (`<crap-dirty-form>` listens;
+`<crap-upload-preview>` relays it internally).
+
+`<crap-dirty-form>` clears its unsaved flag only when the server
+**accepts** the form's own save (a 2xx/3xx response); a refused save
+(422, 403, 409, 413) keeps it. A validation re-render renders the guard
+with `data-unsaved`, so it starts out armed.
 
 ## Page enhancers
 
@@ -204,7 +216,9 @@ Re-exported from `static/components/_internal/util/index.js`:
 - `static/components/_internal/css.js` — `` css`…` `` tagged template
   that returns a `CSSStyleSheet` for `adoptedStyleSheets`.
 - `static/components/_internal/i18n.js` — `t(key)` reads the `crap-i18n` data
-  island injected by `layout/base.hbs`. The island body is emitted by
+  island rendered by `partials/i18n-island.hbs`, which both
+  `layout/base.hbs` and `layout/auth.hbs` include (a custom layout that
+  loads the components must include it too). The island body is emitted by
   the server-side `{{{admin_i18n}}}` helper, which serialises a
   curated set of keys for the active `_locale` as a single JSON
   object. To expose extra keys to JS, edit the `ADMIN_JS_KEYS` list

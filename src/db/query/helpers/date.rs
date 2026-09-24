@@ -61,6 +61,42 @@ pub(crate) fn normalize_date_value(value: &str) -> String {
     value.to_string()
 }
 
+/// A whole UTC calendar day, as the half-open range of stored instants it
+/// covers: `start` is the day's midnight, `end` the next day's, both in the
+/// stored `YYYY-MM-DDTHH:MM:SS.000Z` form, so a stored value lies on the day
+/// exactly when `start <= value < end` compares true as text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DayRange {
+    pub(crate) start: String,
+    pub(crate) end: String,
+}
+
+impl DayRange {
+    /// The range from the instant `start` up to, not including, `end`.
+    pub(crate) fn new(start: String, end: String) -> Self {
+        Self { start, end }
+    }
+
+    /// The day a bare `YYYY-MM-DD` filter operand names — `None` for any other
+    /// operand, which keeps its exact comparison. A stored date is UTC, so the
+    /// day is a UTC day.
+    pub(crate) fn of_operand(operand: &str) -> Option<Self> {
+        if operand.len() != 10 {
+            return None;
+        }
+
+        let day = NaiveDate::parse_from_str(operand, "%Y-%m-%d").ok()?;
+        let next = day.succ_opt()?;
+
+        Some(Self::new(utc_midnight(day), utc_midnight(next)))
+    }
+}
+
+/// `day`'s UTC midnight in the stored form.
+fn utc_midnight(day: NaiveDate) -> String {
+    format!("{}T00:00:00.000Z", day.format("%Y-%m-%d"))
+}
+
 /// Normalize a date value using a specific IANA timezone.
 /// The input is treated as local time in the given timezone, then converted to UTC.
 /// If the input already has a timezone offset (RFC 3339), it is converted directly.
@@ -205,7 +241,66 @@ mod tests {
         assert_eq!(normalize_date_value("garbage"), "garbage");
     }
 
+    // ── DayRange tests ───────────────────────────────────────────────
+
+    #[test]
+    fn day_range_covers_the_utc_day() {
+        let range = DayRange::of_operand("2026-01-31").unwrap();
+
+        assert_eq!(range.start, "2026-01-31T00:00:00.000Z");
+        assert_eq!(range.end, "2026-02-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn day_range_crosses_a_leap_day_and_a_year() {
+        let leap = DayRange::of_operand("2024-02-28").unwrap();
+        assert_eq!(leap.end, "2024-02-29T00:00:00.000Z");
+
+        let new_year = DayRange::of_operand("2025-12-31").unwrap();
+        assert_eq!(new_year.end, "2026-01-01T00:00:00.000Z");
+    }
+
+    /// Only a bare, valid calendar day names a whole day; an operand with a
+    /// time, a month, a time of day or an impossible date keeps its exact
+    /// comparison.
+    #[test]
+    fn day_range_only_for_a_bare_valid_day() {
+        for operand in [
+            "2026-01-15T00:00",
+            "2026-01-15T09:00:00.000Z",
+            "2026-01",
+            "14:30",
+            "2026-02-30",
+            "garbage",
+            "",
+        ] {
+            assert_eq!(DayRange::of_operand(operand), None, "{operand}");
+        }
+    }
+
     // ── normalize_date_with_timezone tests ───────────────────────────
+
+    /// A bare day written to a timezone field is that zone's local noon. Local
+    /// noon is within ±12h of UTC noon only for offsets up to ±12h: east of
+    /// UTC+12 it lands on the previous UTC day, at UTC−12 on the next. A
+    /// bare-day filter reads the UTC day, so such a value is found under its
+    /// neighbouring day (documented in the date field's Filtering notes).
+    #[test]
+    fn a_bare_day_in_a_zone_beyond_twelve_hours_leaves_its_utc_day() {
+        assert_eq!(
+            normalize_date_with_timezone("2026-01-15", "Pacific/Kiritimati").unwrap(),
+            "2026-01-14T22:00:00.000Z"
+        );
+        assert_eq!(
+            normalize_date_with_timezone("2026-01-15", "Etc/GMT+12").unwrap(),
+            "2026-01-16T00:00:00.000Z"
+        );
+        assert_eq!(
+            normalize_date_with_timezone("2026-01-15", "Pacific/Auckland").unwrap(),
+            "2026-01-14T23:00:00.000Z",
+            "UTC+13 in the southern summer"
+        );
+    }
 
     #[test]
     fn normalize_date_with_tz_date_only() {

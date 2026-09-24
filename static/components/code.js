@@ -20,6 +20,7 @@
 
 import { css } from './_internal/css.js';
 import { h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
 import { EV_CHANGE } from './events.js';
 
 const sheet = css`
@@ -107,24 +108,24 @@ let _highlightStyle = null;
 function getHighlightStyle(CM) {
   if (_highlightStyle) return _highlightStyle;
   if (!CM.HighlightStyle || !CM.tags) return CM.defaultHighlightStyle;
-  const t = CM.tags;
+  const tags = CM.tags;
   _highlightStyle = CM.HighlightStyle.define([
-    { tag: t.keyword, color: 'var(--code-keyword, #708)' },
-    { tag: [t.string, t.special(t.string)], color: 'var(--code-string, #a11)' },
-    { tag: t.number, color: 'var(--code-number, #164)' },
-    { tag: t.comment, color: 'var(--code-comment, #888)', fontStyle: 'italic' },
-    { tag: [t.atom, t.bool, t.null], color: 'var(--code-atom, #219)' },
-    { tag: t.propertyName, color: 'var(--code-property, #00f)' },
-    { tag: t.function(t.variableName), color: 'var(--code-function, #00c)' },
-    { tag: t.definition(t.variableName), color: 'var(--code-definition, #00f)' },
-    { tag: [t.typeName, t.className], color: 'var(--code-type, #085)' },
-    { tag: t.operator, color: 'var(--code-operator, #708)' },
-    { tag: t.regexp, color: 'var(--code-regexp, #a11)' },
-    { tag: t.meta, color: 'var(--code-meta, #888)' },
-    { tag: t.tagName, color: 'var(--code-tag, #708)' },
-    { tag: t.attributeName, color: 'var(--code-attribute, #00c)' },
-    { tag: t.heading, color: 'var(--code-heading, #708)', fontWeight: 'bold' },
-    { tag: t.link, color: 'var(--code-link, #00c)', textDecoration: 'underline' },
+    { tag: tags.keyword, color: 'var(--code-keyword, #708)' },
+    { tag: [tags.string, tags.special(tags.string)], color: 'var(--code-string, #a11)' },
+    { tag: tags.number, color: 'var(--code-number, #164)' },
+    { tag: tags.comment, color: 'var(--code-comment, #888)', fontStyle: 'italic' },
+    { tag: [tags.atom, tags.bool, tags.null], color: 'var(--code-atom, #219)' },
+    { tag: tags.propertyName, color: 'var(--code-property, #00f)' },
+    { tag: tags.function(tags.variableName), color: 'var(--code-function, #00c)' },
+    { tag: tags.definition(tags.variableName), color: 'var(--code-definition, #00f)' },
+    { tag: [tags.typeName, tags.className], color: 'var(--code-type, #085)' },
+    { tag: tags.operator, color: 'var(--code-operator, #708)' },
+    { tag: tags.regexp, color: 'var(--code-regexp, #a11)' },
+    { tag: tags.meta, color: 'var(--code-meta, #888)' },
+    { tag: tags.tagName, color: 'var(--code-tag, #708)' },
+    { tag: tags.attributeName, color: 'var(--code-attribute, #00c)' },
+    { tag: tags.heading, color: 'var(--code-heading, #708)', fontWeight: 'bold' },
+    { tag: tags.link, color: 'var(--code-link, #00c)', textDecoration: 'underline' },
   ]);
   return _highlightStyle;
 }
@@ -358,7 +359,7 @@ class CrapCode extends HTMLElement {
       'select',
       {
         class: 'lang-picker__select',
-        'aria-label': 'Editor language',
+        'aria-label': t('code_language'),
         onChange: (/** @type {Event} */ e) =>
           this._onLanguageChange(/** @type {HTMLSelectElement} */ (e.target).value),
       },
@@ -366,7 +367,7 @@ class CrapCode extends HTMLElement {
         h('option', { value: lang, ...(lang === current ? { selected: true } : {}) }, lang),
       ),
     );
-    return h('label', { class: 'lang-picker' }, 'Language: ', select);
+    return h('label', { class: 'lang-picker' }, `${t('code_language_label')} `, select);
   }
 
   /**

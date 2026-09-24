@@ -185,6 +185,29 @@ async fn pg_an_exhausted_pool_times_out_and_reads_as_transient() {
     );
 }
 
+/// Regression: every boot logged a page of `tokio_postgres` INFO lines —
+/// one NOTICE ("relation … already exists, skipping") per `CREATE … IF NOT
+/// EXISTS` the schema sync runs. Pooled sessions only receive warnings and
+/// errors, so the server never sends those notices.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pg_sessions_receive_no_notices() {
+    let Some(pool) = pg_test_pool() else {
+        eprintln!("skipping: TEST_DATABASE_URL not set");
+        return;
+    };
+
+    let conn = pool.get().expect("conn");
+    let row = conn
+        .query_one(
+            "SELECT current_setting('client_min_messages') AS level",
+            &[],
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(row.get_string("level").unwrap(), "warning");
+}
+
 /// A connection killed server-side must leave the pool rather than be
 /// handed out again. Recycling accepted every pooled client unconditionally,
 /// so after a server restart every checkout of a dead client failed with

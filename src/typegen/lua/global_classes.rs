@@ -6,30 +6,29 @@ use crate::{
         collection::GlobalDefinition,
         upload::{readable_fields, writable_fields},
     },
+    hooks::lifecycle::operation::{global_hook_operations, global_read_hook_operations},
     typegen::helpers::{to_pascal_case, w},
 };
 
 use super::{
     accessor::{render_global_accessor, render_global_typing_factories},
     classes::{
-        render_sub_type_classes, write_fields, write_hook_context_tail, write_system_fields,
+        literal_union, render_sub_type_classes, write_field_hook_context, write_fields,
+        write_hook_context_tail, write_system_fields,
     },
     field::LuaShape,
 };
-
-/// The operations an `after_read` hook of a global runs for: the read, and
-/// the update that produced a live event.
-const GLOBAL_READ_HOOK_OPERATIONS: &str = r#""get" | "update""#;
 
 /// The hook-data, partial-payload and document classes of a global.
 fn render_data_classes(out: &mut String, global: &GlobalDefinition, pascal: &str) {
     let read_fields = readable_fields(&global.fields);
 
-    // crap.global_data.* — hook ctx.data for globals. `id` and timestamps
-    // are emitted optional for the same reason as `crap.data.X`.
+    // crap.global_data.* — hook ctx.data for globals. Every field, `id` and
+    // the timestamps optional for the same reasons as `crap.data.X`: an
+    // update's before-hooks see only the fields the request sends.
     w!(out, "---@class crap.global_data.{pascal}");
     w!(out, "---@field id? string");
-    write_fields(out, &global.fields, pascal, LuaShape::Input);
+    write_fields(out, &global.fields, pascal, LuaShape::Partial);
     w!(out, "---@field created_at? string");
     w!(out, "---@field updated_at? string");
     out.push('\n');
@@ -64,24 +63,27 @@ fn render_hook_classes(out: &mut String, global: &GlobalDefinition, pascal: &str
 
     w!(out, "---@class crap.hook.global_{slug}");
     w!(out, "---@field collection \"{slug}\"");
-    w!(out, "---@field operation \"update\" | \"get\"");
+    w!(
+        out,
+        "---@field operation {}",
+        literal_union(&global_hook_operations())
+    );
     w!(out, "---@field data crap.global_data.{pascal}");
     write_hook_context_tail(out);
 
     w!(out, "---@class crap.read_hook.global_{slug}");
     w!(out, "---@field collection \"{slug}\"");
-    w!(out, "---@field operation {GLOBAL_READ_HOOK_OPERATIONS}");
+    w!(
+        out,
+        "---@field operation {}",
+        literal_union(&global_read_hook_operations())
+    );
     w!(out, "---@field data crap.global_doc.{pascal}");
     write_hook_context_tail(out);
 
     w!(out, "---@class crap.field_hook.global_{slug}");
-    w!(out, "---@field field_name string");
     w!(out, "---@field collection \"{slug}\"");
-    w!(out, "---@field operation string");
-    w!(out, "---@field data crap.global_data.{pascal}");
-    w!(out, "---@field user? table");
-    w!(out, "---@field ui_locale? string");
-    out.push('\n');
+    write_field_hook_context(out, &format!("crap.global_data.{pascal}"));
 }
 
 /// Function-type aliases for global hooks — same pattern as collections: a
@@ -139,15 +141,30 @@ mod tests {
     use super::*;
     use crate::core::{FieldDefinition, FieldType};
 
-    /// Global reads are `get`.
+    /// Global reads are `get`; a global's `after_read` also shapes its
+    /// `update`, `unpublish` and `restore` live events.
     #[test]
     fn hook_context_operations_match_the_runtime() {
         let global = GlobalDefinition::new("footer");
         let mut out = String::new();
         render_global(&mut out, &global);
+
+        let hook = class_block(&out, "---@class crap.hook.global_footer");
         assert!(
-            out.contains(r#"---@field operation "update" | "get""#),
-            "{out}"
+            hook.contains(r#"---@field operation "update" | "get""#),
+            "{hook}"
+        );
+
+        let read_hook = class_block(&out, "---@class crap.read_hook.global_footer");
+        assert!(
+            read_hook.contains(r#"---@field operation "get" | "update" | "unpublish" | "restore""#),
+            "{read_hook}"
+        );
+
+        let field_hook = class_block(&out, "---@class crap.field_hook.global_footer");
+        assert!(
+            field_hook.contains("---@field document crap.global_data.Footer"),
+            "{field_hook}"
         );
     }
 
@@ -179,9 +196,11 @@ mod tests {
         let mut out = String::new();
         render_global(&mut out, &global);
 
-        assert!(out.contains("---@class crap.global_data.SiteSettings"));
-        assert!(out.contains("---@field site_name string"));
-        assert!(out.contains("---@field tagline? string"));
+        // Hook data may lack any field (an update's before-hooks see only the
+        // fields the request sends), so even a required one is optional.
+        let data = class_block(&out, "---@class crap.global_data.SiteSettings");
+        assert!(data.contains("---@field site_name? string"), "{data}");
+        assert!(data.contains("---@field tagline? string"), "{data}");
         assert!(out.contains("---@class crap.global_doc.SiteSettings : crap.Document"));
         assert!(out.contains("---@class crap.hook.global_site_settings"));
         assert!(out.contains("---@class crap.field_hook.global_site_settings"));

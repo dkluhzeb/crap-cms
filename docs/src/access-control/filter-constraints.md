@@ -179,15 +179,53 @@ end
 
 > ⚠️ **Always guard the constraint value against `nil`.** In Lua,
 > `{ tenant_id = ctx.user.tenant_id }` is an **empty table** `{}` when
-> `ctx.user.tenant_id` is `nil` (the table constructor drops nil-valued keys).
-> An empty constraint table is **denied** (fail-closed) — it is never treated as
-> "allow all" (that is what `return true` is for). So a tenantless user is
-> safely refused rather than shown every tenant's data. Guarding the value
-> explicitly (as above) makes the intent clear and avoids relying on the
-> fail-closed default. The same applies to any `{ field = ctx.user.<field> }`
-> where the user field is optional — **including inside `["or"]` groups**: a
-> group whose only key is nil-valued becomes an empty group, which would match
-> every row, so a constraint containing an empty group is denied the same way.
+> `ctx.user.tenant_id` is `nil` (the table constructor drops nil-valued keys),
+> and `{ tenant_id = ctx.user.tenant_id, archived = false }` silently becomes
+> `{ archived = false }` — a filter that matches every tenant's rows. Guard the
+> value explicitly (as above). Two runtime safety nets back this up, but they
+> are nets, not a substitute for the guard:
+>
+> - An **empty constraint table is denied** — it is never "allow all" (that is
+>   what `return true` is for). This includes an `["or"]` group whose only key
+>   was nil-valued (an empty group would match every row).
+> - A constraint table from a rule that **read a NULL `ctx.user` field** is
+>   denied — see below.
+
+### NULL user fields fail closed
+
+A user field stored as NULL reaches Lua as `nil`. When an access rule reads
+such a field of `ctx.user` (at any group depth) and then returns a **filter
+table**, the check is **denied** and a warning names the collection, the
+operation and the NULL field(s) read. The constraint was built from a value
+that was not there, so it is almost always wider than intended.
+
+- A `true` / `false` / `nil` return is unaffected — it is the rule's explicit
+  decision. `if ctx.user.is_admin then return true end` with a NULL
+  `is_admin` sees `nil` and does not grant; a rule that reads a NULL field and
+  then returns `true` stays allowed.
+- Reading a field that is set, or one the user document does not have at all,
+  is not tracked. Only `ctx.user` is tracked: `ctx.data` / `ctx.document` are
+  row data, not identity.
+- The guard also fires for a rule that probes an **unrelated** NULL field
+  before returning its constraint — the common "admin bypass" shape
+  `if ctx.user.role == "admin" then return true end; return { owner = ctx.user.id }`
+  is denied for a user whose `role` is NULL. Give such fields a default (or
+  make them required), or probe them with `rawget(ctx.user, "role")`, which
+  reads without being tracked.
+- It applies to every check that can return a constraint: collection and
+  global access (`read`, `draft`, `trash`, `versions`, `update`, `delete`, …),
+  field-level access, `crap.access.check`, and live-subscription view
+  resolution — they all evaluate through the same access evaluator.
+- It holds for every way a user signs in: a custom auth strategy's user is
+  the stored document, read the same way as a token user's, so its NULL
+  fields are tracked too.
+- Only `ctx.user` **itself** is tracked, not a copy of it. A table built from
+  it with `pairs` — `crap.util.clone`, `crap.util.deep_merge`,
+  `crap.util.pick` / `crap.util.omit`, a hand-rolled copy — holds no key for a
+  NULL field and reads it as a plain `nil`, so a
+  constraint built from the copy is not caught. Build constraints from
+  `ctx.user` directly, or guard the value explicitly before using it
+  (`if ctx.user.tenant_id == nil then return false end`).
 
 ## Example: Owner-or-Admin
 
@@ -204,10 +242,14 @@ function M.own_posts(ctx)
         return true  -- admins see everything
     end
     -- Everyone else sees only their own rows.
-    -- (Note: complex OR logic isn't supported in filter returns.)
     return { author = ctx.user.id }
 end
 ```
+
+Reading `ctx.user.role` before returning the constraint means a user whose
+`role` is NULL is denied by the [NULL-field guard](#null-user-fields-fail-closed);
+give `role` a default (or make it required), or probe it with
+`rawget(ctx.user, "role")`.
 
 To expose published content to anonymous readers, return `true` (or a
 non-ownership constraint) from `read` — the read view is already published-only.

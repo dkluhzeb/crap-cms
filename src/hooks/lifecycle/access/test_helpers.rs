@@ -173,6 +173,36 @@ const TEST_ACCESS_LUA: &str = r#"
             return { _status = "published" }
         end
 
+        -- Multi-key tenant rule: with a NULL tenant_id the key drops out and
+        -- `{ archived = false }` alone would match every tenant's rows.
+        function access.tenant_and_not_archived(ctx)
+            return { tenant_id = ctx.user.tenant_id, archived = false }
+        end
+
+        function access.admin_flag(ctx)
+            if ctx.user.is_admin then
+                return true
+            end
+
+            return false
+        end
+
+        -- Reads a NULL field, then decides explicitly.
+        function access.null_read_then_true(ctx)
+            local _ = ctx.user.tenant_id
+
+            return true
+        end
+
+        -- `rawget` reads a possibly-NULL field without tripping the guard.
+        function access.rawget_role_then_owner(ctx)
+            if rawget(ctx.user, "role") == "admin" then
+                return true
+            end
+
+            return { owner = ctx.user.id }
+        end
+
         package.loaded["test_access"] = access
     "#;
 

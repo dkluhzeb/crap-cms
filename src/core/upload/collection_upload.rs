@@ -48,6 +48,13 @@ impl CollectionUpload {
         }
     }
 
+    /// The largest file this collection accepts: its own `max_file_size`, or
+    /// `global` (the `[upload] max_file_size` default) when it sets none.
+    #[must_use]
+    pub fn max_file_size_or(&self, global: u64) -> u64 {
+        self.max_file_size.unwrap_or(global)
+    }
+
     /// The configured format-variant names, in the order their columns are
     /// generated. The one place `webp`/`avif` are spelled as wire names.
     #[must_use]
@@ -166,6 +173,15 @@ mod tests {
         assert!(upload.admin_thumbnail.is_none());
         assert!(upload.format_options.webp.is_none());
         assert!(upload.format_options.avif.is_none());
+    }
+
+    #[test]
+    fn max_file_size_or_prefers_the_collection_limit() {
+        let mut upload = CollectionUpload::new();
+        assert_eq!(upload.max_file_size_or(100), 100);
+
+        upload.max_file_size = Some(500);
+        assert_eq!(upload.max_file_size_or(100), 500);
     }
 
     #[test]

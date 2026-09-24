@@ -2,10 +2,11 @@
 
 use anyhow::{Result, bail};
 
-use crate::core::{
-    FieldType, canonical_operand, parse_bool, parse_number,
-    validate::{FieldError, ValidationError},
+use super::{
+    day::{build_day_condition, day_filter},
+    invalid_query,
 };
+use crate::core::{FieldType, canonical_operand, parse_bool, parse_number};
 use crate::db::{
     DbConnection, DbValue, Filter, FilterOp,
     query::{
@@ -26,8 +27,10 @@ use crate::db::{
 /// - Empty strings remain as `DbValue::Text("")` rather than `Null`, because
 ///   filter semantics differ from write semantics (matching an empty column
 ///   vs. writing a null).
-/// - Dates are normalized so filter inputs like `"2024-01-15"` align with
-///   the ISO 8601 format written by the write path.
+/// - Dates are normalized so filter inputs like `"2024-01-15T09:00"` align
+///   with the ISO 8601 format written by the write path. A bare-day operand
+///   of an equality, membership or ordered comparison never reaches here: it
+///   covers its whole UTC day (see `filter::day`).
 ///
 /// Text-only operators (`Like`, `Contains`) always bind as `DbValue::Text`
 /// regardless of the field type — no numeric/date casting is meaningful.
@@ -39,6 +42,8 @@ use crate::db::{
 /// # Errors
 ///
 /// Returns a [`ValidationError`] when `value` does not fit the field type.
+///
+/// [`ValidationError`]: crate::core::ValidationError
 pub(super) fn coerce_filter_value(
     field: &str,
     field_type: Option<&FieldType>,
@@ -58,7 +63,7 @@ pub(super) fn coerce_filter_value(
     match ft {
         FieldType::Number => match parse_number(value) {
             Some(n) if n.is_finite() => Ok(DbValue::Real(n)),
-            _ => Err(filter_type_error(
+            _ => Err(invalid_query(
                 field,
                 format!("filter value '{value}' is not a valid number"),
             )),
@@ -66,7 +71,7 @@ pub(super) fn coerce_filter_value(
         FieldType::Checkbox => parse_bool(value)
             .map(|b| DbValue::Integer(i64::from(b)))
             .ok_or_else(|| {
-                filter_type_error(
+                invalid_query(
                     field,
                     format!("filter value '{value}' is not a boolean (true/false)"),
                 )
@@ -80,10 +85,6 @@ pub(super) fn coerce_filter_value(
 /// escape.
 fn ends_with_lone_escape(pattern: &str) -> bool {
     pattern.bytes().rev().take_while(|b| *b == b'\\').count() % 2 == 1
-}
-
-fn filter_type_error(field: &str, message: String) -> anyhow::Error {
-    ValidationError::new(vec![FieldError::new(field, message)]).into()
 }
 
 /// `Like` and `Contains` operate on string patterns and never benefit from
@@ -103,6 +104,8 @@ fn is_text_only_op(op: &FilterOp) -> bool {
 /// # Errors
 ///
 /// Returns a [`ValidationError`] when an operand does not fit the field type.
+///
+/// [`ValidationError`]: crate::core::ValidationError
 pub(crate) fn build_op_condition(
     conn: &dyn DbConnection,
     field: &str,
@@ -111,6 +114,13 @@ pub(crate) fn build_op_condition(
     field_type: Option<&FieldType>,
     params: &mut Vec<DbValue>,
 ) -> Result<String> {
+    // A bare-day operand on a date covers its whole UTC day.
+    if matches!(field_type, Some(FieldType::Date))
+        && let Some(day) = day_filter(op)
+    {
+        return Ok(build_day_condition(conn, expr, &day, params));
+    }
+
     // A pattern match against a numeric/boolean column: compare its text
     // form. `SQLite` does that implicitly; Postgres has no `bigint LIKE text`.
     let text_expr;
@@ -138,7 +148,7 @@ pub(crate) fn build_op_condition(
             let pattern = canonical_operand(field_type, v);
 
             if ends_with_lone_escape(&pattern) {
-                return Err(filter_type_error(
+                return Err(invalid_query(
                     field,
                     format!("like pattern '{v}' ends with an escape character"),
                 ));
@@ -217,6 +227,7 @@ pub(crate) fn build_filter_condition(
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
+    use crate::core::ValidationError;
     use crate::db::InMemoryConn;
     use crate::db::{
         DbValue,
@@ -733,18 +744,38 @@ mod tests {
 
     #[test]
     fn filter_date_binds_normalized_text() {
-        // A plain calendar date gets normalized to the stored ISO 8601 format.
+        // A datetime without a zone gets normalized to the stored ISO 8601 form.
+        let c = conn();
+        let f = Filter {
+            field: "published_at".into(),
+            op: FilterOp::GreaterThan("2024-01-15T09:00".into()),
+        };
+        let mut params: Vec<DbValue> = Vec::new();
+        build_filter_condition(&c, &f, &f.field, Some(&FieldType::Date), &mut params).unwrap();
+        assert_eq!(
+            params,
+            vec![DbValue::Text("2024-01-15T09:00:00.000Z".into())],
+            "Date filter values should be normalized to match stored ISO format"
+        );
+    }
+
+    /// Regression: a bare day was bound as its noon, so `greater_than` a day
+    /// took in the day's afternoon. It now compares from the next midnight.
+    #[test]
+    fn filter_date_greater_than_a_bare_day_starts_at_the_next_day() {
         let c = conn();
         let f = Filter {
             field: "published_at".into(),
             op: FilterOp::GreaterThan("2024-01-15".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        build_filter_condition(&c, &f, &f.field, Some(&FieldType::Date), &mut params).unwrap();
+        let sql =
+            build_filter_condition(&c, &f, &f.field, Some(&FieldType::Date), &mut params).unwrap();
+
+        assert_eq!(sql, "\"published_at\" >= ?1");
         assert_eq!(
             params,
-            vec![DbValue::Text("2024-01-15T12:00:00.000Z".into())],
-            "Date filter values should be normalized to match stored ISO format"
+            vec![DbValue::Text("2024-01-16T00:00:00.000Z".into())]
         );
     }
 

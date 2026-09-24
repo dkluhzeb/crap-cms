@@ -1463,10 +1463,12 @@ fn seed_l10n_articles_fixture() -> (
     )
 }
 
-/// Regression: `LocaleMode::All` must NOT add a `_locale = ?` constraint —
-/// the same filter should match BOTH docs (one in EN, one in DE).
+/// `LocaleMode::All` filters localized array rows by the default locale's
+/// rows — the rows a `locale = "all"` read returns for a join field — so a
+/// value held only by another locale's rows does not match. Doc A holds
+/// "Shared" in its EN rows, doc B only in its DE rows.
 #[test]
-fn filter_localized_field_in_array_with_all_locale_matches_any() {
+fn filter_localized_field_in_array_with_all_locale_reads_the_default_rows() {
     let (_tmp, pool, def, doc_a_id, doc_b_id, locale_config) = seed_l10n_articles_fixture();
 
     let all_ctx = LocaleContext {
@@ -1487,12 +1489,10 @@ fn filter_localized_field_in_array_with_all_locale_matches_any() {
     let mut ids: Vec<&str> = docs.iter().map(|d| d.id.as_ref()).collect();
     ids.sort_unstable();
 
-    let mut expected = vec![doc_a_id.as_str(), doc_b_id.as_str()];
-    expected.sort_unstable();
-
     assert_eq!(
-        ids, expected,
-        "filtering links.label=Shared with LocaleMode::All must match both docs"
+        ids,
+        vec![doc_a_id.as_str()],
+        "LocaleMode::All must filter the default-locale rows the read shows (doc B: {doc_b_id})"
     );
 }
 

@@ -21,7 +21,7 @@ use crate::{
             page::collections::{CollectionEditPage, UploadFormContext, UploadInfo},
         },
         handlers::{
-            collections::shared::{locked_field, password_field},
+            collections::shared::{locked_field, password_field, upload_form_context},
             shared::{
                 EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
                 collection_base, compute_denied_read_fields, editor_locale_ctx, editor_read_ctx,
@@ -181,15 +181,14 @@ impl<'a> UploadMeta<'a> {
     }
 }
 
-/// Build upload preview/info context for upload collection edit forms.
-fn build_upload_context(def: &CollectionDefinition, document: &Document) -> UploadFormContext {
-    let mut ctx = UploadFormContext::default();
-
-    if let Some(ref u) = def.upload
-        && !u.mime_types.is_empty()
-    {
-        ctx.accept = Some(u.mime_types.join(","));
-    }
+/// Build upload preview/info context for upload collection edit forms: the
+/// file input's accept list and size limit, plus the stored file's preview.
+fn build_upload_context(
+    def: &CollectionDefinition,
+    document: &Document,
+    global_max_file_size: u64,
+) -> UploadFormContext {
+    let mut ctx = upload_form_context(def, global_max_file_size);
 
     let meta = UploadMeta::from_document(document);
     ctx.focal_x = meta.focal_x;
@@ -438,10 +437,13 @@ fn build_edit_page_context(input: EditPageContextInput<'_>) -> CollectionEditPag
     .with_editor_locale(input.editor_locale, input.state)
     .with_breadcrumbs(breadcrumbs);
 
-    let upload = input
-        .def
-        .is_upload_collection()
-        .then(|| build_upload_context(input.def, input.document));
+    let upload = input.def.is_upload_collection().then(|| {
+        build_upload_context(
+            input.def,
+            input.document,
+            input.state.config.upload.max_file_size,
+        )
+    });
 
     let perms = CollectionPermissions::for_user(input.state, input.def, input.auth_user);
 
@@ -525,7 +527,7 @@ mod tests {
             "sizes": { "card": { "url": "/card.png" } }
         }));
 
-        let ctx = build_upload_context(&def, &d);
+        let ctx = build_upload_context(&def, &d, 1024);
 
         assert_eq!(ctx.accept.as_deref(), Some("image/png"));
         assert_eq!(ctx.focal_x, Some(0.5));
@@ -543,7 +545,7 @@ mod tests {
         let def = media_def(None);
         let d = doc(json!({ "url": "/orig.png", "mime_type": "image/jpeg", "filename": "p.jpg" }));
 
-        let ctx = build_upload_context(&def, &d);
+        let ctx = build_upload_context(&def, &d, 1024);
         assert_eq!(ctx.preview.as_deref(), Some("/orig.png"));
         // No width/height → no dimensions string.
         assert_eq!(ctx.info.expect("info").dimensions, None);
@@ -555,7 +557,7 @@ mod tests {
         let d =
             doc(json!({ "url": "/f.pdf", "mime_type": "application/pdf", "filename": "f.pdf" }));
 
-        let ctx = build_upload_context(&def, &d);
+        let ctx = build_upload_context(&def, &d, 1024);
         assert!(ctx.preview.is_none());
     }
 }

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::{
     core::{FieldDefinition, FieldType, prefixed_name, walk_leaf_fields},
-    db::query::helpers::is_polymorphic,
+    db::query::{filter::resolve::typed_system_columns, helpers::is_polymorphic},
 };
 
 /// What the matcher knows of a constrained field path.
@@ -39,7 +39,10 @@ impl<'a> Schema<'a> {
 /// column name (`meta__color`), and every top-level has-many relationship or
 /// upload by the `rel.id` path the SQL filter accepts for it.
 fn field_type_map(fields: &[FieldDefinition]) -> HashMap<String, Leaf> {
-    let mut types = HashMap::new();
+    // The system timestamps no field defines compare as SQL types them.
+    let mut types: HashMap<String, Leaf> = typed_system_columns()
+        .map(|(col, field_type)| (col.to_string(), Leaf::Value(field_type)))
+        .collect();
 
     let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
         let name = prefixed_name(prefix, &field.name);

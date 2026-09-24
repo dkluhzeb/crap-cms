@@ -54,13 +54,7 @@
       </script>
 
       <title>{{t page.title name=page.title_name}}-{{crap.site_name}}</title>
-      <script
-        type="application/json"
-        id="crap-i18n"
-        nonce="{{crap.csp_nonce}}"
-      >
-{{{admin_i18n}}}
-      </script>
+      {{> partials/i18n-island}}
 
       {{slot "head_extras"}}
     </head>
@@ -85,7 +79,11 @@
         </main>
       </div>
 
-      <crap-toast></crap-toast>
+      <crap-toast
+        role="status"
+        aria-live="polite"
+      >
+      </crap-toast>
       <crap-delete-dialog></crap-delete-dialog>
       <crap-session-dialog></crap-session-dialog>
       <crap-confirm-dialog></crap-confirm-dialog>

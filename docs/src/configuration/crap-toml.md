@@ -448,7 +448,7 @@ Password strength requirements applied to all password-setting paths (create, up
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `storage` | string | `"local"` | Storage backend: `"local"` (filesystem), `"s3"` (S3-compatible, requires `--features s3-storage`), or `"custom"` (Lua-delegated). |
-| `max_file_size` | integer/string | `52428800` (`"50MB"`) | Global maximum file size. Accepts bytes (integer) or human-readable (`"50MB"`, `"1GB"`). Per-collection `max_file_size` overrides this. Also sets the HTTP body limit (with 1MB overhead for multipart encoding). |
+| `max_file_size` | integer/string | `52428800` (`"50MB"`) | Global maximum file size. Accepts bytes (integer) or human-readable (`"50MB"`, `"1GB"`). Per-collection `max_file_size` overrides this. Also sets the HTTP body limit of every route (with 1MB overhead for multipart encoding); only an upload collection's create/update routes and `/api/upload` raise it to that collection's own `max_file_size`. |
 | `s3` | table | *(see below)* | S3-compatible storage settings, used when `storage = "s3"`. See `[upload.s3]`. |
 
 ### `[upload.s3]`

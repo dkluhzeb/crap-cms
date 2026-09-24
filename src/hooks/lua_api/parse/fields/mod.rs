@@ -8,6 +8,8 @@
 //!    duplicate field names
 
 mod constraints;
+
+pub(in crate::hooks::lua_api::parse) use constraints::{describe, whole_number};
 mod single;
 
 pub(crate) use single::FIELD_HOOK_KEYS;

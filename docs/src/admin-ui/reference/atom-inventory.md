@@ -62,10 +62,10 @@ appropriate; emit `EV_CHANGE` (bubbling) when value changes so
 
 | Tag                         | Slot                       | Public attributes                       | Events fired       | LOC  |
 | --------------------------- | -------------------------- | --------------------------------------- | ------------------ | ---- |
-| `<crap-password-toggle>`    | `<input type="password">`  | —                                       | —                  | 104  |
+| `<crap-password-toggle>`    | `<input type="password">`  | —                                       | —                  | 113  |
 | `<crap-tags>`               | hidden `<input>`           | `data-min-length`, `data-max-length`, `data-min`, `data-max`, `data-placeholder`, `data-readonly`, `data-error`, `data-field-type` | `EV_CHANGE`        | 286  |
 | `<crap-code>`               | hidden `<input>` + `<textarea>` | `data-language`, `data-languages`, `data-readonly` | `EV_CHANGE`        | 408  |
-| `<crap-focal-point>`        | `<img>` + hidden `<input>` | —                                       | —                  | 142  |
+| `<crap-focal-point>`        | `<img>` + hidden `<input>` | `data-focal-x`, `data-focal-y`          | `EV_CHANGE`        | 214  |
 | `<crap-richtext>`           | hidden `<input>` + `<textarea>` | `data-features`, `data-format`, `data-nodes` | `EV_CHANGE`        | 487  |
 
 **Stable contract**:

@@ -172,6 +172,19 @@ impl CollectionDefinition {
         self.upload.as_ref().is_some_and(|u| u.enabled)
     }
 
+    /// The largest file this collection accepts, in bytes: its own
+    /// `upload.max_file_size`, else `global` (the `[upload] max_file_size`
+    /// default). A collection without uploads enabled takes `global`. The one
+    /// rule behind the admin file input, the body limit on upload routes, and
+    /// the "too large" message.
+    #[must_use]
+    pub fn max_upload_size(&self, global: u64) -> u64 {
+        self.upload
+            .as_ref()
+            .filter(|u| u.enabled)
+            .map_or(global, |u| u.max_file_size_or(global))
+    }
+
     /// Check if this collection has versioning enabled.
     #[must_use]
     pub fn has_versions(&self) -> bool {
@@ -314,6 +327,24 @@ mod tests {
         let mut col = make_collection("media", None, None, None);
         col.upload = Some(CollectionUpload::new());
         assert!(col.is_upload_collection());
+    }
+
+    #[test]
+    fn max_upload_size_prefers_an_enabled_collection_limit() {
+        let mut col = make_collection("media", None, None, None);
+        assert_eq!(col.max_upload_size(100), 100, "no upload config");
+
+        let mut upload = CollectionUpload::new();
+        col.upload = Some(upload.clone());
+        assert_eq!(col.max_upload_size(100), 100, "no own limit");
+
+        upload.max_file_size = Some(500);
+        col.upload = Some(upload.clone());
+        assert_eq!(col.max_upload_size(100), 500);
+
+        upload.enabled = false;
+        col.upload = Some(upload);
+        assert_eq!(col.max_upload_size(100), 100, "uploads disabled");
     }
 
     #[test]

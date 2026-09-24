@@ -1,6 +1,26 @@
 //! Locale resolution helpers for join table hydration.
 
-use crate::{core::FieldDefinition, db::LocaleContext};
+use crate::{
+    core::FieldDefinition,
+    db::{LocaleContext, query::ReadLocale},
+};
+
+/// The locale a localized join field's rows are read in, with the locale they
+/// fall back to while a document holds no row in it — `None` when the field is
+/// not localized or localization is off (the rows carry no `_locale`).
+///
+/// The one decision the hydration of a join field and a filter on it share, so
+/// the rows a listing shows are the rows a filter matches: a document holding
+/// no row in the reading locale shows — and is filtered by — the fallback
+/// locale's rows, and an all-locales read takes the default locale's.
+pub(crate) fn join_rows_locale<'a>(
+    field: &FieldDefinition,
+    locale_ctx: Option<&'a LocaleContext>,
+) -> Option<ReadLocale<'a>> {
+    locale_ctx
+        .filter(|ctx| field.localized && ctx.config.is_enabled())
+        .map(LocaleContext::rows_read_locale)
+}
 
 /// Resolve the effective locale string for a join table operation.
 /// Returns Some("en") when the field is localized and locale is enabled,
@@ -9,9 +29,7 @@ pub(super) fn resolve_join_locale(
     field: &FieldDefinition,
     locale_ctx: Option<&LocaleContext>,
 ) -> Option<String> {
-    let ctx = join_locale_ctx(field, locale_ctx)?;
-
-    Some(ctx.rows_read_locale().locale.to_string())
+    join_rows_locale(field, locale_ctx).map(|read| read.locale.to_string())
 }
 
 /// When fallback is enabled and we're querying a non-default locale,
@@ -20,18 +38,9 @@ pub(super) fn resolve_join_fallback_locale(
     field: &FieldDefinition,
     locale_ctx: Option<&LocaleContext>,
 ) -> Option<String> {
-    let ctx = join_locale_ctx(field, locale_ctx)?;
-
-    ctx.rows_read_locale().fallback.map(str::to_string)
-}
-
-/// The locale context a join field is read under: present only for a localized
-/// field with localization on.
-fn join_locale_ctx<'a>(
-    field: &FieldDefinition,
-    locale_ctx: Option<&'a LocaleContext>,
-) -> Option<&'a LocaleContext> {
-    locale_ctx.filter(|ctx| field.localized && ctx.config.is_enabled())
+    join_rows_locale(field, locale_ctx)?
+        .fallback
+        .map(str::to_string)
 }
 
 #[cfg(all(test, feature = "sqlite"))]

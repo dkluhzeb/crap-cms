@@ -274,8 +274,9 @@ impl Default for LuaVmInfra {
 ///
 /// When present, Lua CRUD operations queue events into the parent's
 /// `event_queue` (flushed after the parent's transaction commits) and
-/// invalidate the populate cache on writes.
-#[derive(Clone)]
+/// invalidate the populate cache on writes. `Default` is the bare infra: no
+/// transports, no cache, no queues.
+#[derive(Clone, Default)]
 pub struct LuaCrudInfra {
     pub event_transport: Option<SharedEventTransport>,
     pub cache: Option<SharedCache>,
@@ -290,8 +291,8 @@ pub struct LuaCrudInfra {
     /// deleted AFTER the enclosing transaction commits (frozen rule:
     /// files after commit — a rollback must leave orphaned files, never
     /// DB rows pointing at deleted files). `None` = no enclosing
-    /// transaction scope; conn-mode deletes then fall back to their
-    /// legacy immediate behavior.
+    /// transaction scope; conn-mode deletes then leave the files in storage
+    /// and log them as orphaned — never delete before the caller commits.
     pub file_cleanup: Option<FileCleanupQueue>,
     /// Per-transaction "the populate cache must be invalidated" flag. A
     /// conn-mode write sets it via `ServiceContext::clear_cache` instead of
@@ -299,8 +300,9 @@ pub struct LuaCrudInfra {
     /// would let a concurrent read repopulate the cache from the pre-commit
     /// snapshot and leave it stale). The commit-owning envelope (`with_lua_db`
     /// / `crap.transaction` / `run_pool_write`) clears the cache once after
-    /// commit. `None` = no enclosing scope → clear immediately, same fallback
-    /// as `file_cleanup`.
+    /// commit. `None` = no enclosing scope → clear immediately: an early clear
+    /// can at worst let a stale entry back in, while an early file delete
+    /// would lose the bytes, which is why `file_cleanup` keeps them instead.
     pub cache_dirty: Option<Rc<Cell<bool>>>,
 }
 

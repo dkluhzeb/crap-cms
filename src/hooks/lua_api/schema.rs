@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use crate::hooks::lua_api::utils::lua_err;
+use crate::hooks::lua_api::{to_lua_value, utils::lua_err};
 use anyhow::Result;
-use mlua::{Error::RuntimeError, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 use serde::Serialize;
 
 use crate::core::{
@@ -18,7 +18,7 @@ use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn,
 // The introspection API returns a denormalized, user-friendly shape
 // that doesn't map 1:1 to `CollectionDefinition` / `FieldDefinition`.
 // Rather than building Lua tables ad-hoc, we project the registry types
-// into these `Serialize` structs and let `lua.to_value()` produce the
+// into these `Serialize` structs and let `to_lua_value` produce the
 // table — single source of truth for both Rust and the generated
 // `crap.SchemaCollection` / `crap.SchemaField` Lua classes.
 
@@ -369,14 +369,14 @@ fn get_collection(lua: &Lua, registry: &Registry, slug: &str) -> LuaResult<Value
     let Some(def) = registry.get_collection(slug) else {
         return Ok(Value::Nil);
     };
-    lua.to_value(&build_collection(def))
+    to_lua_value(lua, &build_collection(def))
 }
 
 fn get_global(lua: &Lua, registry: &Registry, slug: &str) -> LuaResult<Value> {
     let Some(def) = registry.get_global(slug) else {
         return Ok(Value::Nil);
     };
-    lua.to_value(&build_global(def))
+    to_lua_value(lua, &build_global(def))
 }
 
 fn list_collections_fn(lua: &Lua, registry: &Registry) -> LuaResult<Table> {
@@ -386,7 +386,7 @@ fn list_collections_fn(lua: &Lua, registry: &Registry) -> LuaResult<Table> {
         .map(|d| build_summary(&d.slug, &d.labels))
         .collect();
 
-    let Value::Table(tbl) = lua.to_value(&summaries)? else {
+    let Value::Table(tbl) = to_lua_value(lua, &summaries)? else {
         return Err(RuntimeError(
             "list_collections did not serialize to a table".into(),
         ));
@@ -401,7 +401,7 @@ fn list_globals_fn(lua: &Lua, registry: &Registry) -> LuaResult<Table> {
         .map(|d| build_summary(&d.slug, &d.labels))
         .collect();
 
-    let Value::Table(tbl) = lua.to_value(&summaries)? else {
+    let Value::Table(tbl) = to_lua_value(lua, &summaries)? else {
         return Err(RuntimeError(
             "list_globals did not serialize to a table".into(),
         ));
@@ -728,7 +728,7 @@ mod tests {
         // Empty admin block doesn't serialize at all — see
         // `SchemaAdmin::is_empty`.
         let lua = Lua::new();
-        let v = lua.to_value(&sf).unwrap();
+        let v = to_lua_value(&lua, &sf).unwrap();
         let tbl = to_table(&lua, v);
         assert!(matches!(tbl.get::<Value>("admin"), Ok(Value::Nil)));
     }
@@ -794,7 +794,7 @@ mod tests {
 
         // Round-trip through lua: emits as the camelCase string.
         let lua = Lua::new();
-        let v = lua.to_value(&sf).unwrap();
+        let v = to_lua_value(&lua, &sf).unwrap();
         let tbl = to_table(&lua, v);
         assert_eq!(
             tbl.get::<String>("picker_appearance").unwrap(),
@@ -820,7 +820,7 @@ mod tests {
         assert!(sf.join.is_none());
 
         let lua = Lua::new();
-        let v = lua.to_value(&sf).unwrap();
+        let v = to_lua_value(&lua, &sf).unwrap();
         let tbl = to_table(&lua, v);
         assert!(matches!(tbl.get::<Value>("join"), Ok(Value::Nil)));
     }

@@ -258,6 +258,7 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`sidebar_fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
 - **`editing`** (boolean)
 - **`has_drafts`** (boolean)
+- **`unsaved`** (boolean) — Always `true`: the form re-renders a submission that was not saved, so the unsaved-changes guard starts out armed.
 - **`upload_hidden_fields`** (Option&lt;Vec&lt;any&gt;&gt;) _(optional)_ — Hidden upload inputs preserved from the submitted form — the focal point the edit page renders inside its file-preview block, which this slim context does not carry. Without them a failed save resets the focal point the user just moved.
 
 ## Collection delete confirmation
@@ -376,6 +377,7 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`perms`** ([GlobalPermissions](#globalpermissions))
 - **`fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
 - **`sidebar_fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
+- **`unsaved`** (boolean) — Always `true`: the form re-renders a submission that was not saved, so the unsaved-changes guard starts out armed.
 
 ## Global versions list
 
@@ -1184,6 +1186,7 @@ and populate `thumbnail_url`, `is_image`, and `filename`.
 - **`thumbnail_url`** (Option&lt;string&gt;) _(optional)_ — Upload-only — preview URL for the upload's thumbnail.
 - **`is_image`** (Option&lt;boolean&gt;) _(optional)_ — Upload-only — `Some(true)` when the underlying mime starts with `image/`.
 - **`filename`** (Option&lt;string&gt;) _(optional)_ — Upload-only — present when the item came from a has-one upload that also sets the form's hidden filename input.
+- **`unavailable`** (Option&lt;boolean&gt;) _(optional)_ — `Some(true)` for a stored reference the viewer cannot resolve (a target they may not read, a trashed one, or one that cannot be fetched). It carries only the stored `id` — no label, no title — and stays selected so the form submits the reference back unchanged unless the user removes it; the admin UI shows a generic label for it.
 
 ### UploadField
 
@@ -1527,6 +1530,8 @@ Upload-collection preview block flattened onto the edit form when
 `def.upload` is set.
 
 - **`accept`** (Option&lt;string&gt;) _(optional)_ — Comma-joined accept list for the file input — emitted only when the collection declares allowed mime types.
+- **`max_file_size`** (integer) — The largest file the collection accepts, in bytes — the file input refuses a larger pick before the form is sent.
+- **`max_file_size_display`** (string) — The same limit, formatted for display (`50.0 MB`).
 - **`focal_x`** (Option&lt;number&gt;) _(optional)_
 - **`focal_y`** (Option&lt;number&gt;) _(optional)_
 - **`preview`** (Option&lt;string&gt;) _(optional)_ — Image preview URL when the file is an image.

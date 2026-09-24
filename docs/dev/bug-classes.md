@@ -322,6 +322,18 @@ next round is where most of a round's reading goes, so they are recorded
 here per round; a lens prompt carries the instruction to skip them unless the
 files changed since. Entries are dropped when the area is touched.
 
+- **R25 (2026-09-24)**
+  - *Live events:* Subscribe and SSE share gate, access map and coalescing;
+    delete/undelete/purge delivery verified at runtime on PG.
+  - *Where decoding:* one `decode_where_map`/`decode_where_json` on every
+    surface; has-many sort rejection mapped to invalid-argument everywhere.
+  - *Label locale:* only `resolve_current` in production; the task-local is
+    entered in the middleware and carried across blocking threads.
+  - *Export/import & snapshots:* per-locale columns and join rows, canonical
+    list shapes.
+  - *Client:* SSE envelope matches `sse_payload.rs`; `h()`/toast sinks
+    escape; CSRF on every htmx request and native submit.
+
 - **R24 (2026-09-23)**
   - *Postgres (live):* the example project syncs, seeds and serves on PG16 —
     login, every collection list/edit, globals, dashboard, custom pages,
@@ -1245,6 +1257,64 @@ files changed since. Entries are dropped when the area is touched.
     chokepoint pass needs its own completeness review — the new primitive's
     call sites are exactly where the next copies are written — and a scan
     guard the day the chokepoint lands, not later. UNCOMMITTED.
+- 2026-09-24 (35) — **CONVERGENCE ROUND 25** (budget lifted; live Postgres 16
+  + a real SSE subscriber on PG; 5 Opus lenses — external API surfaces after
+  the event/filter rework, locale × the new mechanisms, admin client-side,
+  every write outside the service, the Lua API contract — 12 Opus fix
+  batches, 5 post-fix reviews). **~60 confirmed — 4 HIGH (2 security), ~20
+  MED, ~35 LOW — NOT quiet; no new class.**
+  - **Runtime first:** R24's event rework verified end to end on PG — soft
+    delete, undelete, delete and empty-trash purge all reached a live admin
+    SSE stream.
+  - **F (HIGH, security, pre-existing) — a filter/sort oracle on nested
+    fields.** `unreadable_query_paths` probed only a path's ROOT with a null
+    value, so `access.read` on any sub-field of a group, array row or block
+    was never evaluated: `where items.secret like 'a%'` tested a value every
+    response strips. Probes now carry the path's real container shape
+    (`service::read::query_probe`) through the same strip responses use.
+  - **F (security, reference code + a fix-introduced hole):** the example
+    access rules authorized updates on the incoming patch (an author could
+    claim any post). Mapping JSON null to `nil` in Lua (to close truthy-null
+    fail-opens like `if ctx.user.is_admin`) opened the reverse: a constraint
+    table with a NULL user field lost that key and widened. User decision:
+    nil + `crap.null` (explicit nulls, array elements) + a NULL-read guard
+    on `ctx.user` (a table returned after reading a NULL user field is
+    Denied); custom-strategy users are reloaded through the token path's
+    reader so the guard covers them. mlua's own serializer is now banned in
+    `clippy.toml` (`disallowed-methods`) — a lint instead of a text scan.
+  - **M/HIGH-ish — Lua CRUD in migrations and `on_init` deleted upload files
+    before commit** (no cleanup queue): `HookRunner::run_in_system_tx` gives
+    both commit-gated queues; the no-queue fallback now keeps the file.
+  - **HIGH (client) — array/blocks reindex never renumbered the relationship
+    picker's `field-name`**, so after duplicate/remove/move a pick wrote to the
+    wrong row. Also: read-only/unresolvable references were cleared on save
+    (now submitted back as `unavailable` items); multi-select values are a
+    JSON array (commas in option values); failed multipart parse lost edits;
+    richtext/focal-point edits invisible to the dirty guard.
+  - **P2 / D — service bypasses:** `db cleanup` ref counts; CLI account
+    actions/import without stream teardown or cache clear; `user create` via
+    raw `query::create`; the ref-count backfill gate blind to field removal
+    (now a registry-wide reference-topology fingerprint).
+  - **M — never-validated relationship targets:** a documented TODO; a
+    dangling target now crashed boot inside the recompute. Targets (incl.
+    polymorphic, join `collection` and `on`) are validated at load.
+  - **Locale:** junction filters ignored fallback (listing and filter
+    disagreed; negative element ops matched shown values); Full-mode event
+    rows were in the writer's locale.
+  - **Other:** bad filter paths answered INTERNAL on Count/UpdateMany/
+    DeleteMany (typed `invalid_query`); bare-day date filters now cover the
+    whole UTC day (created_at/updated_at typed as dates); MCP write schemas
+    from the write shape; `parent_id` indexes on array/blocks row tables;
+    array rows filter nested JSON like blocks rows; PG session notices off.
+  - **Guard maintenance:** two guard false positives fixed (`-> LocaleContext
+    {` matched as a literal, in two chokepoints); several allowlists followed
+    file splits.
+    Gates (2026-09-24): clippy clean in both forms; unit 6,583 + integration
+    ~8,430 green over 112 binaries; Postgres harness 26/26 on a fresh PG16;
+    LuaLS clean on the golden and the whole example; all five `gen-*` checks,
+    `cargo fmt`, `crap-cms fmt`, biome, stylua clean; e2e 341 green over 81
+    binaries (per binary).
+    Streak: 0 quiet rounds.
 - 2026-09-23 (34) — **CONVERGENCE ROUND 24** (budget lifted: a live Postgres 16
   container for the harness and an example-project boot; 2 Opus lenses — admin
   list view + i18n, generated types vs real reads/writes — 11 Opus fix batches,

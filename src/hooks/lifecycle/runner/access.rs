@@ -1,7 +1,7 @@
 //! `HookRunner` methods for auth strategies and access control.
 
 use anyhow::{Context as _, Result};
-use mlua::{LuaSerdeExt, Value};
+use mlua::Value;
 use serde_json::Map;
 use tracing::error;
 
@@ -26,6 +26,7 @@ use crate::{
             execution::resolve_hook_function,
             types::TxContextGuard,
         },
+        lua_api::to_lua_value,
     },
 };
 
@@ -83,7 +84,7 @@ impl HookRunner {
             remote_addr: input.remote_addr,
             options: authenticate.options(),
         };
-        let ctx_value = lua.to_value(&ctx)?;
+        let ctx_value = to_lua_value(&lua, &ctx)?;
 
         // The strategy runs inside a transaction that COMMITS only when it
         // authenticates someone. A failed or erroring attempt rolls back —
@@ -146,7 +147,7 @@ impl HookRunner {
             headers: input.headers,
             options: hook.options(),
         };
-        let ctx_value = lua.to_value(&ctx)?;
+        let ctx_value = to_lua_value(&lua, &ctx)?;
 
         let result: Value = func.call(ctx_value)?;
 
@@ -180,7 +181,7 @@ impl HookRunner {
             expires_in: input.expires_in,
             options: hook.options(),
         };
-        let ctx_value = lua.to_value(&ctx)?;
+        let ctx_value = to_lua_value(&lua, &ctx)?;
 
         let _: Value = func.call(ctx_value)?;
 

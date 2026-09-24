@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Result, bail};
-use mlua::{Lua, LuaSerdeExt as _, Value};
+use mlua::{Lua, Value};
 use serde_json::Value as JsonValue;
 
 use crate::hooks::{
@@ -57,7 +57,7 @@ pub(super) fn run_validate_function_inner(
         locale: src.locale,
         options: src.options,
     };
-    let ctx_table = lua.to_value(&ctx)?;
+    let ctx_table = lua_api::to_lua_value(lua, &ctx)?;
 
     let result: Value = func.call((lua_value, ctx_table))?;
 
@@ -107,7 +107,7 @@ pub(super) fn run_required_condition_inner(
         locale: src.locale,
         options: src.options,
     };
-    let ctx_table = lua.to_value(&ctx)?;
+    let ctx_table = lua_api::to_lua_value(lua, &ctx)?;
 
     let result: Value = func.call(ctx_table)?;
 
@@ -222,6 +222,44 @@ mod tests {
         assert_eq!(run("validators.yes"), None);
         assert_eq!(run("validators.no").as_deref(), Some("validation failed"));
         assert_eq!(run("validators.msg").as_deref(), Some("too short"));
+    }
+
+    /// Regression: the validate context was serialized with mlua's defaults,
+    /// so a null sibling field reached the validator as the truthy `NULL`
+    /// sentinel instead of `nil` — for `validate` and `required_when` alike.
+    #[test]
+    fn validate_context_null_values_are_nil() {
+        let lua = mlua::Lua::new();
+        lua.load(
+            r#"
+            package.loaded["validators"] = {
+                probe = function(value, ctx)
+                    if ctx.data.x ~= nil or ctx.data.x or ctx.user ~= nil then
+                        return "null reached Lua as a non-nil value"
+                    end
+                    return true
+                end,
+                required_if_x = function(ctx)
+                    return ctx.data.x
+                end,
+            }
+        "#,
+        )
+        .exec()
+        .unwrap();
+        let data: HashMap<String, JsonValue> = [("x".to_string(), json!(null))].into();
+
+        let result =
+            run_validate_function_inner(&lua, "validators.probe", &json!(null), &src(&data))
+                .unwrap();
+        assert_eq!(result, None, "a null field must be nil in ctx.data");
+
+        let required =
+            run_required_condition_inner(&lua, "validators.required_if_x", &src(&data)).unwrap();
+        assert!(
+            !required,
+            "a null field must be falsy in a required_when predicate"
+        );
     }
 
     /// A custom validator receives the content `ctx.locale` so it can enforce

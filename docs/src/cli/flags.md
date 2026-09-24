@@ -299,7 +299,7 @@ crap-cms user create [-c <COLLECTION>] [-e <EMAIL>] [-p <PASSWORD> | --password-
 | `--email` | `-e` | — | User email (prompted if omitted) |
 | `--password` | `-p` | — | User password (prompted if omitted). Visible in the process list and shell history |
 | `--password-stdin` | — | — | Read the password from the first line of standard input |
-| `--field` | `-f` | — | Extra fields as key=value (repeatable) |
+| `--field` | `-f` | — | Extra fields as key=value (repeatable). Array, blocks and group fields take JSON; list fields take a JSON array (see [CLI User Creation](../authentication/cli-user-creation.md#field-handling)) |
 
 ```bash
 # Interactive (prompts for password)
@@ -352,7 +352,9 @@ crap-cms user delete [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>] [-y]
 | `--id` | — | User ID |
 | `--confirm` | `-y` | Skip confirmation prompt |
 
-Deletes through the same service as the admin UI, delete hooks run, and the cache is cleared. A user of a soft-delete collection is moved to the trash; `trash purge` later refuses it while other documents still reference it. On other collections, a user other documents still reference is refused right away. With Redis live updates, the user's open live streams on `serve` are closed.
+Deletes through the same service as the admin UI and delete hooks run. A user of a soft-delete collection is moved to the trash; `trash purge` later refuses it while other documents still reference it. On other collections, a user other documents still reference is refused right away. With Redis live updates, the user's open live streams on `serve` are closed.
+
+The delete clears the configured populate cache. With `[cache] backend = "redis"` that is the cache `serve` reads, so it drops what the delete made stale. With the default in-process `memory` backend, the cache cleared is the CLI's own: a running `serve` keeps its entries until its own next write clears them, or its periodic clear when `[cache] max_age_secs` is set. The same holds for every CLI write below.
 
 #### `user lock` / `user unlock`
 
@@ -360,6 +362,8 @@ Deletes through the same service as the admin UI, delete hooks run, and the cach
 crap-cms user lock [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>]
 crap-cms user unlock [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>]
 ```
+
+Locking goes through the same service op as the admin and gRPC: it bumps the user's session version, so every token and cookie issued before it is rejected, and tears down the user's open live streams. With Redis live updates this reaches `serve`'s subscribers. With in-process transports (the default) no other process hears the signal: `serve` still rejects the revoked session on the user's next request, but a stream already open stays open until it reconnects. A configured Redis that can't be reached fails the command before it writes.
 
 #### `user reset-totp`
 
@@ -382,7 +386,7 @@ crap-cms user verify [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>]
 crap-cms user unverify [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>]
 ```
 
-Manually mark a user's email as verified or unverified. Only works on collections with `verify_email = true`. Useful when email is not configured.
+Manually mark a user's email as verified or unverified. Only works on collections with `verify_email = true`. Useful when email is not configured. `unverify` ends the user's sessions and live streams the way `user lock` does.
 
 #### `user change-password`
 
@@ -397,6 +401,8 @@ crap-cms user change-password [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>] [-p <PA
 |------|-------|-------------|
 | `--password` | `-p` | New password. Visible in the process list and shell history |
 | `--password-stdin` | — | Read the new password from the first line of standard input |
+
+The new password must pass `[auth.password_policy]`. The change ends every session opened with the old password, clears any pending reset link, and tears down the user's live streams, as `user lock` does.
 
 ### `init` — Scaffold a new config directory
 
@@ -755,6 +761,8 @@ crap-cms db cleanup [-y] [--drop-tables]
 
 Detects columns in collection and global tables that don't correspond to any field in the current Lua definitions, and rows in array, blocks and relationship junction tables whose `_locale` is no longer configured. System columns (`_`-prefixed like `_password_hash`, `_locked`) are always kept. Plugin columns are safe because plugins run during schema loading — their fields are part of the live definitions.
 
+With `--confirm`, everything is applied in one transaction: a failure leaves the database as it was. The rows, columns and tables removed can hold relationship and upload references, so the same transaction recomputes every document's reference count (the count behind [delete protection](../relationships/delete-protection.md)); a reference that only a deleted row held no longer blocks deleting its target. What was dropped and deleted is printed only after the transaction commits, so a cleanup that fails reports nothing as done.
+
 ```bash
 # Dry run — show orphans without removing them
 crap-cms db cleanup
@@ -812,6 +820,8 @@ Import is a **raw restore**, not a write through the service layer: each documen
 Accounts that end the import without a password can't log in until one is set; import warns when that happens. Credentials imported over an existing account revoke its sessions. An account whose TOTP secret was sealed with a different auth secret is refused, naming it: import into an installation with the same auth secret, or export without `--include-credentials`.
 
 Every collection in the file must exist in the current Lua definitions, and the whole import runs in **one transaction**: an unknown collection, a malformed document or a DB error leaves nothing imported.
+
+After the commit, the import clears the configured populate cache (see `user delete` for what that reaches) and tears down the live streams of every account it overwrote, since their roles, lock state or credentials may have changed. With Redis live updates this reaches `serve`'s subscribers. A configured Redis that can't be reached fails the import before anything is written.
 
 ### `typegen` — Generate typed definitions
 
@@ -886,6 +896,8 @@ crap-cms migrate fresh -y
 ```
 
 `fresh` refuses while a `serve`, `work` or stdio `mcp` process uses the project, and keeps them from starting until it finishes.
+
+Each migration runs in its own transaction, together with the bookkeeping row that marks it applied (or removes it on `down`). Its Lua CRUD writes behave like writes made on the server: after the commit the configured cache is cleared, live events reach `serve`'s subscribers (over Redis when `[live]` uses it), and the files of upload documents the migration hard-deleted are removed. A migration that fails rolls back with every file still in storage. The command therefore builds the same infrastructure as `user delete`, and a configured Redis that can't be reached fails it before any migration runs — for `fresh`, before any table is dropped.
 
 ### `backup` — Backup database
 

@@ -9,7 +9,7 @@ use crate::{
     db::LocaleContext,
     mcp::tools::{
         ToolExecCtx,
-        collection::helpers::{doc_to_json, extract_auth_password, extract_data_from_args},
+        collection::helpers::{doc_to_json, extract_auth_password, extract_collection_data},
         jobs::{QueuedFields, queue_bulk_tool},
     },
     service::{
@@ -59,7 +59,7 @@ pub(in crate::mcp::tools) fn exec_create_many(
     for doc_val in documents_arr {
         let password = extract_auth_password(def, doc_val, false)?;
 
-        let data = extract_data_from_args(doc_val, skip_keys, &def.fields)?;
+        let data = extract_collection_data(doc_val, skip_keys, def)?;
         items.push(CreateManyItem { data, password });
     }
 

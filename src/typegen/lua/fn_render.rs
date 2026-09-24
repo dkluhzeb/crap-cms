@@ -51,6 +51,12 @@ pub fn format_lua_fn_spec(out: &mut String, spec: &LuaFnSpec) {
         out.push('\n');
     }
 
+    for overload in spec.overloads {
+        out.push_str("--- @overload ");
+        out.push_str(overload);
+        out.push('\n');
+    }
+
     out.push_str("function ");
     out.push_str(spec.path);
     out.push('(');
@@ -132,6 +138,7 @@ mod tests {
                 ty: "string",
                 doc: "",
             }),
+            overloads: &[],
         };
 
         let mut out = String::new();
@@ -147,6 +154,35 @@ mod tests {
         assert_eq!(out, expected, "render drift:\n{out}");
     }
 
+    /// Each overload becomes a `--- @overload` line after the params, before
+    /// the signature.
+    #[test]
+    fn renders_overloads_after_the_params() {
+        let spec = LuaFnSpec {
+            path: "crap.hooks.register",
+            doc: &[],
+            params: &[LuaParam {
+                name: "event",
+                ty: "string",
+                doc: "",
+            }],
+            returns: None,
+            overloads: &["fun(event: \"a\")", "fun(event: \"b\")"],
+        };
+
+        let mut out = String::new();
+        format_lua_fn_spec(&mut out, &spec);
+
+        let expected = concat!(
+            "--- @param event string\n",
+            "--- @overload fun(event: \"a\")\n",
+            "--- @overload fun(event: \"b\")\n",
+            "function crap.hooks.register(event) end\n",
+            "\n",
+        );
+        assert_eq!(out, expected);
+    }
+
     #[test]
     fn renders_no_params_no_return() {
         let spec = LuaFnSpec {
@@ -157,6 +193,7 @@ mod tests {
                 ty: "string",
                 doc: "Random nanoid string.",
             }),
+            overloads: &[],
         };
 
         let mut out = String::new();
@@ -182,6 +219,7 @@ mod tests {
                 doc: "Log message.",
             }],
             returns: None,
+            overloads: &[],
         };
 
         let mut out = String::new();
@@ -218,6 +256,7 @@ mod tests {
                 },
             ],
             returns: None,
+            overloads: &[],
         };
 
         let mut out = String::new();

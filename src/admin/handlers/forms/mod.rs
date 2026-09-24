@@ -7,4 +7,4 @@ mod parse;
 mod select_has_many;
 
 pub(crate) use form_data::FormData;
-pub(crate) use parse::{parse_form, parse_multipart_form};
+pub(crate) use parse::{FormParseError, parse_form, parse_multipart_form};

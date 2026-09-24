@@ -109,9 +109,9 @@ changes. Listened to by the surrounding `<crap-dirty-form>` to mark
 the form as having unsaved changes.
 
 Emitting components: `<crap-tags>`, `<crap-code>`,
-`<crap-relationship-search>`. (`<crap-upload-preview>` listens and
-relays internally; richtext and other fields sync their hidden
-input natively instead.)
+`<crap-relationship-search>`, `<crap-richtext>`, `<crap-focal-point>`.
+(`<crap-upload-preview>` listens and relays internally; plain inputs
+fire native `input`/`change` events instead.)
 
 No `detail` payload is guaranteed — tags and relationship-search
 dispatch a plain `Event`; code dispatches a `CustomEvent` with

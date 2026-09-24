@@ -1,4 +1,6 @@
-//! One-time backfill of `_ref_count` columns from existing relationship data.
+//! Running the ref-count backfill: deciding at startup whether the stored
+//! counts are current, and recomputing every count from the stored references
+//! when they are not.
 
 use anyhow::{Context as _, Result};
 use tracing::info;
@@ -8,102 +10,127 @@ use crate::{
     core::{FieldDefinition, Registry},
     db::{
         DbConnection,
-        migrate::{helpers::versioned_fingerprint, meta},
+        migrate::{backfill_ref_counts::topology::gate_value, meta},
         query::{helpers::global_table, ref_count},
     },
 };
-
-/// Current backfill computation version. Stored as the meta *value* (not
-/// baked into the key, which stays stable). Bump this whenever the ref-count
-/// computation changes so existing databases recompute once on the next
-/// startup. v2 added recursion into relationships nested in groups/arrays/
-/// blocks and has-many relationships stored inside blocks.
-const BACKFILL_VERSION: &str = "2";
 
 /// Build the per-collection meta key for tracking backfill status.
 fn collection_meta_key(slug: &str) -> String {
     format!("ref_count_backfilled:{slug}")
 }
 
-/// The gate a completed backfill stores: the computation version and the
-/// locale configuration it counted under.
-///
-/// The walk visits exactly the configured locales' columns, so the locale list
-/// is part of the result. Gating on the version alone left a removed locale's
-/// references counted forever — phantom counts that block deletes — and never
-/// counted an added locale's at all.
-fn gate_value(locale_config: &LocaleConfig) -> String {
-    versioned_fingerprint(BACKFILL_VERSION, &[locale_config.fingerprint()])
+/// Every gated slug with the table its documents live in.
+fn gated_tables(registry: &Registry) -> Vec<(&str, String)> {
+    let collections = registry
+        .collections
+        .keys()
+        .map(|slug| (&**slug, slug.to_string()));
+    let globals = registry
+        .globals
+        .keys()
+        .map(|slug| (&**slug, global_table(slug)));
+
+    collections.chain(globals).collect()
 }
 
-/// A collection/global is up to date only when its stored value matches the
-/// current gate — a missing or stale value triggers a recompute.
-fn is_backfilled(
-    conn: &dyn DbConnection,
-    slug: &str,
-    locale_config: &LocaleConfig,
-) -> Result<bool> {
-    let stored = meta::get(conn, &collection_meta_key(slug))?;
+/// Whether `table` holds no row at all.
+fn table_is_empty(conn: &dyn DbConnection, table: &str) -> Result<bool> {
+    let row = conn
+        .query_one(&format!("SELECT 1 FROM \"{table}\" LIMIT 1"), &[])
+        .with_context(|| format!("Backfill: failed to probe {table}"))?;
 
-    Ok(stored.as_deref() == Some(gate_value(locale_config).as_str()))
+    Ok(row.is_none())
 }
 
-/// Mark a collection/global as backfilled at the current gate.
-fn mark_backfilled(
-    conn: &dyn DbConnection,
-    slug: &str,
-    locale_config: &LocaleConfig,
-) -> Result<()> {
-    meta::upsert(conn, &collection_meta_key(slug), &gate_value(locale_config))
+/// What the startup check must do for one slug.
+enum GateState {
+    /// Stamped at the current gate: nothing to do.
+    Current,
+    /// Never stamped, and its table holds no row: no count can be on it and
+    /// none of its references can count anywhere, so stamping it is enough.
+    NewAndEmpty,
+    /// Stamped at another gate, or never stamped with rows already stored:
+    /// every count must be recomputed.
+    Stale,
 }
 
-/// Run the ref count backfill for any collections/globals not yet backfilled.
+/// Classify one slug against the current gate.
+fn gate_state(conn: &dyn DbConnection, slug: &str, table: &str, gate: &str) -> Result<GateState> {
+    match meta::get(conn, &collection_meta_key(slug))? {
+        Some(stored) if stored == gate => Ok(GateState::Current),
+        None if table_is_empty(conn, table)? => Ok(GateState::NewAndEmpty),
+        _ => Ok(GateState::Stale),
+    }
+}
+
+/// Run the ref count backfill when any collection/global is not backfilled at
+/// the current gate.
 /// Must be called within a transaction after tables have been synced.
 /// Tracks backfill status per-collection so newly added collections are covered.
+///
+/// A newly added collection or global whose table is still empty is stamped
+/// without a recount: it holds nothing to count, and nothing can count on it
+/// yet. One whose table already holds rows (re-added after being removed, or
+/// a database from before the gate existed) recomputes everything once.
 pub(crate) fn backfill_if_needed(
     conn: &dyn DbConnection,
     registry: &Registry,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    // Detect which collections/globals still need backfilling, ALWAYS by the
-    // per-slug flag — a collection added after the initial backfill must be
-    // covered even if the database was already fully backfilled once. (The old
-    // global `ref_count_backfilled` flag short-circuited this whole loop once
-    // set, so a later-added collection was silently never backfilled — an
-    // under-count that defeats O(1) delete protection.) Gating still works:
-    // `is_backfilled` compares the per-slug value to the current version and
-    // locale fingerprint, so bumping the version — or changing the configured
-    // locales — re-walks everything. The per-slug reads are cheap,
-    // and a fully up-to-date database still early-returns below.
+    // Detect staleness ALWAYS by the per-slug value — a collection added after
+    // the initial backfill must be covered even if the database was already
+    // fully backfilled once. (The old global `ref_count_backfilled` flag
+    // short-circuited this once set, so a later-added collection was silently
+    // never backfilled — an under-count that defeats O(1) delete protection.)
+    // The per-slug reads are cheap, and a fully up-to-date database returns
+    // without writing.
     //
-    // A DB error from `is_backfilled` is PROPAGATED (`?`), not swallowed: the old
-    // `.unwrap_or(true)` mapped a transient error to "already backfilled" and
-    // silently dropped that collection from the backfill set, leaving its
-    // `_ref_count` columns permanently wrong. Failing loud at startup migration
-    // is correct — a broken DB should abort, not drift.
-    let mut needs_backfill_collections = Vec::new();
-    let mut needs_backfill_globals = Vec::new();
+    // A DB error from the per-slug check is PROPAGATED (`?`), not swallowed:
+    // mapping a transient error to "already backfilled" would silently drop
+    // that collection from the backfill set, leaving its `_ref_count` columns
+    // permanently wrong. Failing loud at startup migration is correct — a
+    // broken DB should abort, not drift.
+    let gate = gate_value(registry, locale_config);
+    let mut new_and_empty = Vec::new();
 
-    for (slug, def) in &registry.collections {
-        if !is_backfilled(conn, slug, locale_config)? {
-            needs_backfill_collections.push((slug, def));
+    for (slug, table) in gated_tables(registry) {
+        match gate_state(conn, slug, &table, &gate)? {
+            GateState::Current => {}
+            GateState::NewAndEmpty => new_and_empty.push(slug),
+            GateState::Stale => return recompute_ref_counts(conn, registry, locale_config),
         }
     }
 
-    for (slug, def) in &registry.globals {
-        if !is_backfilled(conn, slug, locale_config)? {
-            needs_backfill_globals.push((slug, def));
-        }
+    for slug in new_and_empty {
+        meta::upsert(conn, &collection_meta_key(slug), &gate)?;
     }
 
-    if needs_backfill_collections.is_empty() && needs_backfill_globals.is_empty() {
-        return Ok(());
-    }
+    Ok(())
+}
 
+/// Recompute every `_ref_count` from the stored references and stamp every
+/// collection's and global's gate. Must run inside a transaction.
+///
+/// The recompute is always whole-database: a count on one collection is made
+/// of every other collection's references, so a new or changed collection can
+/// change counts anywhere. Besides the startup backfill, a maintenance write
+/// that removes stored references (e.g. `db cleanup` dropping stale-locale
+/// rows) calls it in its own transaction so the counts never outlive the rows.
+///
+/// # Errors
+///
+/// Returns an error when a count can't be reset, read or written, or a gate
+/// can't be stamped.
+pub(crate) fn recompute_ref_counts(
+    conn: &dyn DbConnection,
+    registry: &Registry,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
     info!("Backfilling _ref_count columns from existing relationship data...");
 
-    // Phase 1: Reset ref counts to 0 for ALL collections (not just new ones),
-    // because new collections may be referenced by existing ones.
+    // Phase 1: Reset ref counts to 0 for ALL collections, because any
+    // collection may be referenced by any other.
     for slug in registry.collections.keys() {
         conn.execute(&format!("UPDATE \"{slug}\" SET _ref_count = 0"), &[])?;
     }
@@ -116,9 +143,7 @@ pub(crate) fn backfill_if_needed(
     }
 
     // Phase 2: Recompute outgoing refs per document via the canonical
-    // ref-count walker, so every supported nesting depth is covered. We
-    // re-walk everything because existing collections may reference newly
-    // added ones.
+    // ref-count walker, so every supported nesting depth is covered.
     for (slug, def) in &registry.collections {
         recompute_table(conn, slug, &def.fields, locale_config)?;
     }
@@ -127,13 +152,11 @@ pub(crate) fn backfill_if_needed(
         recompute_table(conn, &global_table(slug), &def.fields, locale_config)?;
     }
 
-    // Phase 3: Mark newly backfilled collections.
-    for (slug, _) in &needs_backfill_collections {
-        mark_backfilled(conn, slug, locale_config)?;
-    }
+    // Phase 3: Stamp every gate — all counts are now current.
+    let gate = gate_value(registry, locale_config);
 
-    for (slug, _) in &needs_backfill_globals {
-        mark_backfilled(conn, slug, locale_config)?;
+    for slug in registry.collections.keys().chain(registry.globals.keys()) {
+        meta::upsert(conn, &collection_meta_key(slug), &gate)?;
     }
 
     info!("Ref count backfill complete");
@@ -173,20 +196,32 @@ fn recompute_table(
 
 #[cfg(test)]
 mod tests {
+    use tempfile::{TempDir, tempdir};
+
     use super::*;
-    use crate::config::{CrapConfig, DatabaseConfig};
-    use crate::core::Slug;
-    use crate::core::collection::*;
-    use crate::core::field::*;
-    use crate::db::migrate::collection::test_helpers::no_locale;
-    use crate::db::{DbConnection, DbPool, migrate, pool};
+    use crate::{
+        config::{CrapConfig, DatabaseConfig},
+        core::{CollectionDefinition, FieldType, GlobalDefinition, RelationshipConfig, Slug},
+        db::{
+            DbPool,
+            migrate::{
+                self,
+                backfill_ref_counts::{
+                    test_support::{posts_with, registry_of, upload_to},
+                    topology::BACKFILL_VERSION,
+                },
+                collection::test_helpers::no_locale,
+            },
+            pool,
+        },
+    };
 
     fn setup_db(
         collections: &[CollectionDefinition],
         globals: &[GlobalDefinition],
         locale: &LocaleConfig,
-    ) -> (tempfile::TempDir, DbPool, Registry) {
-        let tmp = tempfile::tempdir().expect("tempdir");
+    ) -> (TempDir, DbPool, Registry) {
+        let tmp = tempdir().expect("tempdir");
         let config = CrapConfig {
             database: DatabaseConfig {
                 path: "test.db".to_string(),
@@ -196,7 +231,7 @@ mod tests {
         };
         let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
 
-        let registry_shared = crate::core::Registry::shared();
+        let registry_shared = Registry::shared();
         {
             let mut reg = registry_shared.write().unwrap();
             for c in collections {
@@ -206,14 +241,26 @@ mod tests {
                 reg.register_global(g.clone());
             }
         }
-        let registry = (*crate::core::Registry::snapshot(&registry_shared)).clone();
+        let registry = (*Registry::snapshot(&registry_shared)).clone();
         migrate::sync_all(&db_pool, &registry, locale).expect("sync");
 
         (tmp, db_pool, registry)
     }
 
+    /// Store `gate` as `slug`'s backfill gate.
+    fn stamp(conn: &dyn DbConnection, slug: &str, gate: &str) {
+        meta::upsert(conn, &collection_meta_key(slug), gate).unwrap();
+    }
+
+    /// Whether `slug` is stamped at `gate`.
+    fn is_backfilled(conn: &dyn DbConnection, slug: &str, gate: &str) -> Result<bool> {
+        let stored = meta::get(conn, &collection_meta_key(slug))?;
+
+        Ok(stored.as_deref() == Some(gate))
+    }
+
     fn get_ref_count(conn: &dyn DbConnection, table: &str, id: &str) -> i64 {
-        crate::db::query::ref_count::get_ref_count(conn, table, id)
+        ref_count::get_ref_count(conn, table, id)
             .unwrap()
             .expect("document should exist")
     }
@@ -573,12 +620,13 @@ mod tests {
         assert_eq!(get_ref_count(&conn, "media", "m2"), 2);
 
         // Per-collection flags should be set for both.
+        let gate = gate_value(&registry, &no_locale());
         assert!(
-            is_backfilled(&conn, "posts", &no_locale()).unwrap(),
+            is_backfilled(&conn, "posts", &gate).unwrap(),
             "posts per-collection flag should be set"
         );
         assert!(
-            is_backfilled(&conn, "pages", &no_locale()).unwrap(),
+            is_backfilled(&conn, "pages", &gate).unwrap(),
             "pages per-collection flag should be set"
         );
     }
@@ -600,19 +648,22 @@ mod tests {
         };
 
         let media = CollectionDefinition::new("media");
-        let (_tmp, pool, _registry) = setup_db(&[media], &[], &en_de);
+        let (_tmp, pool, registry) = setup_db(&[media], &[], &en_de);
         let conn = pool.get().unwrap();
 
-        mark_backfilled(&conn, "media", &en_de).unwrap();
+        let gate_en_de = gate_value(&registry, &en_de);
+        let gate_en = gate_value(&registry, &en_only);
 
-        assert!(is_backfilled(&conn, "media", &en_de).unwrap());
+        stamp(&conn, "media", &gate_en_de);
+
+        assert!(is_backfilled(&conn, "media", &gate_en_de).unwrap());
         assert!(
-            !is_backfilled(&conn, "media", &en_only).unwrap(),
+            !is_backfilled(&conn, "media", &gate_en).unwrap(),
             "dropping a locale must force a recompute"
         );
 
-        mark_backfilled(&conn, "media", &en_only).unwrap();
-        assert!(is_backfilled(&conn, "media", &en_only).unwrap());
+        stamp(&conn, "media", &gate_en);
+        assert!(is_backfilled(&conn, "media", &gate_en).unwrap());
     }
 
     /// Listing the same locales in another order changes no column the walk
@@ -631,14 +682,105 @@ mod tests {
         };
 
         let media = CollectionDefinition::new("media");
-        let (_tmp, pool, _registry) = setup_db(&[media], &[], &en_de);
+        let (_tmp, pool, registry) = setup_db(&[media], &[], &en_de);
         let conn = pool.get().unwrap();
 
-        mark_backfilled(&conn, "media", &en_de).unwrap();
+        stamp(&conn, "media", &gate_value(&registry, &en_de));
 
         assert!(
-            is_backfilled(&conn, "media", &reordered).unwrap(),
+            is_backfilled(&conn, "media", &gate_value(&registry, &reordered)).unwrap(),
             "a reordered locale list must not reopen the gate"
         );
+    }
+
+    /// Regression: removing a relationship/upload field left its references
+    /// counted forever — the gate only knew the version and the locales, so
+    /// the backfill never re-ran and the target stayed undeletable.
+    #[test]
+    fn removing_a_reference_field_recomputes_the_counts() {
+        let media = CollectionDefinition::new("media");
+        let posts = posts_with(vec![upload_to("image", "media")]);
+
+        let (_tmp, pool, registry) = setup_db(&[media.clone(), posts], &[], &no_locale());
+        let conn = pool.get().unwrap();
+
+        conn.execute("INSERT INTO media (id) VALUES ('m1')", &[])
+            .unwrap();
+        conn.execute("INSERT INTO posts (id, image) VALUES ('p1', 'm1')", &[])
+            .unwrap();
+        recompute_ref_counts(&conn, &registry, &no_locale()).unwrap();
+        assert_eq!(get_ref_count(&conn, "media", "m1"), 1);
+
+        // The field is gone from the schema; its column (and value) stays.
+        let without = registry_of(&[media, posts_with(Vec::new())]);
+        backfill_if_needed(&conn, &without, &no_locale()).unwrap();
+
+        assert_eq!(
+            get_ref_count(&conn, "media", "m1"),
+            0,
+            "a removed field's references must stop counting"
+        );
+    }
+
+    /// Mark `m1`'s count with a value no recount would produce, so a test can
+    /// tell whether the backfill recounted.
+    fn mark_count(conn: &dyn DbConnection) {
+        conn.execute("UPDATE media SET _ref_count = 99 WHERE id = 'm1'", &[])
+            .unwrap();
+    }
+
+    /// A newly added collection whose table is still empty is stamped without
+    /// a recount; one whose table already holds rows (re-added after removal)
+    /// recounts everything once.
+    #[test]
+    fn a_new_empty_collection_is_stamped_without_a_recount() {
+        let media = CollectionDefinition::new("media");
+        let posts = posts_with(vec![upload_to("image", "media")]);
+        let notes = CollectionDefinition::new("notes");
+
+        let (_tmp, pool, registry) = setup_db(&[media, posts, notes], &[], &no_locale());
+        let conn = pool.get().unwrap();
+
+        conn.execute("INSERT INTO media (id) VALUES ('m1')", &[])
+            .unwrap();
+        conn.execute("INSERT INTO posts (id, image) VALUES ('p1', 'm1')", &[])
+            .unwrap();
+        recompute_ref_counts(&conn, &registry, &no_locale()).unwrap();
+
+        // `notes` is new: never stamped, no rows.
+        conn.execute(
+            "DELETE FROM _crap_meta WHERE key = 'ref_count_backfilled:notes'",
+            &[],
+        )
+        .unwrap();
+        mark_count(&conn);
+
+        backfill_if_needed(&conn, &registry, &no_locale()).unwrap();
+
+        let gate = gate_value(&registry, &no_locale());
+        assert!(is_backfilled(&conn, "notes", &gate).unwrap());
+        assert_eq!(
+            get_ref_count(&conn, "media", "m1"),
+            99,
+            "a new, empty collection must not trigger a recount"
+        );
+
+        // `notes` re-added with rows it kept from before: recount.
+        conn.execute(
+            "DELETE FROM _crap_meta WHERE key = 'ref_count_backfilled:notes'",
+            &[],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO notes (id) VALUES ('n1')", &[])
+            .unwrap();
+
+        backfill_if_needed(&conn, &registry, &no_locale()).unwrap();
+
+        assert_eq!(
+            get_ref_count(&conn, "media", "m1"),
+            1,
+            "an unstamped table with rows must recount"
+        );
+        assert!(is_backfilled(&conn, "notes", &gate).unwrap());
     }
 }

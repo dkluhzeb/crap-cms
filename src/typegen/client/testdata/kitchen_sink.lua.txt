@@ -3,7 +3,7 @@
 
 ---@class crap.data.2fa
 ---@field id? string
----@field type string
+---@field type? string
 ---@field ["2fa"]? string
 ---@field ["end"]? string
 ---@field ["private"]? string
@@ -36,7 +36,7 @@
 
 ---@class crap.hook.2fa
 ---@field collection "2fa"
----@field operation "create" | "update" | "delete" | "find" | "find_by_id"
+---@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id"
 ---@field data crap.data.2fa
 ---@field id? string
 ---@field context table<string, any>
@@ -46,10 +46,11 @@
 ---@field user? table
 ---@field ui_locale? string
 ---@field options? table
+---@field edited_by? { id: string, email: string }
 
 ---@class crap.read_hook.2fa
 ---@field collection "2fa"
----@field operation "find" | "find_by_id" | "create" | "update" | "delete"
+---@field operation "find" | "find_by_id" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
 ---@field data crap.doc.2fa
 ---@field id? string
 ---@field context table<string, any>
@@ -59,6 +60,7 @@
 ---@field user? table
 ---@field ui_locale? string
 ---@field options? table
+---@field edited_by? { id: string, email: string }
 
 ---@class crap.find_result.2fa : crap.FindResult
 ---@field documents crap.doc.2fa[]
@@ -69,12 +71,16 @@
 ---@alias crap.display_condition_fn.2fa fun(data: crap.data.2fa, ctx: crap.ConditionContext): boolean | table
 
 ---@class crap.field_hook.2fa
----@field field_name string
 ---@field collection "2fa"
+---@field field_name string
 ---@field operation string
----@field data crap.data.2fa
+---@field id? string
+---@field locale? string
+---@field data crap.data.2fa|table<string, any> The nearest scope: the document for a top-level field, the group object or array/blocks row for a nested one
+---@field document crap.data.2fa
 ---@field user? table
 ---@field ui_locale? string
+---@field options? table
 
 ---@class (exact) crap.where.2fa
 ---@field id? crap.FilterValue
@@ -87,7 +93,7 @@
 
 ---@class (exact) crap.query.2fa : crap.FindQuery
 ---@field where? crap.where.2fa
----@field order_by? "id"|"-id"|"type"|"-type"|"2fa"|"-2fa"|"end"|"-end"|"private"|"-private"|"created_at"|"-created_at"|"updated_at"|"-updated_at"
+---@field order_by? "id"|"-id"|"type"|"-type"|"2fa"|"-2fa"|"end"|"-end"|"private"|"-private"|"created_at"|"-created_at"|"updated_at"|"-updated_at"|"_rank"
 ---@field limit? integer
 ---@field offset? integer
 ---@field locale? string
@@ -250,7 +256,7 @@ function _coll_2fa.row_label(fn) end
 
 ---@class crap.data.Media
 ---@field id? string
----@field filename string
+---@field filename? string
 ---@field mime_type? string
 ---@field filesize? number
 ---@field width? number
@@ -296,7 +302,7 @@ function _coll_2fa.row_label(fn) end
 
 ---@class crap.hook.Media
 ---@field collection "media"
----@field operation "create" | "update" | "delete" | "find" | "find_by_id"
+---@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id"
 ---@field data crap.data.Media
 ---@field id? string
 ---@field context table<string, any>
@@ -306,10 +312,11 @@ function _coll_2fa.row_label(fn) end
 ---@field user? table
 ---@field ui_locale? string
 ---@field options? table
+---@field edited_by? { id: string, email: string }
 
 ---@class crap.read_hook.Media
 ---@field collection "media"
----@field operation "find" | "find_by_id" | "create" | "update" | "delete"
+---@field operation "find" | "find_by_id" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
 ---@field data crap.doc.Media
 ---@field id? string
 ---@field context table<string, any>
@@ -319,6 +326,7 @@ function _coll_2fa.row_label(fn) end
 ---@field user? table
 ---@field ui_locale? string
 ---@field options? table
+---@field edited_by? { id: string, email: string }
 
 ---@class crap.find_result.Media : crap.FindResult
 ---@field documents crap.doc.Media[]
@@ -329,12 +337,16 @@ function _coll_2fa.row_label(fn) end
 ---@alias crap.display_condition_fn.Media fun(data: crap.data.Media, ctx: crap.ConditionContext): boolean | table
 
 ---@class crap.field_hook.Media
----@field field_name string
 ---@field collection "media"
+---@field field_name string
 ---@field operation string
----@field data crap.data.Media
+---@field id? string
+---@field locale? string
+---@field data crap.data.Media|table<string, any> The nearest scope: the document for a top-level field, the group object or array/blocks row for a nested one
+---@field document crap.data.Media
 ---@field user? table
 ---@field ui_locale? string
+---@field options? table
 
 ---@class (exact) crap.where.Media
 ---@field id? crap.FilterValue
@@ -356,7 +368,7 @@ function _coll_2fa.row_label(fn) end
 
 ---@class (exact) crap.query.Media : crap.FindQuery
 ---@field where? crap.where.Media
----@field order_by? "id"|"-id"|"filename"|"-filename"|"mime_type"|"-mime_type"|"filesize"|"-filesize"|"width"|"-width"|"height"|"-height"|"url"|"-url"|"focal_x"|"-focal_x"|"focal_y"|"-focal_y"|"thumbnail_url"|"-thumbnail_url"|"thumbnail_width"|"-thumbnail_width"|"thumbnail_height"|"-thumbnail_height"|"thumbnail_webp_url"|"-thumbnail_webp_url"|"alt"|"-alt"|"created_at"|"-created_at"|"updated_at"|"-updated_at"
+---@field order_by? "id"|"-id"|"filename"|"-filename"|"mime_type"|"-mime_type"|"filesize"|"-filesize"|"width"|"-width"|"height"|"-height"|"url"|"-url"|"focal_x"|"-focal_x"|"focal_y"|"-focal_y"|"thumbnail_url"|"-thumbnail_url"|"thumbnail_width"|"-thumbnail_width"|"thumbnail_height"|"-thumbnail_height"|"thumbnail_webp_url"|"-thumbnail_webp_url"|"alt"|"-alt"|"created_at"|"-created_at"|"updated_at"|"-updated_at"|"_rank"
 ---@field limit? integer
 ---@field offset? integer
 ---@field locale? string
@@ -546,7 +558,7 @@ function _coll_media.row_label(fn) end
 
 ---@class crap.data.Posts
 ---@field id? string
----@field title string
+---@field title? string
 ---@field summary? string
 ---@field published_at? string
 ---@field published_at_tz? string
@@ -559,10 +571,10 @@ function _coll_media.row_label(fn) end
 ---@field active? boolean
 ---@field data? any
 ---@field internal_note? string
----@field status "draft" | "published"
+---@field status? "draft" | "published"
 ---@field layout? "grid" | "list"
 ---@field categories? ("news" | "guides"|string)[]
----@field author string
+---@field author? string
 ---@field tags? string[]
 ---@field cover? string
 --- Polymorphic relationship — targets: users, tags
@@ -576,7 +588,7 @@ function _coll_media.row_label(fn) end
 ---@field raw_rows? table[]
 ---@field byline? string
 ---@field aside? string
----@field tab_note string
+---@field tab_note? string
 ---@field created_at? string
 ---@field updated_at? string
 
@@ -688,7 +700,7 @@ function _coll_media.row_label(fn) end
 
 ---@class crap.hook.Posts
 ---@field collection "posts"
----@field operation "create" | "update" | "delete" | "find" | "find_by_id"
+---@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id"
 ---@field data crap.data.Posts
 ---@field id? string
 ---@field context table<string, any>
@@ -698,10 +710,11 @@ function _coll_media.row_label(fn) end
 ---@field user? table
 ---@field ui_locale? string
 ---@field options? table
+---@field edited_by? { id: string, email: string }
 
 ---@class crap.read_hook.Posts
 ---@field collection "posts"
----@field operation "find" | "find_by_id" | "create" | "update" | "delete"
+---@field operation "find" | "find_by_id" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
 ---@field data crap.doc.Posts
 ---@field id? string
 ---@field context table<string, any>
@@ -711,6 +724,7 @@ function _coll_media.row_label(fn) end
 ---@field user? table
 ---@field ui_locale? string
 ---@field options? table
+---@field edited_by? { id: string, email: string }
 
 ---@class crap.find_result.Posts : crap.FindResult
 ---@field documents crap.doc.Posts[]
@@ -721,21 +735,23 @@ function _coll_media.row_label(fn) end
 ---@alias crap.display_condition_fn.Posts fun(data: crap.data.Posts, ctx: crap.ConditionContext): boolean | table
 
 ---@class crap.field_hook.Posts
----@field field_name string
 ---@field collection "posts"
+---@field field_name string
 ---@field operation string
----@field data crap.data.Posts
+---@field id? string
+---@field locale? string
+---@field data crap.data.Posts|table<string, any> The nearest scope: the document for a top-level field, the group object or array/blocks row for a nested one
+---@field document crap.data.Posts
 ---@field user? table
 ---@field ui_locale? string
+---@field options? table
 
 ---@class (exact) crap.where.Posts
 ---@field id? crap.FilterValue
 ---@field title? crap.FilterValue
 ---@field summary? crap.FilterValue
 ---@field published_at? crap.FilterValue
----@field published_at_tz? crap.FilterValue
 ---@field snippet? crap.FilterValue
----@field snippet_lang? crap.FilterValue
 ---@field body? crap.FilterValue
 ---@field teaser? crap.FilterValue
 ---@field scores? crap.FilterValue
@@ -753,14 +769,12 @@ function _coll_media.row_label(fn) end
 ---@field byline? crap.FilterValue
 ---@field aside? crap.FilterValue
 ---@field tab_note? crap.FilterValue
----@field _status? crap.FilterValue
----@field _deleted_at? crap.FilterValue
 ---@field created_at? crap.FilterValue
 ---@field updated_at? crap.FilterValue
 
 ---@class (exact) crap.query.Posts : crap.FindQuery
 ---@field where? crap.where.Posts
----@field order_by? "id"|"-id"|"title"|"-title"|"summary"|"-summary"|"published_at"|"-published_at"|"published_at_tz"|"-published_at_tz"|"snippet"|"-snippet"|"snippet_lang"|"-snippet_lang"|"body"|"-body"|"teaser"|"-teaser"|"scores"|"-scores"|"keywords"|"-keywords"|"active"|"-active"|"data"|"-data"|"status"|"-status"|"layout"|"-layout"|"categories"|"-categories"|"author"|"-author"|"cover"|"-cover"|"featured"|"-featured"|"seo__meta_title"|"-seo__meta_title"|"seo__meta_desc"|"-seo__meta_desc"|"byline"|"-byline"|"aside"|"-aside"|"tab_note"|"-tab_note"|"_status"|"-_status"|"_deleted_at"|"-_deleted_at"|"created_at"|"-created_at"|"updated_at"|"-updated_at"
+---@field order_by? "id"|"-id"|"title"|"-title"|"summary"|"-summary"|"published_at"|"-published_at"|"snippet"|"-snippet"|"body"|"-body"|"teaser"|"-teaser"|"active"|"-active"|"data"|"-data"|"status"|"-status"|"layout"|"-layout"|"author"|"-author"|"cover"|"-cover"|"featured"|"-featured"|"seo__meta_title"|"-seo__meta_title"|"seo__meta_desc"|"-seo__meta_desc"|"byline"|"-byline"|"aside"|"-aside"|"tab_note"|"-tab_note"|"_status"|"-_status"|"_deleted_at"|"-_deleted_at"|"created_at"|"-created_at"|"updated_at"|"-updated_at"|"_rank"
 ---@field limit? integer
 ---@field offset? integer
 ---@field locale? string
@@ -923,7 +937,7 @@ function _coll_posts.row_label(fn) end
 
 ---@class crap.data.Tags
 ---@field id? string
----@field name string
+---@field name? string
 ---@field created_at? string
 ---@field updated_at? string
 
@@ -944,7 +958,7 @@ function _coll_posts.row_label(fn) end
 
 ---@class crap.hook.Tags
 ---@field collection "tags"
----@field operation "create" | "update" | "delete" | "find" | "find_by_id"
+---@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id"
 ---@field data crap.data.Tags
 ---@field id? string
 ---@field context table<string, any>
@@ -954,10 +968,11 @@ function _coll_posts.row_label(fn) end
 ---@field user? table
 ---@field ui_locale? string
 ---@field options? table
+---@field edited_by? { id: string, email: string }
 
 ---@class crap.read_hook.Tags
 ---@field collection "tags"
----@field operation "find" | "find_by_id" | "create" | "update" | "delete"
+---@field operation "find" | "find_by_id" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
 ---@field data crap.doc.Tags
 ---@field id? string
 ---@field context table<string, any>
@@ -967,6 +982,7 @@ function _coll_posts.row_label(fn) end
 ---@field user? table
 ---@field ui_locale? string
 ---@field options? table
+---@field edited_by? { id: string, email: string }
 
 ---@class crap.find_result.Tags : crap.FindResult
 ---@field documents crap.doc.Tags[]
@@ -977,12 +993,16 @@ function _coll_posts.row_label(fn) end
 ---@alias crap.display_condition_fn.Tags fun(data: crap.data.Tags, ctx: crap.ConditionContext): boolean | table
 
 ---@class crap.field_hook.Tags
----@field field_name string
 ---@field collection "tags"
+---@field field_name string
 ---@field operation string
----@field data crap.data.Tags
+---@field id? string
+---@field locale? string
+---@field data crap.data.Tags|table<string, any> The nearest scope: the document for a top-level field, the group object or array/blocks row for a nested one
+---@field document crap.data.Tags
 ---@field user? table
 ---@field ui_locale? string
+---@field options? table
 
 ---@class (exact) crap.where.Tags
 ---@field id? crap.FilterValue
@@ -992,7 +1012,7 @@ function _coll_posts.row_label(fn) end
 
 ---@class (exact) crap.query.Tags : crap.FindQuery
 ---@field where? crap.where.Tags
----@field order_by? "id"|"-id"|"name"|"-name"|"created_at"|"-created_at"|"updated_at"|"-updated_at"
+---@field order_by? "id"|"-id"|"name"|"-name"|"created_at"|"-created_at"|"updated_at"|"-updated_at"|"_rank"
 ---@field limit? integer
 ---@field offset? integer
 ---@field locale? string
@@ -1137,8 +1157,8 @@ function _coll_tags.row_label(fn) end
 
 ---@class crap.data.Users
 ---@field id? string
----@field email string
----@field name string
+---@field email? string
+---@field name? string
 ---@field authored? table[]
 ---@field created_at? string
 ---@field updated_at? string
@@ -1166,7 +1186,7 @@ function _coll_tags.row_label(fn) end
 
 ---@class crap.hook.Users
 ---@field collection "users"
----@field operation "create" | "update" | "delete" | "find" | "find_by_id"
+---@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id"
 ---@field data crap.data.Users
 ---@field id? string
 ---@field context table<string, any>
@@ -1176,10 +1196,11 @@ function _coll_tags.row_label(fn) end
 ---@field user? table
 ---@field ui_locale? string
 ---@field options? table
+---@field edited_by? { id: string, email: string }
 
 ---@class crap.read_hook.Users
 ---@field collection "users"
----@field operation "find" | "find_by_id" | "create" | "update" | "delete"
+---@field operation "find" | "find_by_id" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
 ---@field data crap.doc.Users
 ---@field id? string
 ---@field context table<string, any>
@@ -1189,6 +1210,7 @@ function _coll_tags.row_label(fn) end
 ---@field user? table
 ---@field ui_locale? string
 ---@field options? table
+---@field edited_by? { id: string, email: string }
 
 ---@class crap.find_result.Users : crap.FindResult
 ---@field documents crap.doc.Users[]
@@ -1199,12 +1221,16 @@ function _coll_tags.row_label(fn) end
 ---@alias crap.display_condition_fn.Users fun(data: crap.data.Users, ctx: crap.ConditionContext): boolean | table
 
 ---@class crap.field_hook.Users
----@field field_name string
 ---@field collection "users"
+---@field field_name string
 ---@field operation string
----@field data crap.data.Users
+---@field id? string
+---@field locale? string
+---@field data crap.data.Users|table<string, any> The nearest scope: the document for a top-level field, the group object or array/blocks row for a nested one
+---@field document crap.data.Users
 ---@field user? table
 ---@field ui_locale? string
+---@field options? table
 
 ---@class (exact) crap.where.Users
 ---@field id? crap.FilterValue
@@ -1215,7 +1241,7 @@ function _coll_tags.row_label(fn) end
 
 ---@class (exact) crap.query.Users : crap.FindQuery
 ---@field where? crap.where.Users
----@field order_by? "id"|"-id"|"email"|"-email"|"name"|"-name"|"created_at"|"-created_at"|"updated_at"|"-updated_at"
+---@field order_by? "id"|"-id"|"email"|"-email"|"name"|"-name"|"created_at"|"-created_at"|"updated_at"|"-updated_at"|"_rank"
 ---@field limit? integer
 ---@field offset? integer
 ---@field locale? string
@@ -1371,7 +1397,7 @@ function _coll_users.row_label(fn) end
 
 ---@class crap.global_data.Settings
 ---@field id? string
----@field site_name string
+---@field site_name? string
 ---@field nav? crap.array_row.SettingsNav[]
 ---@field created_at? string
 ---@field updated_at? string
@@ -1400,10 +1426,11 @@ function _coll_users.row_label(fn) end
 ---@field user? table
 ---@field ui_locale? string
 ---@field options? table
+---@field edited_by? { id: string, email: string }
 
 ---@class crap.read_hook.global_settings
 ---@field collection "settings"
----@field operation "get" | "update"
+---@field operation "get" | "update" | "unpublish" | "restore"
 ---@field data crap.global_doc.Settings
 ---@field id? string
 ---@field context table<string, any>
@@ -1413,14 +1440,19 @@ function _coll_users.row_label(fn) end
 ---@field user? table
 ---@field ui_locale? string
 ---@field options? table
+---@field edited_by? { id: string, email: string }
 
 ---@class crap.field_hook.global_settings
----@field field_name string
 ---@field collection "settings"
+---@field field_name string
 ---@field operation string
----@field data crap.global_data.Settings
+---@field id? string
+---@field locale? string
+---@field data crap.global_data.Settings|table<string, any> The nearest scope: the document for a top-level field, the group object or array/blocks row for a nested one
+---@field document crap.global_data.Settings
 ---@field user? table
 ---@field ui_locale? string
+---@field options? table
 
 ---@alias crap.hook_fn.global_settings fun(ctx: crap.hook.global_settings): crap.hook.global_settings
 ---@alias crap.read_hook_fn.global_settings fun(ctx: crap.read_hook.global_settings): crap.read_hook.global_settings

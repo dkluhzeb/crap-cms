@@ -41,6 +41,10 @@ pub struct GlobalFormErrorPage {
     pub perms: GlobalPermissions,
     pub fields: Vec<FieldContext>,
     pub sidebar_fields: Vec<FieldContext>,
+
+    /// Always `true`: the form re-renders a submission that was not saved, so
+    /// the unsaved-changes guard starts out armed.
+    pub unsaved: bool,
 }
 
 /// `/admin/globals/{slug}/versions` versions-listing page context.

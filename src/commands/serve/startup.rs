@@ -415,8 +415,6 @@ fn bootstrap_startup(config_dir: std::path::PathBuf) -> Result<StartupResources>
         .invalidation_transport(invalidation_transport.clone())
         .build()?;
 
-    run_on_init_hooks(&config, &pool, &hook_runner)?;
-
     log_startup_info(&registry, &config);
     log_security_warnings(&config);
     log_update_notice(&config);
@@ -463,6 +461,10 @@ fn bootstrap_startup(config_dir: std::path::PathBuf) -> Result<StartupResources>
             .readiness(Readiness::new())
             .build(),
     );
+
+    // Run on the assembled infrastructure, so the hooks' writes clear the
+    // cache and publish their events like every other write.
+    run_on_init_hooks(&config, &infra)?;
 
     Ok(StartupResources {
         config,

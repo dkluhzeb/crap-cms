@@ -88,6 +88,17 @@ const FORBIDDEN_CALLS: &[&str] = &[
     "query::soft_delete(",
     "query::restore(",
     "query::create_version(",
+    // Account-state and credential writes — each has a service op that also
+    // bumps the session version and tears down the user's live streams
+    // (`service::auth::lock_user`, `set_password`, …). A surface writing them
+    // raw would leave a revoked user's sessions and streams running.
+    "query::lock_user(",
+    "query::unlock_user(",
+    "query::mark_verified(",
+    "query::mark_unverified(",
+    "query::bump_session_version(",
+    "query::update_password(",
+    "query::reset_totp(",
     // Raw snapshot / draft-overlay read primitives — these skip the
     // view-scope/access path entirely and exist only inside `service::read`.
     // A surface calling them would bypass draft/trash/versions gating.
@@ -109,9 +120,6 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "admin/handlers/field_context/enrich/gated.rs",
         "query::find(",
     ),
-    // Upload-field handling reads the *old* document's fields to plan file
-    // cleanup on update — an internal read on an already access-gated write
-    // path, not a user-facing content read.
     // The `me` endpoint reads the authenticated user's own record.
     ("api/handlers/auth/me.rs", "query::find_by_id("),
 ];
@@ -725,33 +733,44 @@ fn revocation_scan_fires_on_synthetic_violation() {
 /// Reviewed offline-admin CLI write paths: `(path suffix, write call)`.
 /// Every entry documents which invariants the site maintains by hand.
 const CLI_WRITE_ALLOWLIST: &[(&str, &str)] = &[
-    // Bootstrap user creation: password policy + ref_count::after_create
-    // + fts_upsert, mirroring service create.
-    ("commands/user/create.rs", "query::create("),
-    // Bootstrap password set (create) and offline password change —
-    // both run the password policy first; hashing is inside the
-    // primitive itself.
-    ("commands/user/create.rs", "query::update_password("),
-    ("commands/user/modify.rs", "query::update_password("),
-    // `user reset-totp`: TOTP-mode check + destructive confirm; clears
-    // the three `_totp_*` system columns in one atomic UPDATE (outside
-    // FTS/ref-count scope by design).
+    // `user reset-totp`: TOTP-mode check + destructive confirm; clears the
+    // three `_totp_*` system columns in one atomic UPDATE. No session revoke
+    // or stream teardown: resetting the second factor grants nothing and
+    // revokes nothing until the next login re-enrolls. Outside FTS/ref-count
+    // scope by design (system columns only).
     ("commands/user/modify.rs", "query::reset_totp("),
-    // NOTE: `import_cmd.rs` writes via hand-built SQL + `tx.execute`
-    // (with its own ref-count replay) — invisible to this textual
-    // primitive scan, per the scan limits documented at the top of
-    // this file.
+    // `db cleanup --confirm`: deletes junction rows of locales the project no
+    // longer configures, inside the cleanup's one transaction, which then
+    // recomputes every reference count (`migrate::recompute_ref_counts`) —
+    // the rows can hold references. No hooks or events: the rows are
+    // unreachable by every read.
+    (
+        "commands/db/cleanup/apply.rs",
+        "query::delete_rows_outside_locales(",
+    ),
+    // `import`: a raw restore. Rebuilds join rows under their exported ids
+    // inside the import's one transaction; reference counts are settled once
+    // every document exists, FTS is re-indexed per document, and after the
+    // commit the cache is cleared and overwritten accounts' streams are torn
+    // down. The parent row is upserted with hand-built SQL + `tx.execute`,
+    // and replaced sessions are revoked through `query::auth::…` — both
+    // invisible to this textual primitive scan, per the scan limits
+    // documented at the top of this file.
+    (
+        "commands/export/import_write.rs",
+        "query::restore_join_table_data(",
+    ),
 ];
 
 /// CLI write primitives are confined to reviewed offline-admin paths.
 ///
-/// a CLI (or any non-surface) path that mutates
-/// documents with raw `query::*` writes silently bypasses the service
-/// layer's invariants — validation, hooks, ref counting, FTS sync,
-/// delete protection. The reviewed paths below hand-replicate exactly
-/// the invariants they need (and regression tests pin them:
-/// `cli_user_paths_maintain_ref_counts_and_fts`,
-/// `import_adjusts_ref_counts`, trash-purge ref-count tests). A new
+/// A CLI (or any non-surface) path that mutates documents or accounts with
+/// raw `query::*` writes silently bypasses the service layer's invariants —
+/// validation, hooks, ref counting, FTS sync, delete protection, session
+/// revocation and stream teardown. The reviewed paths above hand-replicate
+/// exactly the invariants they need (and regression tests pin them:
+/// `import_adjusts_ref_counts`,
+/// `applying_the_cleanup_recounts_the_deleted_rows_references`). A new
 /// write call anywhere else in `src/commands` must either route through
 /// a service op or be added here with a justification — which forces
 /// the decision through review.
@@ -774,10 +793,9 @@ fn cli_commands_write_only_through_reviewed_paths() {
         let rel = relative_path(root, file);
 
         // Scans WRITE_PRIMITIVES rather than the write subset of
-        // FORBIDDEN_CALLS: the credential writes (`update_password`,
-        // `reset_totp`) have no surface-bypass entry, so intersecting the two
-        // lists left them unscanned here — exactly the writes the list was
-        // extended to see.
+        // FORBIDDEN_CALLS: the join-row writes behind `db cleanup` and
+        // `import` have no surface-bypass entry, so intersecting the two
+        // lists would leave them unscanned here.
         violations.extend(
             hits_for(&contents, WRITE_PRIMITIVES)
                 .into_iter()
@@ -856,10 +874,11 @@ fn is_cli_allowlisted(rel_path: &str, call: &str) -> bool {
         .any(|(suffix, allowed_call)| rel_path.ends_with(suffix) && *allowed_call == call)
 }
 
-/// Document + credential write primitives the CLI scan looks for.
-/// Auth-credential writes (`update_password`, `reset_totp`) joined
-/// after the TOTP CLI shipped a raw credential write the original
-/// document-only list couldn't see.
+/// Document, join-row, account-state and credential write primitives the CLI
+/// scan looks for. Each class joined once a CLI write of it went unseen: the
+/// credential writes after the TOTP CLI shipped a raw one, the account-state
+/// writes after `user lock` skipped the stream teardown its service op does,
+/// and the raw join-row writes behind `db cleanup` and `import`.
 const WRITE_PRIMITIVES: &[&str] = &[
     "query::create(",
     "query::update(",
@@ -869,6 +888,13 @@ const WRITE_PRIMITIVES: &[&str] = &[
     "query::soft_delete(",
     "query::restore(",
     "query::create_version(",
+    "query::restore_join_table_data(",
+    "query::delete_rows_outside_locales(",
+    "query::lock_user(",
+    "query::unlock_user(",
+    "query::mark_verified(",
+    "query::mark_unverified(",
+    "query::bump_session_version(",
     "query::update_password(",
     "query::reset_totp(",
 ];

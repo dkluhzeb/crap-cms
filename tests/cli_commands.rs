@@ -801,18 +801,20 @@ fn cmd_import_roundtrip() {
 
 #[test]
 fn cmd_user_create_via_library() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
 
     commands::user_create(commands::UserCreateParams {
         pool: &pool,
         registry: &registry,
+        config: &cfg,
+        config_dir: &config_dir,
         collection: "users",
         email: Some("lib_create@example.com".to_string()),
         password: Some("password123".to_string()),
         password_stdin: false,
         fields: vec![("name".to_string(), "Lib User".to_string())],
-        password_policy: &crap_cms::config::PasswordPolicy::default(),
-        locale: &LocaleConfig::default(),
     })
     .unwrap();
 
@@ -834,11 +836,15 @@ fn cmd_user_create_via_library() {
 
 #[test]
 fn cmd_user_create_extra_fields() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
 
     commands::user_create(commands::UserCreateParams {
         pool: &pool,
         registry: &registry,
+        config: &cfg,
+        config_dir: &config_dir,
         collection: "users",
         email: Some("extra@example.com".to_string()),
         password: Some("secret456".to_string()),
@@ -847,8 +853,6 @@ fn cmd_user_create_extra_fields() {
             ("name".to_string(), "Admin User".to_string()),
             ("role".to_string(), "admin".to_string()),
         ],
-        password_policy: &crap_cms::config::PasswordPolicy::default(),
-        locale: &LocaleConfig::default(),
     })
     .unwrap();
 
@@ -863,18 +867,20 @@ fn cmd_user_create_extra_fields() {
 
 #[test]
 fn cmd_user_create_non_auth_errors() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
 
     let result = commands::user_create(commands::UserCreateParams {
         pool: &pool,
         registry: &registry,
+        config: &cfg,
+        config_dir: &config_dir,
         collection: "posts",
         email: Some("fail@example.com".to_string()),
         password: Some("password".to_string()),
         password_stdin: false,
         fields: vec![],
-        password_policy: &crap_cms::config::PasswordPolicy::default(),
-        locale: &LocaleConfig::default(),
     });
     assert!(
         result.is_err(),
@@ -1493,6 +1499,127 @@ fn cmd_user_list_missing_collection_errors() {
     assert!(err.contains("not found"), "error: {err}");
 }
 
+/// Regression: `user create` wrote the row with a bare query insert, so a
+/// has-many or array `-f` value never reached its join table, no version
+/// snapshot was taken, and nothing beyond the required-field prompt was
+/// validated. It now creates through the service write.
+#[test]
+fn cli_user_create_writes_list_and_array_values_and_a_version() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(config_dir.join("collections")).unwrap();
+
+    std::fs::write(
+        config_dir.join("crap.toml"),
+        "[server]\nadmin_port = 3000\n[database]\npath = \"data/test.db\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        config_dir.join("collections/teams.lua"),
+        r#"crap.collections.define("teams", { fields = { { name = "title", type = "text" } } })"#,
+    )
+    .unwrap();
+    std::fs::write(
+        config_dir.join("collections/users.lua"),
+        r#"crap.collections.define("users", {
+    auth = true,
+    versions = { drafts = false },
+    fields = {
+        { name = "teams", type = "relationship", relationship = { collection = "teams", has_many = true } },
+        { name = "links", type = "array", fields = { { name = "url", type = "text" } } },
+        { name = "age", type = "number", min = 0 },
+    },
+})"#,
+    )
+    .unwrap();
+
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
+    let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
+    let pool = pool::create_pool(&config_dir, &cfg).expect("create pool");
+    migrate::sync_all(&pool, &registry, &cfg.locale).expect("sync schema");
+
+    let team_id = {
+        let teams_def = registry.get_collection("teams").unwrap();
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Core"));
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let doc = query::create(&tx, "teams", teams_def, &data, None).unwrap();
+        tx.commit().unwrap();
+        doc.id.to_string()
+    };
+
+    let create = |email: &str, fields: Vec<(String, String)>| {
+        commands::user_create(commands::UserCreateParams {
+            pool: &pool,
+            registry: &registry,
+            config: &cfg,
+            config_dir: &config_dir,
+            collection: "users",
+            email: Some(email.to_string()),
+            password: Some("password-12345".to_string()),
+            password_stdin: false,
+            fields,
+        })
+    };
+
+    // Validation beyond "required" applies: a negative age is refused.
+    assert!(
+        create(
+            "neg@example.com",
+            vec![("age".to_string(), "-1".to_string())]
+        )
+        .is_err(),
+        "the service validation must reject a value below `min`"
+    );
+
+    create(
+        "lists@example.com",
+        vec![
+            ("teams".to_string(), team_id.clone()),
+            (
+                "links".to_string(),
+                r#"[{"url":"https://a.example"}]"#.to_string(),
+            ),
+        ],
+    )
+    .unwrap();
+
+    let conn = pool.get().unwrap();
+    let users_def = registry.get_collection("users").unwrap();
+    let user_id = query::find_by_email(&conn, "users", users_def, "lists@example.com", false, None)
+        .unwrap()
+        .expect("the user exists")
+        .id
+        .to_string();
+
+    assert_eq!(
+        query::find_related_ids(&conn, "users", "teams", &user_id, None).unwrap(),
+        vec![team_id.clone()],
+        "the has-many value must reach its join table"
+    );
+    assert_eq!(
+        query::ref_count::get_ref_count(&conn, "teams", &team_id).unwrap(),
+        Some(1)
+    );
+
+    let links_field = users_def.fields.iter().find(|f| f.name == "links").unwrap();
+    let rows = query::find_array_rows(&conn, "users", "links", &user_id, &links_field.fields, None)
+        .unwrap();
+    assert_eq!(rows.len(), 1, "the array row must be written");
+
+    let versions = conn
+        .query_one(
+            "SELECT COUNT(*) AS n FROM _versions_users WHERE _parent = ?1",
+            &[crap_cms::db::DbValue::Text(user_id.clone())],
+        )
+        .unwrap()
+        .expect("count row")
+        .get_i64("n")
+        .expect("integer count");
+    assert_eq!(versions, 1, "the create must take a version snapshot");
+}
+
 /// Regression: the CLI `user create`/`user delete` offline
 /// paths must maintain the same invariants as the service write path —
 /// outgoing relationship refs count toward the targets' delete
@@ -1563,6 +1690,8 @@ fn cli_user_paths_maintain_ref_counts_and_fts() {
     commands::user_create(commands::UserCreateParams {
         pool: &pool,
         registry: &registry,
+        config: &cfg,
+        config_dir: &config_dir,
         collection: "users",
         email: Some("ref@example.com".to_string()),
         password: Some("password-12345".to_string()),
@@ -1571,8 +1700,6 @@ fn cli_user_paths_maintain_ref_counts_and_fts() {
             ("name".to_string(), "Ref User".to_string()),
             ("avatar".to_string(), media_id.to_string()),
         ],
-        password_policy: &crap_cms::config::PasswordPolicy::default(),
-        locale: &cfg.locale,
     })
     .unwrap();
 

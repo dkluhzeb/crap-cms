@@ -1,4 +1,5 @@
-//! User modification commands — delete, lock, unlock, verify, unverify, change password.
+//! User modification commands — delete, lock, unlock, verify, unverify,
+//! reset TOTP, change password.
 
 use std::{path::Path, sync::Arc};
 
@@ -8,10 +9,10 @@ use dialoguer::Confirm;
 use crate::{
     cli::{self, crap_theme},
     commands::cli_infra,
-    config::{CrapConfig, LocaleConfig, PasswordPolicy},
+    config::CrapConfig,
     core::{CollectionDefinition, Document, Registry},
     db::{DbPool, query},
-    service::{self, AppInfra, ServiceContext, ServiceError},
+    service::{self, AppInfra, ServiceContext, ServiceError, auth::AccountAction},
 };
 
 use super::helpers::{
@@ -114,110 +115,55 @@ pub fn user_delete(p: &UserDeleteParams<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Lock a user account.
+/// The operator's wording for an account-state action: the verb for an error,
+/// the past tense for the success line.
+fn action_words(action: AccountAction) -> (&'static str, &'static str) {
+    match action {
+        AccountAction::Lock => ("lock", "Locked"),
+        AccountAction::Unlock => ("unlock", "Unlocked"),
+        AccountAction::Verify => ("verify", "Verified"),
+        AccountAction::Unverify => ("unverify", "Unverified"),
+    }
+}
+
+/// Lock, unlock, verify or unverify a user through the service op, on the
+/// CLI's infrastructure (`cli_infra`): a lock or an unverify bumps the
+/// session version and — with live updates over Redis — tears down the
+/// user's open streams on `serve`, like the same action from the admin or
+/// gRPC. Collection access rules don't apply to the operator's CLI.
 ///
 /// # Errors
 ///
-/// Returns an error if the user can't be resolved, the connection fails, or
-/// the lock operation fails.
+/// Returns an error if the user can't be resolved, a verification action
+/// targets a collection without `verify_email`, or the write fails.
 #[cfg(not(tarpaulin_include))]
-pub fn user_lock(lookup: &UserLookup<'_>) -> Result<()> {
-    let (pool, collection) = (lookup.pool, lookup.collection);
-    let (_, doc) = resolve_user(lookup)?;
-
-    let conn = pool.get().context("Failed to get database connection")?;
-
-    let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
-
-    service::auth::lock_user(&ctx, &doc.id)
-        .map_err(ServiceError::into_anyhow)
-        .context("Failed to lock user")?;
-
-    cli::success(&format!(
-        "Locked user {} ({}) in '{}'",
-        doc.id,
-        get_user_email(&doc),
-        collection
-    ));
-
-    Ok(())
-}
-
-/// Unlock a user account.
-///
-/// # Errors
-///
-/// Returns an error if the user can't be resolved, the connection fails, or
-/// the unlock operation fails.
-#[cfg(not(tarpaulin_include))]
-pub fn user_unlock(lookup: &UserLookup<'_>) -> Result<()> {
-    let (pool, collection) = (lookup.pool, lookup.collection);
-    let (_, doc) = resolve_user(lookup)?;
-
-    let conn = pool.get().context("Failed to get database connection")?;
-
-    let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
-
-    service::auth::unlock_user(&ctx, &doc.id)
-        .map_err(ServiceError::into_anyhow)
-        .context("Failed to unlock user")?;
-
-    cli::success(&format!(
-        "Unlocked user {} ({}) in '{}'",
-        doc.id,
-        get_user_email(&doc),
-        collection
-    ));
-
-    Ok(())
-}
-
-/// Verify a user account (mark email as verified).
-#[cfg(not(tarpaulin_include))]
-pub(super) fn user_verify(lookup: &UserLookup<'_>) -> Result<()> {
-    let (pool, collection) = (lookup.pool, lookup.collection);
-    let (def, doc) = resolve_user(lookup)?;
-    require_verify_email(&def, collection)?;
-
-    let conn = pool.get().context("Failed to get database connection")?;
-
-    let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
-
-    service::auth::mark_verified(&ctx, &doc.id)
-        .map_err(ServiceError::into_anyhow)
-        .context("Failed to verify user")?;
-
-    cli::success(&format!(
-        "Verified user {} ({}) in '{}'",
-        doc.id,
-        get_user_email(&doc),
-        collection
-    ));
-
-    Ok(())
-}
-
-/// Unverify a user account (mark email as unverified).
-#[cfg(not(tarpaulin_include))]
-pub(super) fn user_unverify(lookup: &UserLookup<'_>) -> Result<()> {
-    let (pool, collection) = (lookup.pool, lookup.collection);
+pub fn user_account_action(
+    lookup: &UserLookup<'_>,
+    infra: &AppInfra,
+    action: AccountAction,
+) -> Result<()> {
+    let collection = lookup.collection;
     let (def, doc) = resolve_user(lookup)?;
 
-    require_verify_email(&def, collection)?;
+    if action.is_verification_action() {
+        require_verify_email(&def, collection)?;
+    }
 
-    let conn = pool.get().context("Failed to get database connection")?;
+    let ctx = ServiceContext::collection(collection, &def)
+        .infra(infra)
+        .override_access(true)
+        .build();
 
-    let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
+    let (verb, done) = action_words(action);
 
-    service::auth::mark_unverified(&ctx, &doc.id)
+    service::auth::apply_account_action(&ctx, &doc.id, action)
         .map_err(ServiceError::into_anyhow)
-        .context("Failed to unverify user")?;
+        .with_context(|| format!("Failed to {verb} user"))?;
 
     cli::success(&format!(
-        "Unverified user {} ({}) in '{}'",
+        "{done} user {} ({}) in '{collection}'",
         doc.id,
         get_user_email(&doc),
-        collection
     ));
 
     Ok(())
@@ -278,50 +224,59 @@ pub fn user_reset_totp(lookup: &UserLookup<'_>, confirm: bool) -> Result<()> {
     Ok(())
 }
 
-/// Args for [`user_change_password`].
-pub struct UserChangePasswordParams<'a> {
-    pub pool: &'a DbPool,
-    pub registry: &'a Registry,
-    pub collection: &'a str,
-    pub email: Option<String>,
-    pub id: Option<String>,
+/// The new password for [`user_change_password`]: given inline, read from
+/// stdin, or prompted for when neither is set.
+pub struct UserChangePasswordParams {
     pub password: Option<String>,
     pub password_stdin: bool,
-    pub password_policy: &'a PasswordPolicy,
-    pub locale: &'a LocaleConfig,
 }
 
-/// Change a user's password.
+impl UserChangePasswordParams {
+    /// A new password given inline (`password`) or read from stdin.
+    #[must_use]
+    pub fn new(password: Option<String>, password_stdin: bool) -> Self {
+        Self {
+            password,
+            password_stdin,
+        }
+    }
+}
+
+/// Change a user's password through the service op, on the CLI's
+/// infrastructure (`cli_infra`): the configured password policy applies,
+/// every session opened with the old password ends, and — with live updates
+/// over Redis — the user's open streams on `serve` are torn down, like the
+/// same change from the admin or gRPC. Collection access rules don't apply to
+/// the operator's CLI.
 ///
 /// # Errors
 ///
-/// Returns an error if the user can't be resolved, the password prompt
-/// fails, the password fails policy validation, or the DB update fails.
+/// Returns an error if the user can't be resolved, the password prompt fails,
+/// the password fails policy validation, or the DB update fails.
 #[cfg(not(tarpaulin_include))]
-pub fn user_change_password(p: UserChangePasswordParams<'_>) -> Result<()> {
-    let (_, doc) = resolve_user(&UserLookup {
-        pool: p.pool,
-        registry: p.registry,
-        collection: p.collection,
-        email: p.email,
-        id: p.id,
-        locale: p.locale,
-    })?;
+pub fn user_change_password(
+    lookup: &UserLookup<'_>,
+    infra: &AppInfra,
+    p: UserChangePasswordParams,
+) -> Result<()> {
+    let collection = lookup.collection;
+    let (def, doc) = resolve_user(lookup)?;
 
     let password = resolve_new_password(p.password, p.password_stdin, "New password")?;
 
-    p.password_policy.validate(&password)?;
+    let ctx = ServiceContext::collection(collection, &def)
+        .infra(infra)
+        .override_access(true)
+        .build();
 
-    let conn = p.pool.get().context("Failed to get database connection")?;
-
-    query::update_password(&conn, p.collection, &doc.id, &password)
-        .context("Failed to update password")?;
+    service::auth::set_password(&ctx, &doc.id, &password)
+        .map_err(ServiceError::into_anyhow)
+        .context("Failed to change password")?;
 
     cli::success(&format!(
-        "Password changed for user {} ({}) in '{}'",
+        "Password changed for user {} ({}) in '{collection}'",
         doc.id,
         get_user_email(&doc),
-        p.collection
     ));
 
     Ok(())

@@ -64,7 +64,10 @@ pub struct HookContext {
     /// Collection slug.
     pub collection: String,
     /// The operation being performed.
-    #[lua(ty = "\"create\"|\"update\"|\"delete\"|\"find\"|\"find_by_id\"|\"get\"|\"init\"")]
+    // The typed union is `operation::hook_context_operations`, pinned by a test.
+    #[lua(
+        ty = "\"create\"|\"update\"|\"undelete\"|\"delete\"|\"find\"|\"find_by_id\"|\"unpublish\"|\"restore\"|\"get\"|\"init\""
+    )]
     pub operation: String,
     /// Document data. For read hooks, contains document fields including
     /// `id` / timestamps. For `before_delete` / `after_delete` hooks,
@@ -191,6 +194,27 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::HashMap;
+
+    use crate::hooks::lifecycle::operation::hook_context_operations;
+
+    /// The typed `operation` union is the runtime operation list, so a hook
+    /// branching on `"undelete"`, `"unpublish"` or `"restore"` type-checks.
+    #[test]
+    fn operation_type_lists_every_runtime_operation() {
+        let union = hook_context_operations()
+            .iter()
+            .map(|op| format!("\"{op}\""))
+            .collect::<Vec<_>>()
+            .join("|");
+
+        let mut out = String::new();
+        HookContext::render_lua_annotation(&mut out);
+
+        assert!(
+            out.contains(&format!("--- @field operation {union} ")),
+            "crap.HookContext.operation must be `{union}`:\n{out}"
+        );
+    }
 
     #[test]
     fn to_lua_table_with_locale_and_draft() {

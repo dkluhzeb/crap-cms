@@ -18,7 +18,7 @@ end)
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `event` | string | Lifecycle event name |
-| `fn` | function | Hook function receiving a context table |
+| `fn` | function | Hook function receiving a context table (`crap.hook_fn`); a `before_render` hook receives `(ctx, info)` (`crap.render_hook_fn`) |
 
 ### Events
 

@@ -3,7 +3,9 @@
 //! at the rest of the path satisfies the filter, the reading the SQL builder's
 //! `EXISTS` subquery applies (see `filter::subquery`). A list in the row is
 //! read element by element (see `super::lists`); a document with no rows
-//! matches no filter on them.
+//! matches no filter on them. A top-level row's own `id` is filterable; a row
+//! nested in another row's JSON is not addressed by id, and `_block_type` is
+//! read only in a block row — both as the SQL path resolves them.
 
 use serde_json::Value;
 
@@ -18,7 +20,10 @@ use crate::{
     },
     db::{
         Filter, FilterOp,
-        query::{filter::elements::ListLeaf, helpers::ListPlace},
+        query::{
+            filter::{elements::ListLeaf, resolve::ROW_ID},
+            helpers::ListPlace,
+        },
     },
 };
 
@@ -32,16 +37,44 @@ pub(super) fn matches_row_path(
     let (root, rest) = filter.field.split_once('.')?;
     let root_def = find_field(root, fields)?;
 
-    let row_fields = match field_children(root_def) {
-        FieldChildren::Array(sub) => flatten_array_sub_fields(sub),
-        FieldChildren::Blocks(defs) => block_fields(defs),
+    let level = match field_children(root_def) {
+        FieldChildren::Array(sub) => RowLevel::new(flatten_array_sub_fields(sub), false),
+        FieldChildren::Blocks(defs) => RowLevel::new(block_fields(defs), true),
         _ => return None,
     };
+
+    if rest == ROW_ID {
+        return Some(matches_row_id(data.get(root), &filter.op));
+    }
 
     let segments: Vec<&str> = rest.split('.').collect();
     let path = RowPath::new(&segments, &filter.op);
 
-    Some(path.matches_rows(data.get(root), &row_fields))
+    Some(path.matches_rows(data.get(root), &level))
+}
+
+/// Whether some top-level row's own id satisfies `op`.
+fn matches_row_id(rows: Option<&Value>, op: &FilterOp) -> bool {
+    let Some(Value::Array(rows)) = rows else {
+        return false;
+    };
+
+    let leaf = RowLeaf::Value(Some(FieldType::Text));
+
+    rows.iter().any(|row| leaf.matches(row.get(ROW_ID), op))
+}
+
+/// The fields a row holds, and whether it is a block row — the only kind that
+/// carries a `_block_type`.
+struct RowLevel<'a> {
+    fields: Vec<&'a FieldDefinition>,
+    block_row: bool,
+}
+
+impl<'a> RowLevel<'a> {
+    fn new(fields: Vec<&'a FieldDefinition>, block_row: bool) -> Self {
+        Self { fields, block_row }
+    }
 }
 
 /// Every block type's fields, layout wrappers flattened: a block row holds
@@ -71,41 +104,49 @@ impl<'a> RowPath<'a> {
 
     /// Whether some row of `rows` — a missing value holds none — satisfies the
     /// path.
-    fn matches_rows(&self, rows: Option<&Value>, fields: &[&FieldDefinition]) -> bool {
+    fn matches_rows(&self, rows: Option<&Value>, level: &RowLevel<'_>) -> bool {
         let Some(Value::Array(rows)) = rows else {
             return false;
         };
 
-        rows.iter().any(|row| self.matches_at(Some(row), fields))
+        rows.iter().any(|row| self.matches_at(Some(row), level))
     }
 
-    /// Whether the value the path reaches from `level` — an object of
-    /// `fields`, or a missing one, whose values are then missing too —
+    /// Whether the value the path reaches from `object` — an object of the
+    /// `level`'s fields, or a missing one, whose values are then missing too —
     /// satisfies the operator.
-    fn matches_at(&self, level: Option<&Value>, fields: &[&FieldDefinition]) -> bool {
+    fn matches_at(&self, object: Option<&Value>, level: &RowLevel<'_>) -> bool {
         let Some((segment, remaining)) = self.segments.split_first() else {
             return false;
         };
-        let value = level.and_then(|object| object.get(*segment));
+        let value = object.and_then(|object| object.get(*segment));
 
         if *segment == BLOCK_TYPE_KEY {
             let leaf = RowLeaf::Value(Some(FieldType::Text));
 
-            return remaining.is_empty() && leaf.matches(value, self.op);
+            return level.block_row && remaining.is_empty() && leaf.matches(value, self.op);
         }
 
-        let Some(field) = fields.iter().find(|f| f.name == *segment) else {
+        let Some(field) = level.fields.iter().find(|f| f.name == *segment) else {
             return false;
         };
 
         match field_children(field) {
-            FieldChildren::Array(sub) => self
-                .descend()
-                .matches_rows(value, &flatten_array_sub_fields(sub)),
-            FieldChildren::Blocks(defs) => self.descend().matches_rows(value, &block_fields(defs)),
-            FieldChildren::Group(sub) => self
-                .descend()
-                .matches_at(value, &flatten_array_sub_fields(sub)),
+            FieldChildren::Array(sub) => {
+                let rows = RowLevel::new(flatten_array_sub_fields(sub), false);
+
+                self.descend().matches_rows(value, &rows)
+            }
+            FieldChildren::Blocks(defs) => {
+                let rows = RowLevel::new(block_fields(defs), true);
+
+                self.descend().matches_rows(value, &rows)
+            }
+            FieldChildren::Group(sub) => {
+                let group = RowLevel::new(flatten_array_sub_fields(sub), false);
+
+                self.descend().matches_at(value, &group)
+            }
             FieldChildren::Wrapper(_) | FieldChildren::Tabs(_) => false,
             FieldChildren::Leaf => {
                 remaining.is_empty() && RowLeaf::of(field).matches(value, self.op)
@@ -156,6 +197,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::db::{InMemoryConn, query::filter::row_paths_fixture::assert_row_paths_agree};
 
     fn text(name: &str) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text).build()
@@ -280,5 +322,52 @@ mod tests {
     fn other_paths_are_not_row_paths() {
         assert_eq!(matches("title", FilterOp::Exists), None);
         assert_eq!(matches("unknown.x", FilterOp::Exists), None);
+    }
+
+    /// A top-level row's own id is matched — an array row's and a block row's
+    /// alike; a nested row is not addressed by id.
+    #[test]
+    fn a_top_level_row_id_is_matched() {
+        let doc = DocumentFields::from(HashMap::from([
+            ("items".to_string(), json!([{ "id": "r1", "name": "a" }])),
+            (
+                "content".to_string(),
+                json!([{ "id": "b1", "_block_type": "talk", "quotes": [{ "who": "Ada" }] }]),
+            ),
+        ]));
+        let at = |field: &str, op: FilterOp| {
+            let filter = Filter {
+                field: field.to_string(),
+                op,
+            };
+
+            matches_row_path(&doc, &filter, &fields())
+        };
+
+        assert_eq!(at("items.id", FilterOp::Equals("r1".into())), Some(true));
+        assert_eq!(at("items.id", FilterOp::Equals("b1".into())), Some(false));
+        assert_eq!(at("content.id", FilterOp::Equals("b1".into())), Some(true));
+        assert_eq!(at("content.quotes.id", FilterOp::NotExists), Some(false));
+    }
+
+    /// `_block_type` is a block row's; an array row or a group has none, so a
+    /// path asking for it there matches nothing (SQL refuses it).
+    #[test]
+    fn block_type_is_read_only_in_a_block_row() {
+        assert_eq!(
+            matches("items._block_type", FilterOp::NotExists),
+            Some(false)
+        );
+        assert_eq!(
+            matches("items.dims._block_type", FilterOp::NotExists),
+            Some(false)
+        );
+    }
+
+    /// SQL and the in-memory evaluator read every row path alike (the shared
+    /// fixture runs the same check on Postgres).
+    #[test]
+    fn row_paths_agree_between_sql_and_memory() {
+        assert_row_paths_agree(&InMemoryConn::open(), "posts");
     }
 }

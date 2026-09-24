@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::hooks::lua_api::utils::lua_err;
+use crate::hooks::lua_api::{to_lua_value, utils::lua_err};
 use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::{Deserialize, Serialize};
@@ -145,7 +145,7 @@ fn collections_list_versions(
         pagination: paginated.pagination,
     };
 
-    let value = lua.to_value(&result)?;
+    let value = to_lua_value(lua, &result)?;
     let Value::Table(tbl) = value else {
         return Err(RuntimeError(
             "ListVersionsResult did not serialize to a table".into(),

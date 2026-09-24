@@ -97,6 +97,6 @@ pub use update::UpdateCmd;
 // `commands::*` rather than `commands::user::*` so callers don't
 // repeat the deep path.
 pub use user::{
-    UserChangePasswordParams, UserCreateParams, UserDeleteParams, UserLookup, user_change_password,
-    user_create, user_delete, user_list, user_lock, user_unlock,
+    UserChangePasswordParams, UserCreateParams, UserDeleteParams, UserLookup, user_account_action,
+    user_change_password, user_create, user_delete, user_list,
 };

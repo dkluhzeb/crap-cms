@@ -46,13 +46,14 @@ const LOCALE_CONTEXT: Chokepoint = Chokepoint {
     name: "LocaleContext::{default_for, exact, from_locale_string}",
     scan_root: "src",
     home: Some("src/db/query/locale"),
-    copy_pattern: r"\bLocaleContext \{|\bLocaleMode::Single\(",
+    // A struct literal, not a function returning one (`-> LocaleContext {`).
+    copy_pattern: r"(?:^|[^>\s])\s*\bLocaleContext \{|\bLocaleMode::Single\(",
     fix: "Build the context with `LocaleContext::default_for` / `::exact` / \
           `::from_locale_string` instead of a struct literal, so the mode and \
           the fallback are decided in one place.",
     allowlist: &[
         (
-            "src/commands/export/import_cmd.rs",
+            "src/commands/export/import_write.rs",
             "Import restores one snapshot locale at a time: a Single context per locale key",
         ),
         (
@@ -88,7 +89,7 @@ const HIDDEN_FIELD_STRIP: Chokepoint = Chokepoint {
             "The chokepoint itself: both strip helpers and the collector",
         ),
         (
-            "src/service/read/validate_filters.rs",
+            "src/service/read/query_access.rs",
             "Filter validation rejects a filter on a hidden field before any document is read",
         ),
         (
@@ -134,7 +135,7 @@ const EDITOR_LOCALE_CTX: Chokepoint = Chokepoint {
     name: "admin::handlers::shared::editor_locale_ctx",
     scan_root: "src/admin/handlers",
     home: None,
-    copy_pattern: r"\bLocaleContext::(from_locale_string|default_for|exact)\(|\bLocaleContext \{",
+    copy_pattern: r"\bLocaleContext::(from_locale_string|default_for|exact)\(|(?:^|[^>\s])\s*\bLocaleContext \{",
     fix: "Build the admin read context with `editor_locale_ctx` (or \
           `parse_request_locale` when an unknown locale must 400), so a stale \
           cookie still reads the default locale instead of dropping the \

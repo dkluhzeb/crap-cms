@@ -1,121 +1,221 @@
-//! Walk block-type definitions to build the JSON-extract expression and
-//! `json_each` joins for a Blocks-field filter path.
+//! Walk a filter path through the JSON a row stores — a block row's `data`, or
+//! a group / nested array / nested blocks column of an array row — to the
+//! `json_extract` expression of its leaf and the `json_each` joins that expand
+//! every nested array or blocks value on the way.
+//!
+//! One walker for both row kinds, so a path reaches the same depth whichever
+//! row it starts in: groups extend the JSON path, a nested array or blocks
+//! field expands its rows, at any depth.
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::core::{
-    BLOCK_TYPE_KEY, BlockDefinition, FieldChildren, FieldDefinition, FieldType, field_children,
-    flatten_array_sub_fields,
+use crate::{
+    core::{
+        BLOCK_TYPE_KEY, BlockDefinition, FieldChildren, FieldDefinition, FieldType, field_children,
+        flatten_array_sub_fields,
+    },
+    db::{DbConnection, query::filter::elements::ListLeaf},
 };
-use crate::db::{DbConnection, query::filter::elements::ListLeaf};
 
-use super::types::BlockWalkResult;
+use super::types::JsonWalkResult;
 
-/// Walk block type definitions to build `json_each` joins and a final
-/// `json_extract` expression for a nested path.
-///
-/// At each segment:
-/// - **Blocks/Array** sub-field → add a `json_each()` join, recurse
-/// - **Group** sub-field → extend the JSON path (no join)
-/// - **Scalar** → leaf node, produce `json_extract` expression (a leaf holding
-///   a list — a scalar has-many list, a has-many reference's ids — is flagged
-///   with it)
-/// - **`_block_type`** → special: extract from current nesting level
-///
-/// Layout wrappers (row, collapsible, tabs) are transparent: a row stores
-/// their sub-fields beside its own, so a path names those directly.
-pub(super) fn walk_block_fields(
-    conn: &dyn DbConnection,
-    segments: &[&str],
-    block_defs: &[BlockDefinition],
-    join_table: &str,
-) -> Result<BlockWalkResult> {
-    if segments.is_empty() {
-        bail!("Empty path for block filter");
+/// A walk's position: the JSON value the next segment is looked up in —
+/// `path` below `base` — the fields that value holds, and whether it is a
+/// block row (the only level that carries a `_block_type`).
+pub(super) struct JsonWalk<'a> {
+    base: String,
+    path: Vec<String>,
+    each_joins: Vec<(String, String)>,
+    fields: Vec<&'a FieldDefinition>,
+    block_row: bool,
+}
+
+impl<'a> JsonWalk<'a> {
+    fn at(base: String, fields: Vec<&'a FieldDefinition>, block_row: bool) -> Self {
+        Self {
+            base,
+            path: Vec::new(),
+            each_joins: Vec::new(),
+            fields,
+            block_row,
+        }
     }
 
-    let mut each_joins: Vec<(String, String)> = Vec::new();
-    let mut json_path_parts: Vec<String> = Vec::new();
+    /// A walk starting in a block row's `data` object of `join_table`, which
+    /// holds every block type's fields.
+    pub(super) fn block_row(join_table: &str, blocks: &'a [BlockDefinition]) -> Self {
+        Self::at(format!("{join_table}.data"), block_fields(blocks), true)
+    }
 
-    // Collect all fields across all block types at the current level.
-    let mut current_fields = block_fields(block_defs);
+    /// A walk starting in the JSON an array row's `container` sub-field holds
+    /// in `column`: a group's object, or a nested array's or blocks' rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `container` holds a value rather than JSON with
+    /// sub-fields.
+    pub(super) fn array_column(
+        conn: &dyn DbConnection,
+        column: String,
+        container: &'a FieldDefinition,
+    ) -> Result<Self> {
+        let mut walk = Self::at(column, Vec::new(), false);
 
-    let mut remaining = segments;
+        walk.enter(conn, container, None)?;
 
-    while !remaining.is_empty() {
-        let seg = remaining[0];
-        remaining = &remaining[1..];
+        Ok(walk)
+    }
 
-        // Handle _block_type at nested level — always Text.
-        if seg == BLOCK_TYPE_KEY {
-            if !remaining.is_empty() {
-                bail!("{BLOCK_TYPE_KEY} must be the last segment in a filter path");
+    /// Walk `segments` to their leaf.
+    ///
+    /// At each segment:
+    /// - **Array/Blocks** field → a `json_each` join over its rows, descend
+    /// - **Group** field → extend the JSON path (no join), descend
+    /// - **Value** field → the leaf: its `json_extract` expression (a leaf
+    ///   holding a list — a scalar has-many list, a has-many reference's ids —
+    ///   is flagged with it)
+    /// - **`_block_type`** → the type of the block row the walk is in
+    ///
+    /// Layout wrappers (row, collapsible, tabs) are transparent: a row stores
+    /// their sub-fields beside its own, so a path names those directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty path, an unknown field, a sub-path into a
+    /// value, `_block_type` outside a block row or before the last segment, and
+    /// a path that ends on a container.
+    pub(super) fn walk(
+        mut self,
+        conn: &dyn DbConnection,
+        segments: &[&str],
+    ) -> Result<JsonWalkResult> {
+        let Some(last) = segments.last() else {
+            bail!("Empty path for a row filter");
+        };
+
+        let mut remaining = segments;
+
+        while let Some((seg, rest)) = remaining.split_first() {
+            if *seg == BLOCK_TYPE_KEY {
+                return self.block_type(conn, rest);
             }
-            let expr = build_block_type_expr(conn, &each_joins, &mut json_path_parts, join_table);
 
-            return Ok((each_joins, expr, Some(FieldType::Text), None));
+            let field = self.field(seg)?;
+
+            if matches!(field_children(field), FieldChildren::Leaf) {
+                if !rest.is_empty() {
+                    bail!("Scalar field '{seg}' cannot have sub-paths");
+                }
+
+                let field_type = Some(field.field_type.clone());
+
+                return Ok(self.leaf(conn, seg, field_type, ListLeaf::of(field)));
+            }
+
+            self.enter(conn, field, Some(*seg))?;
+            remaining = rest;
         }
 
-        let field_def = current_fields
+        bail!("Filter path must end on a value field, not the container '{last}'")
+    }
+
+    /// The field `name` at the current level.
+    fn field(&self, name: &str) -> Result<&'a FieldDefinition> {
+        self.fields
             .iter()
-            .find(|f| f.name == seg)
-            .ok_or_else(|| anyhow!("Unknown field '{seg}' in block filter path"))?;
+            .find(|f| f.name == name)
+            .copied()
+            .ok_or_else(|| anyhow!("Unknown field '{name}' in row filter path"))
+    }
 
-        match field_children(field_def) {
-            // Nested array → json_each join, descend into its sub-fields.
-            FieldChildren::Array(sub) => {
-                let source =
-                    build_json_each_source(conn, &each_joins, &json_path_parts, seg, join_table);
-                let alias = format!("j{}", each_joins.len());
-                each_joins.push((source, alias));
-                json_path_parts.clear();
+    /// Descend into the container `field` — reached by its `key` below the
+    /// current position, or, without one, as the whole current value.
+    fn enter(
+        &mut self,
+        conn: &dyn DbConnection,
+        field: &'a FieldDefinition,
+        key: Option<&str>,
+    ) -> Result<()> {
+        if let Some(key) = key {
+            self.path.push(key.to_string());
+        }
 
-                current_fields = flatten_array_sub_fields(sub);
-            }
-            // Nested blocks → json_each join, descend into every block's fields.
-            FieldChildren::Blocks(blocks) => {
-                let source =
-                    build_json_each_source(conn, &each_joins, &json_path_parts, seg, join_table);
-                let alias = format!("j{}", each_joins.len());
-                each_joins.push((source, alias));
-                json_path_parts.clear();
-
-                current_fields = block_fields(blocks);
-            }
-            // A group extends the JSON path (no join).
+        match field_children(field) {
             FieldChildren::Group(sub) => {
-                json_path_parts.push(seg.to_string());
-                current_fields = flatten_array_sub_fields(sub);
+                self.fields = flatten_array_sub_fields(sub);
+                self.block_row = false;
+            }
+            FieldChildren::Array(sub) => {
+                self.expand_rows(conn);
+                self.fields = flatten_array_sub_fields(sub);
+                self.block_row = false;
+            }
+            FieldChildren::Blocks(blocks) => {
+                self.expand_rows(conn);
+                self.fields = block_fields(blocks);
+                self.block_row = true;
             }
             // Never among the flattened fields: a wrapper holds no value of
             // its own.
             FieldChildren::Wrapper(_) | FieldChildren::Tabs(_) => {
-                bail!("Layout field '{seg}' has no value of its own to filter on");
+                bail!(
+                    "Layout field '{}' has no value of its own to filter on",
+                    field.name
+                );
             }
-            FieldChildren::Leaf => {
-                if !remaining.is_empty() {
-                    bail!("Scalar field '{seg}' cannot have sub-paths");
-                }
-                json_path_parts.push(seg.to_string());
-                let path = json_path_parts.join(".");
-                let expr = if each_joins.is_empty() {
-                    conn.json_extract_expr("data", &path)
-                } else {
-                    let last_alias = &each_joins.last().expect("each_joins is non-empty").1;
-                    conn.json_extract_expr(&format!("{last_alias}.value"), &path)
-                };
-
-                return Ok((
-                    each_joins,
-                    expr,
-                    Some(field_def.field_type.clone()),
-                    ListLeaf::of(field_def),
-                ));
-            }
+            FieldChildren::Leaf => bail!("Field '{}' has no sub-fields to filter on", field.name),
         }
+
+        Ok(())
     }
 
-    bail!("Filter path must end on a scalar field or _block_type, not a container")
+    /// Expand the rows at the current position with a `json_each` join, and
+    /// move into one of them.
+    fn expand_rows(&mut self, conn: &dyn DbConnection) {
+        let source = self.extract(conn);
+        let alias = format!("j{}", self.each_joins.len());
+
+        self.base = format!("{alias}.value");
+        self.path.clear();
+        self.each_joins.push((source, alias));
+    }
+
+    /// The expression of the value at the current position.
+    fn extract(&self, conn: &dyn DbConnection) -> String {
+        if self.path.is_empty() {
+            return self.base.clone();
+        }
+
+        conn.json_extract_expr(&self.base, &self.path.join("."))
+    }
+
+    /// The leaf `key` at the current position.
+    fn leaf(
+        mut self,
+        conn: &dyn DbConnection,
+        key: &str,
+        field_type: Option<FieldType>,
+        list: Option<ListLeaf>,
+    ) -> JsonWalkResult {
+        self.path.push(key.to_string());
+        let expr = self.extract(conn);
+
+        (self.each_joins, expr, field_type, list)
+    }
+
+    /// The `_block_type` of the block row the walk is in — the last segment,
+    /// and only inside a blocks field's rows.
+    fn block_type(self, conn: &dyn DbConnection, rest: &[&str]) -> Result<JsonWalkResult> {
+        if !rest.is_empty() {
+            bail!("{BLOCK_TYPE_KEY} must be the last segment in a filter path");
+        }
+
+        if !self.block_row {
+            bail!("{BLOCK_TYPE_KEY} names a block row's type; this path is not in a block row");
+        }
+
+        Ok(self.leaf(conn, BLOCK_TYPE_KEY, Some(FieldType::Text), None))
+    }
 }
 
 /// Every block type's fields, layout wrappers flattened: a block row holds
@@ -127,58 +227,111 @@ fn block_fields(block_defs: &[BlockDefinition]) -> Vec<&FieldDefinition> {
         .collect()
 }
 
-fn build_block_type_expr(
-    conn: &dyn DbConnection,
-    each_joins: &[(String, String)],
-    json_path_parts: &mut Vec<String>,
-    _join_table: &str,
-) -> String {
-    if each_joins.is_empty() {
-        json_path_parts.push(BLOCK_TYPE_KEY.to_string());
-        conn.json_extract_expr("data", &json_path_parts.join("."))
-    } else {
-        let last_alias = &each_joins.last().expect("each_joins is non-empty").1;
-        let source = format!("{last_alias}.value");
-
-        if json_path_parts.is_empty() {
-            conn.json_extract_expr(&source, BLOCK_TYPE_KEY)
-        } else {
-            json_path_parts.push(BLOCK_TYPE_KEY.to_string());
-            conn.json_extract_expr(&source, &json_path_parts.join("."))
-        }
-    }
-}
-
-/// Build the source expression for a `json_each()` join.
-///
-/// If there are prior `json_each` joins, references the last alias's `.value`.
-/// Otherwise, references `{join_table}.data`. Accumulated group path parts
-/// are included in the JSON path.
-fn build_json_each_source(
-    conn: &dyn DbConnection,
-    each_joins: &[(String, String)],
-    json_path_parts: &[String],
-    segment: &str,
-    join_table: &str,
-) -> String {
-    let mut path_parts: Vec<&str> = json_path_parts
-        .iter()
-        .map(std::string::String::as_str)
-        .collect();
-    path_parts.push(segment);
-    let json_path = path_parts.join(".");
-
-    if let Some((_src, alias)) = each_joins.last() {
-        conn.json_extract_expr(&format!("{alias}.value"), &json_path)
-    } else {
-        conn.json_extract_expr(&format!("{join_table}.data"), &json_path)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::query::filter::resolve::test_helpers::*;
+
+    fn walk_block_fields(
+        conn: &dyn DbConnection,
+        segments: &[&str],
+        blocks: &[BlockDefinition],
+        join_table: &str,
+    ) -> Result<JsonWalkResult> {
+        JsonWalk::block_row(join_table, blocks).walk(conn, segments)
+    }
+
+    fn walk_array_column(
+        conn: &dyn DbConnection,
+        container: &FieldDefinition,
+        segments: &[&str],
+    ) -> Result<JsonWalkResult> {
+        let column = format!("\"posts_items\".\"{}\"", container.name);
+
+        JsonWalk::array_column(conn, column, container)?.walk(conn, segments)
+    }
+
+    /// A group column of an array row is read by its JSON path, groups nesting.
+    #[test]
+    fn array_group_column_extends_the_path() {
+        let (_dir, conn) = test_conn();
+        let mut geo = make_field("geo", FieldType::Group, false);
+        geo.fields = vec![make_field("lat", FieldType::Number, false)];
+        let mut address = make_field("address", FieldType::Group, false);
+        address.fields = vec![geo];
+
+        let (joins, expr, leaf, _) = walk_array_column(&conn, &address, &["geo", "lat"]).unwrap();
+        assert!(joins.is_empty());
+        assert_eq!(
+            expr,
+            "json_extract(\"posts_items\".\"address\", '$.geo.lat')"
+        );
+        assert_eq!(leaf, Some(FieldType::Number));
+    }
+
+    /// Regression: an array row's nested array was not filterable — only a
+    /// group column was. Its rows are expanded straight from the column.
+    #[test]
+    fn array_nested_array_column_expands_its_rows() {
+        let (_dir, conn) = test_conn();
+        let sizes = make_array_field("sizes", vec![make_field("label", FieldType::Text, false)]);
+
+        let (joins, expr, _, _) = walk_array_column(&conn, &sizes, &["label"]).unwrap();
+        assert_eq!(
+            joins,
+            vec![("\"posts_items\".\"sizes\"".to_string(), "j0".to_string())]
+        );
+        assert_eq!(expr, "json_extract(j0.value, '$.label')");
+    }
+
+    /// Regression: an array row's nested blocks were not filterable; now at
+    /// any depth, `_block_type` included.
+    #[test]
+    fn array_nested_blocks_column_reaches_any_depth() {
+        let (_dir, conn) = test_conn();
+        let inner = make_array_field("rows", vec![make_field("cell", FieldType::Text, false)]);
+        let sections = make_blocks_field("sections", vec![make_block_def("grid", vec![inner])]);
+
+        let (joins, expr, _, _) = walk_array_column(&conn, &sections, &["rows", "cell"]).unwrap();
+        assert_eq!(joins.len(), 2);
+        assert_eq!(joins[0].0, "\"posts_items\".\"sections\"");
+        assert_eq!(joins[1].0, "json_extract(j0.value, '$.rows')");
+        assert_eq!(expr, "json_extract(j1.value, '$.cell')");
+
+        let (_, expr, _, _) = walk_array_column(&conn, &sections, &["_block_type"]).unwrap();
+        assert_eq!(expr, "json_extract(j0.value, '$._block_type')");
+    }
+
+    /// `_block_type` names a block row's type; a group or an array row has
+    /// none, so a path asking for it there is refused rather than read as NULL.
+    #[test]
+    fn block_type_outside_a_block_row_is_rejected() {
+        let (_dir, conn) = test_conn();
+        let mut meta = make_field("meta", FieldType::Group, false);
+        meta.fields = vec![make_field("title", FieldType::Text, false)];
+        let block_defs = vec![make_block_def("rich", vec![meta.clone()])];
+
+        let err = walk_block_fields(
+            &conn,
+            &["meta", "_block_type"],
+            &block_defs,
+            "posts_content",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("not in a block row"), "{err}");
+
+        let err = walk_array_column(&conn, &meta, &["_block_type"]).unwrap_err();
+        assert!(err.to_string().contains("not in a block row"), "{err}");
+    }
+
+    #[test]
+    fn a_value_sub_field_is_not_a_container() {
+        let (_dir, conn) = test_conn();
+        let name = make_field("name", FieldType::Text, false);
+
+        let err = walk_array_column(&conn, &name, &["x"]).unwrap_err();
+        assert!(err.to_string().contains("has no sub-fields"), "{err}");
+    }
 
     #[test]
     fn walk_block_simple_scalar() {
@@ -190,7 +343,7 @@ mod tests {
         let (joins, expr, _leaf, _list) =
             walk_block_fields(&conn, &["body"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
-        assert_eq!(expr, "json_extract(data, '$.body')");
+        assert_eq!(expr, "json_extract(posts_content.data, '$.body')");
     }
 
     #[test]
@@ -203,7 +356,7 @@ mod tests {
         let (joins, expr, _leaf, _list) =
             walk_block_fields(&conn, &["meta", "title"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
-        assert_eq!(expr, "json_extract(data, '$.meta.title')");
+        assert_eq!(expr, "json_extract(posts_content.data, '$.meta.title')");
     }
 
     #[test]
@@ -339,7 +492,7 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("must end on a scalar")
+                .contains("must end on a value field")
         );
     }
 
@@ -370,7 +523,7 @@ mod tests {
         let (joins, expr, _leaf, _list) =
             walk_block_fields(&conn, &["_block_type"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
-        assert_eq!(expr, "json_extract(data, '$._block_type')");
+        assert_eq!(expr, "json_extract(posts_content.data, '$._block_type')");
     }
 
     #[test]
@@ -431,7 +584,7 @@ mod tests {
 
         let (_, expr, leaf, list) =
             walk_block_fields(&conn, &["tags"], &block_defs, "posts_content").unwrap();
-        assert_eq!(expr, "json_extract(data, '$.tags')");
+        assert_eq!(expr, "json_extract(posts_content.data, '$.tags')");
         assert_eq!(leaf, Some(FieldType::Select));
         assert_eq!(list, Some(ListLeaf::Scalar(FieldType::Select)));
 
@@ -469,7 +622,7 @@ mod tests {
         let (joins, expr, leaf, _) =
             walk_block_fields(&conn, &["caption"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
-        assert_eq!(expr, "json_extract(data, '$.caption')");
+        assert_eq!(expr, "json_extract(posts_content.data, '$.caption')");
         assert_eq!(leaf, Some(FieldType::Text));
 
         assert!(

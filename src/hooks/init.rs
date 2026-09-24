@@ -104,6 +104,12 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     super::startup_checks::validate_required_locales(&snapshot, &config.locale.locales)
         .context("Invalid required_locales configuration")?;
 
+    // A relationship/upload/join whose target collection is not registered
+    // would fail the ref-count recompute and every reference write — reject
+    // it (and an upload targeting a non-upload collection) at load.
+    super::startup_checks::validate_relation_targets(&snapshot)
+        .context("Relationship target validation failed")?;
+
     // Reject definitions whose generated table names collide (e.g. a
     // collection slugged `posts_tags` vs the `tags` array field of `posts`).
     super::startup_checks::validate_table_name_collisions(&snapshot)

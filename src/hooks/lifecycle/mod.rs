@@ -9,6 +9,7 @@ mod types;
 mod validation;
 
 // Re-exports (preserves all existing external import paths)
+pub(crate) use context::operation;
 pub use context::{
     AccessCheckInput, AccessContext, AuthStrategyContext, AuthStrategyInput, ConditionContext,
     FieldHookContext, HookContext, HookContextBuilder, JobHandlerContext, JobInfo,
@@ -18,7 +19,7 @@ pub use context::{
 pub(crate) use runner::run_effects_on_vm;
 pub use runner::{
     EventAfterReadInput, FieldHooksCall, FieldWriteCtx, HookRunner, HookRunnerBuilder,
-    PublishEventInput, RenderCrud, RenderInfo, RenderParams, VmPoolExhausted,
+    MigrationCall, PublishEventInput, RenderCrud, RenderInfo, RenderParams, VmPoolExhausted,
 };
 pub use types::{
     DisplayConditionResult, FieldHookEvent, FileCleanupQueue, HookEvent, InitPhase, LuaCrudInfra,

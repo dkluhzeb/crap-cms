@@ -27,13 +27,13 @@ crap.globals.define("site_settings", {
 | `labels.singular` | string | slug | Singular name (e.g., "Site Settings") |
 | `labels.plural` | string | slug | Plural name |
 | `fields` | FieldDefinition[] | `{}` | Field definitions |
-| `hooks` | table | `{}` | Same lifecycle hooks as collections |
+| `hooks` | table | `{}` | The collection lifecycle hooks except `before_delete` / `after_delete` — a global is never deleted, so those are rejected at load |
 | `access` | table | `{}` | Access rules. Globals honor `read`, `draft`, `update`, and the `versions` toggle — there is no `create`/`delete`/`trash` (a global has one row), and global access functions must return `true`/`false`, not a filter table. See [Access Control](../access-control/overview.md). |
-
-With `versions` enabled, publishing a global while a draft is pending takes the pending draft as its base, exactly like a collection document — see [Versions](../collections/versions.md#updating-documents).
 | `versions` | boolean or table | `nil` | Versioning config (same as collections) |
 | `live` | boolean or string | `nil` | Live update broadcasting (same as collections) |
 | `mcp` | table | `{}` | MCP tool config. `{ description = "..." }` |
+
+With `versions` enabled, publishing a global while a draft is pending takes the pending draft as its base, exactly like a collection document — see [Versions](../collections/versions.md#updating-documents).
 
 ## Database Table
 

@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use super::{
     elements::{ListExpr, ListLeaf, build_list_condition, build_quantified},
     operators::{build_filter_condition, build_op_condition},
-    resolve::SubqueryCondition,
+    resolve::{RowsLocale, SubqueryCondition},
 };
 use crate::core::{BLOCK_TYPE_KEY, FieldType};
 use crate::db::{
@@ -19,7 +19,7 @@ use crate::db::{
 pub(super) struct SubqueryScope<'a> {
     pub(super) join_table: &'a str,
     pub(super) parent_table: &'a str,
-    pub(super) locale_constraint: Option<&'a str>,
+    pub(super) rows_locale: Option<&'a RowsLocale>,
 }
 
 /// Generate the `EXISTS (SELECT 1 FROM … WHERE …)` clause of a subquery filter.
@@ -207,9 +207,9 @@ fn row_select(
     let SubqueryScope {
         join_table,
         parent_table,
-        locale_constraint,
+        ..
     } = *scope;
-    let locale_sql = append_locale_clause(conn, join_table, locale_constraint, params);
+    let locale_sql = append_locale_clause(conn, scope, params);
 
     let (from, parent_id) = match from {
         Some(from) => (from.to_string(), format!("\"{join_table}\".parent_id")),
@@ -221,40 +221,71 @@ fn row_select(
     )
 }
 
-/// Produce the trailing `AND "{join_table}"._locale = ?` fragment and push
-/// the locale bind parameter, or return `""` when no locale constraint applies.
+/// Produce the trailing locale fragment of a localized join table's rows and
+/// push its bind parameters, or return `""` when the rows carry no locale.
 ///
 /// A filter on a localized junction table (an array, blocks or has-many
-/// relationship whose field is localized) only matches rows belonging to the
-/// active locale.
+/// relationship whose field is localized) matches exactly the rows the read
+/// shows: the reading locale's, or — with fallback on — the fallback locale's
+/// for a document holding no row in the reading locale, as hydration falls
+/// back per document.
 fn append_locale_clause(
     conn: &dyn DbConnection,
-    join_table: &str,
-    locale_constraint: Option<&str>,
+    scope: &SubqueryScope<'_>,
     params: &mut Vec<DbValue>,
 ) -> String {
-    let Some(locale) = locale_constraint else {
+    let Some(rows_locale) = scope.rows_locale else {
         return String::new();
     };
 
-    params.push(DbValue::Text(locale.to_string()));
+    let locale_col = format!("\"{}\"._locale", scope.join_table);
+    let locale_ph = push_text(conn, &rows_locale.locale, params);
+
+    let Some(fallback) = rows_locale.fallback.as_deref() else {
+        return format!(" AND {locale_col} = {locale_ph}");
+    };
+
+    let fallback_ph = push_text(conn, fallback, params);
+    let no_locale_rows = no_locale_rows_sql(conn, scope, &rows_locale.locale, params);
+
     format!(
-        " AND \"{}\"._locale = {}",
-        join_table,
-        conn.placeholder(params.len())
+        " AND ({locale_col} = {locale_ph} OR ({locale_col} = {fallback_ph} AND {no_locale_rows}))"
     )
+}
+
+/// `NOT EXISTS` over the parent document's rows in `locale` — the document
+/// holds none, so its read shows the fallback locale's rows.
+fn no_locale_rows_sql(
+    conn: &dyn DbConnection,
+    scope: &SubqueryScope<'_>,
+    locale: &str,
+    params: &mut Vec<DbValue>,
+) -> String {
+    let locale_ph = push_text(conn, locale, params);
+
+    format!(
+        "NOT EXISTS (SELECT 1 FROM \"{}\" AS crap_loc WHERE crap_loc.parent_id = \"{}\".id AND crap_loc._locale = {locale_ph})",
+        scope.join_table, scope.parent_table
+    )
+}
+
+/// Bind `value` as text and return its placeholder.
+fn push_text(conn: &dyn DbConnection, value: &str, params: &mut Vec<DbValue>) -> String {
+    params.push(DbValue::Text(value.to_string()));
+
+    conn.placeholder(params.len())
 }
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
-    use crate::db::InMemoryConn;
+    use crate::db::{InMemoryConn, query::filter::localized_rows_fixture};
 
-    fn scope(locale: Option<&'static str>) -> SubqueryScope<'static> {
+    fn scope(rows_locale: Option<&RowsLocale>) -> SubqueryScope<'_> {
         SubqueryScope {
             join_table: "posts_items",
             parent_table: "posts",
-            locale_constraint: locale,
+            rows_locale,
         }
     }
 
@@ -274,7 +305,7 @@ mod tests {
 
         let sql = build_subquery_sql(
             &conn,
-            &scope(Some("de")),
+            &scope(Some(&RowsLocale::new("de", None))),
             &SubqueryCondition::RelatedId,
             &filter("tags.id", FilterOp::NotEquals("t1".into())),
             &mut params,
@@ -289,6 +320,51 @@ mod tests {
             params,
             vec![DbValue::Text("t1".into()), DbValue::Text("de".into())]
         );
+    }
+
+    /// With fallback on, a document's rows match in the reading locale — or in
+    /// the fallback locale when it holds no row in the reading one, the rows
+    /// hydration shows for it.
+    #[test]
+    fn a_fallback_locale_matches_the_rows_of_documents_without_the_reading_locale() {
+        let conn = InMemoryConn::open();
+        let mut params = Vec::new();
+        let rows_locale = RowsLocale::new("de", Some("en"));
+
+        let sql = build_subquery_sql(
+            &conn,
+            &scope(Some(&rows_locale)),
+            &SubqueryCondition::RelatedId,
+            &filter("tags.id", FilterOp::Equals("t1".into())),
+            &mut params,
+        )
+        .unwrap();
+
+        assert_eq!(
+            sql,
+            "EXISTS (SELECT 1 FROM \"posts_items\" WHERE parent_id = \"posts\".id AND \"related_id\" = ?1 \
+             AND (\"posts_items\"._locale = ?2 OR (\"posts_items\"._locale = ?3 AND NOT EXISTS \
+             (SELECT 1 FROM \"posts_items\" AS crap_loc WHERE crap_loc.parent_id = \"posts\".id AND crap_loc._locale = ?4))))"
+        );
+        assert_eq!(
+            params,
+            vec![
+                DbValue::Text("t1".into()),
+                DbValue::Text("de".into()),
+                DbValue::Text("en".into()),
+                DbValue::Text("de".into()),
+            ]
+        );
+    }
+
+    /// Every operator on a localized junction or array matches exactly the
+    /// documents whose shown rows satisfy it — under fallback, without it, and
+    /// for an all-locales read.
+    #[test]
+    fn localized_row_filters_match_the_rows_the_read_shows() {
+        let conn = InMemoryConn::open();
+
+        localized_rows_fixture::assert_filters_match_the_shown_rows(&conn, "posts");
     }
 
     /// A scalar has-many sub-field of an array row: some row whose own list

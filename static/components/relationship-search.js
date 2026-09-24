@@ -12,7 +12,10 @@
  * @attr has-many     Multi-select (chips).
  * @attr polymorphic  Multi-collection.
  * @attr collections  JSON array of collection slugs (when polymorphic).
- * @attr selected     JSON array of `{id, label, collection?}` for pre-selected items.
+ * @attr selected     JSON array of `{id, label, collection?, unavailable?}` for
+ *                    pre-selected items. An `unavailable` item is a stored
+ *                    reference the viewer cannot resolve: it shows a generic
+ *                    label and is submitted back unchanged unless removed.
  * @attr picker       `"drawer"` to enable the browse-drawer UI.
  * @attr required     Required field.
  * @attr readonly     Readonly field.
@@ -53,8 +56,21 @@ const BLUR_CLOSE_MS = 200;
  *   thumbnail_url?: string,
  *   filename?: string,
  *   is_image?: boolean,
+ *   unavailable?: boolean,
  * }} Item
  */
+
+/**
+ * Give an unavailable item (a stored reference the viewer cannot resolve)
+ * its generic display label. The server sends no label for it.
+ *
+ * @param {Item} item
+ * @returns {Item}
+ */
+function labelUnavailable(item) {
+  if (!item?.unavailable) return item;
+  return { ...item, label: t('unavailable_item') };
+}
 
 const sheet = css`
   crap-relationship-search {
@@ -153,6 +169,7 @@ const sheet = css`
     font-size: var(--text-sm);
     font-style: italic;
   }
+  .relationship-search__error { color: var(--color-danger); }
   .relationship-search__tags {
     display: flex;
     flex-wrap: wrap;
@@ -372,6 +389,26 @@ class CrapRelationshipSearch extends HTMLElement {
     else this._renderHasOneDisplay();
   }
 
+  static get observedAttributes() {
+    return ['field-name'];
+  }
+
+  /**
+   * Follow a renamed `field-name`. An array/blocks row that is duplicated,
+   * removed, or moved gets re-numbered by rewriting this attribute; the
+   * hidden input is rebuilt from `_fieldName` on every selection change, so
+   * a stale copy would submit the pick under another row's name.
+   *
+   * @param {string} name
+   * @param {string|null} oldValue
+   * @param {string|null} newValue
+   */
+  attributeChangedCallback(name, oldValue, newValue) {
+    if (name !== 'field-name' || oldValue === newValue || !this._initialized) return;
+    this._fieldName = newValue || '';
+    this._applyFieldName();
+  }
+
   disconnectedCallback() {
     if (this._observer) {
       this._observer.disconnect();
@@ -414,7 +451,7 @@ class CrapRelationshipSearch extends HTMLElement {
 
     try {
       const raw = JSON.parse(this.getAttribute('selected') || '[]');
-      this._selected = Array.isArray(raw) ? raw : [];
+      this._selected = Array.isArray(raw) ? raw.map(labelUnavailable) : [];
     } catch {
       this._selected = [];
     }
@@ -483,6 +520,23 @@ class CrapRelationshipSearch extends HTMLElement {
     });
   }
 
+  /**
+   * Re-stamp every name-derived reference (input id, listbox id, and the
+   * hidden inputs' `name`) from the current `_fieldName`.
+   */
+  _applyFieldName() {
+    if (this._input) {
+      this._input.id = `field-${this._fieldName}`;
+      this._input.setAttribute('aria-controls', `dropdown-${this._fieldName}`);
+    }
+    if (this._dropdown) this._dropdown.id = `dropdown-${this._fieldName}`;
+    for (const hidden of /** @type {NodeListOf<HTMLInputElement>} */ (
+      this._hiddenContainer?.querySelectorAll('input[type="hidden"]') ?? []
+    )) {
+      hidden.name = this._fieldName;
+    }
+  }
+
   /* ── State sync ─────────────────────────────────────────────── */
 
   _syncHiddenInputs() {
@@ -530,17 +584,35 @@ class CrapRelationshipSearch extends HTMLElement {
     );
     if (!viewLink) return;
 
-    const id = this._selected[0]?.id || '';
-    if (!id) {
+    const target = this._viewTarget(this._selected[0]);
+    if (!target) {
       viewLink.hidden = true;
       return;
     }
-    const col = viewLink.getAttribute('data-collection') || this._collection;
-    const href = `/admin/collections/${col}/${id}`;
+    const col = target.collection || viewLink.getAttribute('data-collection') || this._collection;
+    const href = `/admin/collections/${encodeURIComponent(col)}/${encodeURIComponent(target.id)}`;
     viewLink.setAttribute('href', href);
     viewLink.setAttribute('hx-get', href);
     viewLink.hidden = false;
     if (typeof htmx !== 'undefined') htmx.process(viewLink);
+  }
+
+  /**
+   * The document a has-one selection points at. A polymorphic pick carries
+   * the composite `collection/id` as its id, which is split into the target
+   * collection and the bare document id.
+   *
+   * @param {Item|undefined} item
+   * @returns {{ collection: string, id: string }|null}
+   */
+  _viewTarget(item) {
+    const id = item?.id || '';
+    if (!id || item?.unavailable) return null;
+    if (!this._polymorphic) return { collection: '', id };
+
+    const slash = id.indexOf('/');
+    if (slash <= 0) return { collection: item?.collection || '', id };
+    return { collection: id.slice(0, slash), id: id.slice(slash + 1) };
   }
 
   /* ── Rendering ──────────────────────────────────────────────── */
@@ -690,11 +762,34 @@ class CrapRelationshipSearch extends HTMLElement {
       this._activeIndex = -1;
       this._renderDropdown();
     } catch {
-      // Aborted or network error — leave results untouched.
+      // A superseded search was aborted on purpose; anything else (a refused
+      // or failed request) is an error, not "no results".
+      if (signal.aborted) return;
+      this._renderSearchError();
     }
   }
 
+  /** Show the dropdown with a "search failed" row instead of results. */
+  _renderSearchError() {
+    if (!this._dropdown || !this._input) return;
+    clear(this._dropdown);
+    this._results = [];
+    this._activeIndex = -1;
+    this._dropdown.append(
+      h('div', {
+        class: ['relationship-search__empty', 'relationship-search__error'],
+        role: 'alert',
+        text: t('search_failed'),
+      }),
+    );
+    this._dropdown.hidden = false;
+    this._input.setAttribute('aria-expanded', 'true');
+  }
+
   /**
+   * Throws when the request fails or the server refuses it (403, 500, …),
+   * so a failure is never shown as an empty result list.
+   *
    * @param {string} collection
    * @param {string} query
    * @param {AbortSignal} signal
@@ -703,13 +798,15 @@ class CrapRelationshipSearch extends HTMLElement {
   async _searchSingle(collection, query, signal) {
     const url = `/admin/api/search/${encodeURIComponent(collection)}?q=${encodeURIComponent(query)}&limit=20`;
     const resp = await fetch(url, { signal });
-    if (!resp.ok) return [];
+    if (!resp.ok) throw new Error(`search failed: ${resp.status}`);
     return resp.json();
   }
 
   /**
    * Fan out across `_collections`, tag each result with its collection,
    * use composite `${col}/${id}` as the picker id, and group by collection.
+   * A failed collection fails the search: a partial list would read as
+   * "the others have no matches".
    *
    * @param {string} query
    * @param {AbortSignal} signal
@@ -718,16 +815,12 @@ class CrapRelationshipSearch extends HTMLElement {
   async _searchPolymorphic(query, signal) {
     const buckets = await Promise.all(
       this._collections.map(async (col) => {
-        try {
-          const items = await this._searchSingle(col, query, signal);
-          return items.map((item) => ({
-            id: `${col}/${item.id}`,
-            label: item.label,
-            collection: col,
-          }));
-        } catch {
-          return [];
-        }
+        const items = await this._searchSingle(col, query, signal);
+        return items.map((item) => ({
+          id: `${col}/${item.id}`,
+          label: item.label,
+          collection: col,
+        }));
       }),
     );
     if (signal.aborted) return [];
@@ -914,7 +1007,7 @@ class CrapRelationshipSearch extends HTMLElement {
       type: 'text',
       placeholder: t('search'),
       autocomplete: 'off',
-      'aria-label': 'Search',
+      'aria-label': t('search'),
     });
   }
 
@@ -963,7 +1056,17 @@ class CrapRelationshipSearch extends HTMLElement {
           `/admin/api/search/${encodeURIComponent(this._collection)}` +
           `?q=${encodeURIComponent(query)}&limit=${DRAWER_PAGE_SIZE}&offset=${offset}`;
         const resp = await fetch(url, { signal: fetchCtrl.signal });
-        if (!resp.ok) return;
+        if (!resp.ok) {
+          ctx.results.replaceChildren(
+            h('div', {
+              class: ['relationship-search__empty', 'relationship-search__error'],
+              role: 'alert',
+              text: t('search_failed'),
+            }),
+          );
+          ctx.loadMore.hidden = true;
+          return;
+        }
         /** @type {Item[]} */
         const items = await resp.json();
         for (const item of items) {

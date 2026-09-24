@@ -55,6 +55,8 @@
         type="file"
         id="upload-file"
         name="_file"
+        data-max-file-size="{{upload.max_file_size}}"
+        data-max-file-size-display="{{upload.max_file_size_display}}"
         {{#if upload.accept}}accept="{{upload.accept}}"{{/if}}
         {{#unless editing}}required{{/unless}}
       />

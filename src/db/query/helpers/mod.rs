@@ -22,6 +22,7 @@ mod document;
 mod encode;
 mod has_many;
 mod limits;
+mod locale_clause;
 mod naming;
 mod sql;
 
@@ -32,7 +33,7 @@ pub(crate) use coerce::{coerce_date_value, coerce_value, validate_no_null_byte};
 pub(crate) use coerce_json::{
     coerce_date_value_json, coerce_json_value, validate_no_null_byte_json,
 };
-pub(crate) use date::{normalize_date_value, normalize_date_with_timezone, utc_now};
+pub(crate) use date::{DayRange, normalize_date_value, normalize_date_with_timezone, utc_now};
 pub(crate) use document::stored_document_values;
 pub(in crate::db::query) use encode::companion_writes;
 pub(crate) use encode::{
@@ -43,6 +44,7 @@ pub(crate) use has_many::{
     ListPlace, coerce_has_many_scalar, is_polymorphic, number_element, parse_has_many_scalar,
     reference_list, stored_list,
 };
+pub(in crate::db::query) use locale_clause::outside_locales_clause;
 pub(crate) use naming::{
     column_belongs_to, global_table, join_table, lang_column, locale_column, tz_column,
     versions_table,

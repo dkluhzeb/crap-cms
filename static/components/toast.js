@@ -28,6 +28,7 @@
 
 import { css } from './_internal/css.js';
 import { h } from './_internal/h.js';
+import { parseToastHeader } from './_internal/util/toast.js';
 import { EV_TOAST_REQUEST } from './events.js';
 
 /** Default auto-dismiss delay in ms. Pass `0` to {@link CrapToast.show} to keep open. */
@@ -101,6 +102,12 @@ class CrapToast extends HTMLElement {
     if (this._connected) return;
     this._connected = true;
 
+    // The host is a polite live region, present before any toast lands in
+    // it, so screen readers announce each message; an error toast is its
+    // own `alert` and interrupts.
+    if (!this.hasAttribute('role')) this.setAttribute('role', 'status');
+    if (!this.hasAttribute('aria-live')) this.setAttribute('aria-live', 'polite');
+
     this._onToastRequest = (e) => {
       const detail = /** @type {CustomEvent<ToastDetail & { _handled?: boolean }>} */ (e).detail;
       if (detail._handled) return;
@@ -130,7 +137,11 @@ class CrapToast extends HTMLElement {
    */
   show(opts) {
     const { message, type = 'info', duration = DEFAULT_DURATION_MS } = opts;
-    const toast = h('div', { class: ['toast', `toast--${type}`], text: message });
+    const toast = h('div', {
+      class: ['toast', `toast--${type}`],
+      role: type === 'error' ? 'alert' : null,
+      text: message,
+    });
     /** @type {ShadowRoot} */ (this.shadowRoot).appendChild(toast);
 
     const remove = () => {
@@ -160,13 +171,8 @@ class CrapToast extends HTMLElement {
 
     /** @type {ToastType} */
     const fallbackType = xhr.status >= 400 ? 'error' : 'success';
-    try {
-      /** @type {{ message: string, type?: ToastType }} */
-      const data = JSON.parse(header);
-      this.show({ message: data.message, type: data.type || fallbackType });
-    } catch {
-      this.show({ message: header, type: fallbackType });
-    }
+    const data = parseToastHeader(header);
+    if (data) this.show({ message: data.message, type: data.type || fallbackType });
   }
 }
 

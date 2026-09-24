@@ -266,7 +266,7 @@ Empty `mime_types` array also accepts any file.
 
 Every upload passes a fixed validation chain before anything is written to storage:
 
-1. **Size** — the file must not exceed the collection's `max_file_size` (or the global `[upload] max_file_size`).
+1. **Size** — the file must not exceed the collection's `max_file_size` (or the global `[upload] max_file_size`). On the routes that carry a file — the collection's admin create/update and the `/api/upload` routes — the request body limit follows that collection's limit (plus 1 MiB for the other form fields), so a collection may allow larger files than the global default. Every other route keeps the global limit plus 1 MiB. In the admin UI the file input refuses an oversized pick as soon as it is made; a request that exceeds the body limit anyway is answered `413` with an error toast, and the form keeps every edit.
 2. **MIME allowlist** — the claimed `Content-Type` must match the collection's `mime_types` patterns.
 3. **Magic-byte verification** — the file's leading bytes are sniffed; when the content is recognisable, the detected type must agree with the claimed type (`File content does not match claimed type 'image/png' (detected 'text/html')`), and the detected type is what every later check uses. A renamed `.html` cannot pass as `image/*`.
 4. **Extension ↔ content cross-check** — for extensions that resolve to a type a browser would *execute* on serve (HTML, XHTML, SVG, XML, JavaScript) the actual content type must match exactly; a PNG saved as `logo.svg` is rejected. Inert extensions (`.txt`, `.pdf`, `.zip`, …) are not cross-checked because they are served with non-executing content types regardless.
@@ -296,7 +296,7 @@ This works for all image URLs (`/uploads/...`) including originals and resized v
 
 Upload collections include `focal_x` and `focal_y` fields that store the subject/focus coordinates of an image as floats in the 0.0–1.0 range. Center is `(0.5, 0.5)`.
 
-**Setting in Admin UI:** On the upload collection edit page, click anywhere on the image preview to set the focal point. A crosshair marker shows the current position. The values are saved with the form.
+**Setting in Admin UI:** On the upload collection edit page, click anywhere on the image preview to set the focal point — or focus the preview (Tab) and move it with the arrow keys (hold Shift for a finer step). A crosshair marker shows the current position. The values are saved with the form, and moving the point counts as an unsaved change.
 
 **Frontend usage:** Use the coordinates with CSS `object-position` to keep the subject in frame when cropping at different aspect ratios:
 

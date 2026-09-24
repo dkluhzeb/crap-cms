@@ -1,7 +1,7 @@
 //! Shared parsing helpers used by both collection and global definition parsers.
 
 use anyhow::{Result, bail};
-use mlua::{Lua, Result as LuaResult, Table, Value};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 use tracing::warn;
 
 use crate::core::{
@@ -13,7 +13,7 @@ use crate::core::{
 };
 
 use super::{
-    fields::parse_fields,
+    fields::{describe, parse_fields, whole_number},
     helpers::{
         deny_unknown_keys, get_bool, get_localized_string, get_optional_hook_ref, get_string,
         get_table, parse_hooks,
@@ -34,6 +34,19 @@ pub(crate) const COLLECTION_HOOK_KEYS: &[&str] = &[
     "after_read",
     "before_delete",
     "after_delete",
+    "before_broadcast",
+];
+
+/// The subset of [`COLLECTION_HOOK_KEYS`] valid on a *global*. A global is
+/// never deleted, so `before_delete` / `after_delete` never fire and are
+/// rejected at load (`reject_global_only_hook_keys` in `parse::global`). The
+/// `make hook` scaffold offers this list when the target is a global.
+pub(crate) const GLOBAL_HOOK_KEYS: &[&str] = &[
+    "before_validate",
+    "before_change",
+    "after_change",
+    "before_read",
+    "after_read",
     "before_broadcast",
 ];
 
@@ -311,12 +324,38 @@ pub(super) fn parse_versions_config(config: &Table) -> LuaResult<Option<Versions
         Value::Boolean(true) => Ok(Some(VersionsConfig::new(true, 0))),
         Value::Table(tbl) => {
             let drafts = get_bool(&tbl, "drafts", true)?;
-            let max_versions = tbl.get::<u32>("max_versions").unwrap_or(0);
+            let max_versions = get_max_versions(&tbl)?;
 
             Ok(Some(VersionsConfig::new(drafts, max_versions)))
         }
-        _ => Ok(None),
+        Value::Nil | Value::Boolean(false) => Ok(None),
+        other => Err(RuntimeError(format!(
+            "versions must be a boolean or a table, got {}",
+            other.type_name()
+        ))),
     }
+}
+
+/// `versions.max_versions`: absent is unlimited (`0`); present, it must be a
+/// whole number from `0` to `4294967295` — a negative, fractional or
+/// wrong-typed value is a load error, never silently read as unlimited.
+fn get_max_versions(tbl: &Table) -> LuaResult<u32> {
+    let value = tbl.get::<Value>("max_versions")?;
+
+    let max = match &value {
+        Value::Nil => return Ok(0),
+        Value::Integer(i) => u32::try_from(*i).ok(),
+        Value::Number(n) => whole_number(*n).and_then(|i| u32::try_from(i).ok()),
+        _ => None,
+    };
+
+    max.ok_or_else(|| {
+        RuntimeError(format!(
+            "versions.max_versions must be a whole number from 0 to {}, got {}",
+            u32::MAX,
+            describe(&value)
+        ))
+    })
 }
 
 /// Parse `indexes` from a collection Lua table.
@@ -477,6 +516,36 @@ mod tests {
         assert_eq!(v.max_versions, 50);
     }
 
+    /// Regression: an invalid `max_versions` (negative, fractional, text) was
+    /// read as `0` — unlimited history — without a word. It is a load error
+    /// now, and so is a `versions` value that is neither a boolean nor a table.
+    #[test]
+    fn invalid_versions_config_is_a_load_error() {
+        let lua = Lua::new();
+
+        for bad in ["-1", "2.5", "'50'", "5000000000"] {
+            let tbl: Table = lua
+                .load(format!(
+                    "return {{ versions = {{ max_versions = {bad} }} }}"
+                ))
+                .eval()
+                .unwrap();
+            let err = parse_versions_config(&tbl).unwrap_err().to_string();
+            assert!(err.contains("max_versions"), "{bad}: {err}");
+        }
+
+        let tbl: Table = lua
+            .load("return { versions = { max_versions = 10.0 } }")
+            .eval()
+            .unwrap();
+        let v = parse_versions_config(&tbl).unwrap().unwrap();
+        assert_eq!(v.max_versions, 10, "a whole float is accepted");
+
+        let tbl: Table = lua.load("return { versions = 'yes' }").eval().unwrap();
+        let err = parse_versions_config(&tbl).unwrap_err().to_string();
+        assert!(err.contains("boolean or a table"), "{err}");
+    }
+
     #[test]
     fn test_parse_versions_config_table_defaults() {
         let lua = Lua::new();
@@ -488,12 +557,16 @@ mod tests {
         assert_eq!(v.max_versions, 0);
     }
 
+    /// A `versions` value that is neither a boolean nor a table is a load
+    /// error — it used to be ignored, leaving the collection unversioned.
     #[test]
     fn test_parse_versions_config_other_value() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("versions", 42i64).unwrap();
-        assert!(parse_versions_config(&tbl).unwrap().is_none());
+
+        let err = parse_versions_config(&tbl).unwrap_err();
+        assert!(err.to_string().contains("boolean or a table"), "{err}");
     }
 
     #[test]

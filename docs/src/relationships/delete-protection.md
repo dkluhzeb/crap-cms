@@ -151,4 +151,14 @@ referrers are.
 
 ## Migration
 
-When upgrading to a version with reference counting, the `_ref_count` column is automatically added to all collection and global tables. A one-time backfill migration computes the initial counts from existing relationship data. This runs automatically on first startup and is gated by a `_crap_meta` flag so it only runs once.
+When upgrading to a version with reference counting, the `_ref_count` column is automatically added to all collection and global tables. A backfill computes the counts from the stored relationship data on startup and records what it counted in `_crap_meta`, per collection and global:
+
+- the version of the count computation,
+- the configured locales (a localized field is counted in every locale's column), and
+- the reference topology of the whole schema: every collection and global that holds references, with each relationship and upload field at any depth — inside groups, arrays and blocks — its path, its target collections (all of a polymorphic field's), whether it holds a list, and whether it or a parent group is localized. Collections and globals without any reference field are not part of it.
+
+When any of these changes — a relationship field added, removed, renamed or pointed at another collection, a collection or global holding references added or removed, a locale added or dropped — every count is recomputed once on the next startup, inside the schema-sync transaction. Otherwise the startup check writes nothing. Changes that don't touch references don't trigger a recount: adding a text field, or adding or removing a collection or global that has no relationship or upload field.
+
+A newly added collection or global is recorded without a recount while its table is still empty — it holds nothing to count, and nothing can reference its documents yet. If its table already holds rows (a collection removed from the configuration and later added back, keeping its old table), every count is recomputed once.
+
+`crap-cms db cleanup --confirm`, which deletes stored rows (and with them references), recomputes the counts in the same transaction.

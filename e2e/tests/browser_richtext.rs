@@ -15,9 +15,14 @@ use std::time::Duration;
 
 use tokio::time::sleep;
 
-use crap_cms::core::{collection::*, field::*};
+use crap_cms::{
+    config::CrapConfig,
+    core::{collection::*, field::*},
+};
 
-use crap_cms_e2e::{BrowserTestCtx, browser, helpers::*, setup_browser_test};
+use crap_cms_e2e::{
+    BrowserTestCtx, browser, helpers::*, setup_browser_test, setup_browser_test_with_config,
+};
 
 fn make_richtext_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("articles");
@@ -224,6 +229,132 @@ async fn richtext_bold_toolbar() {
         textarea_val.contains("<strong>"),
         "textarea should contain <strong> after applying bold, got: {textarea_val}"
     );
+
+    server_handle.abort();
+}
+
+// ── richtext_toolbar_edit_marks_the_form_dirty ───────────────────────────
+
+/// Regression: the editor wrote the hidden textarea without firing any
+/// event, so a toolbar command (no keystroke reaches the form) left the
+/// unsaved-changes guard unaware and the edit could be lost without a prompt.
+#[tokio::test(flavor = "multi_thread")]
+async fn richtext_toolbar_edit_marks_the_form_dirty() {
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        browser: _browser,
+        ..
+    } = setup_browser_test(
+        vec![make_richtext_def(), make_users_def()],
+        vec![],
+        "brt4@test.com",
+        "pass123",
+    )
+    .await;
+
+    page.goto(format!("{base_url}/admin/collections/articles/create"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+
+    browser::wait_for_js(&page, "document.querySelector('crap-richtext')?._view").await;
+    browser::wait_for_js(
+        &page,
+        "document.querySelector('crap-dirty-form')?._armed === true",
+    )
+    .await;
+
+    page.evaluate(
+        "() => document.querySelector('crap-richtext').shadowRoot.querySelector('[data-cmd=\"hr\"]').click()",
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('crap-dirty-form')?._dirty === true"
+        )
+        .await,
+        "a toolbar edit must mark the form dirty"
+    );
+
+    server_handle.abort();
+}
+
+// ── richtext_parses_stored_html_inertly ──────────────────────────────────
+
+/// Regression: stored HTML was parsed via `innerHTML` on an element of the
+/// live document, where an `<img onerror>` in the stored value runs. The
+/// default CSP happens to block inline handlers, so the test turns it off to
+/// see the parser itself: it must build an inert document.
+#[tokio::test(flavor = "multi_thread")]
+async fn richtext_parses_stored_html_inertly() {
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+    config.admin.dev_mode = true;
+    config.admin.csp.enabled = false;
+
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        browser: _browser,
+        app: _app,
+        ..
+    } = setup_browser_test_with_config(
+        vec![make_richtext_def(), make_users_def()],
+        vec![],
+        config,
+        "brt5@test.com",
+        "pass123",
+    )
+    .await;
+
+    page.goto(format!("{base_url}/admin/collections/articles/create"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    browser::wait_for_js(&page, "customElements.get('crap-richtext')").await;
+
+    // Mount a fresh editor over a hostile stored value and record whether
+    // the image's error handler fires.
+    page.evaluate(
+        "() => { \
+            window.__richtextPwned = false; \
+            window.__pwn = () => { window.__richtextPwned = true; }; \
+            const host = document.createElement('crap-richtext'); \
+            const ta = document.createElement('textarea'); \
+            ta.value = '<p>hi</p><img src=\"x:broken\" onerror=\"window.__pwn()\">'; \
+            host.appendChild(ta); \
+            document.body.appendChild(host); \
+        }",
+    )
+    .await
+    .unwrap();
+
+    browser::wait_for_js(
+        &page,
+        "document.querySelectorAll('crap-richtext')[1]?._view",
+    )
+    .await;
+    sleep(Duration::from_millis(300)).await;
+
+    let pwned: bool = page
+        .evaluate("() => window.__richtextPwned")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert!(!pwned, "stored HTML must not run event handlers");
 
     server_handle.abort();
 }

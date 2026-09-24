@@ -46,9 +46,9 @@ Even though filter values are always sent as JSON strings, they are **coerced to
 
 | Field type | Bound as | Notes |
 |------------|----------|-------|
-| Number | `REAL` (f64) | Invalid / non-finite numbers fall back to `TEXT` with a runtime warning |
-| Checkbox | `INTEGER` | Accepts `"true"`/`"false"`/`"1"`/`"0"` (and `"yes"`/`"no"`/`"on"`/`"off"`); unknown values fall back to `TEXT` |
-| Date | `TEXT` | Normalized via ISO so lexicographic comparison works |
+| Number | `REAL` (f64) | A value that is not a finite number is an `INVALID_ARGUMENT` error naming the field |
+| Checkbox | `INTEGER` | Accepts `"true"`/`"false"`/`"1"`/`"0"` (and `"yes"`/`"no"`/`"on"`/`"off"`); any other value is an `INVALID_ARGUMENT` error naming the field |
+| Date (and `created_at` / `updated_at`) | `TEXT` | Normalized to the stored UTC ISO form so lexicographic comparison works; a bare `YYYY-MM-DD` covers the whole UTC day (`equals` = on that day, `greater_than` = from the next midnight, …) — see [Dates](../query-and-filters/overview.md#dates-a-bare-day-covers-the-whole-day) |
 | Text-like fields | `TEXT` | Default for everything else |
 | Text-only operators (`like`, `contains`) | `TEXT` | Always bound as text even on numeric columns |
 

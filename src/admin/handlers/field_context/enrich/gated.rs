@@ -5,6 +5,10 @@
 //! lookups therefore apply the target collection's `published ∪ draft` view
 //! filter (downgraded to the viewer's access) in SQL — the same scope a normal
 //! read uses — instead of a raw, unscoped query.
+//!
+//! A forward reference whose target is not visible keeps its stored id — part
+//! of the document being edited, not of the target — as an unlabelled
+//! "unavailable" item, so saving the form never drops the reference.
 
 use std::slice;
 

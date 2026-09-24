@@ -136,7 +136,10 @@ pub(crate) fn register_undelete(lua: &Lua, _table: &Table, registry: Arc<Registr
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+    use crate::hooks::lua_api::to_lua_value;
 
     /// Regression (wire-parity): `crap.collections.undelete` rejected an
     /// `events` option (`deny_unknown_fields`) while gRPC and MCP both offer
@@ -147,10 +150,7 @@ mod tests {
         let lua = Lua::new();
 
         let opts: UndeleteOptions = lua
-            .from_value(
-                lua.to_value(&serde_json::json!({ "events": false }))
-                    .unwrap(),
-            )
+            .from_value(to_lua_value(&lua, &json!({ "events": false })).unwrap())
             .unwrap();
         assert!(!opts.events);
         assert!(!opts.override_access);

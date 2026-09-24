@@ -299,6 +299,7 @@ class CrapArrayField extends HTMLElement {
       switch (kind) {
         case 'name':
         case 'fieldName':
+        case 'fieldNameAttr':
           return s.replaceAll(bracket, bracketRepl);
         case 'tplId':
           return s.replaceAll(dash, dashRepl);
@@ -342,6 +343,7 @@ class CrapArrayField extends HTMLElement {
         switch (kind) {
           case 'name':
           case 'fieldName':
+          case 'fieldNameAttr':
             return s.replace(bracketPat, `$1${idx}$2`);
           case 'tplId':
             return s.replace(dashPat, `$1${idx}`);

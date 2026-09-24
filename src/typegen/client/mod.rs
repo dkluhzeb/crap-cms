@@ -23,12 +23,11 @@
 //!
 //! The walk assumes a complete registry: a relationship/upload whose target
 //! collection isn't registered would emit a dangling type reference (e.g.
-//! `Rel<Foo>` with no `Foo`). That's a schema error and should be rejected by
-//! registry-level validation (a dangling relationship target), not papered over
-//! here — silently degrading it to an id string would hide the bug. **TODO
-//! (registry module):** reject relationships/uploads targeting unknown
-//! collections at load. Same-name type collisions *are* caught here, at
-//! generation time (see `driver::check_type_name_collisions`).
+//! `Rel<Foo>` with no `Foo`). That's a schema error, rejected at load by the
+//! startup relation-target check (`hooks::startup_checks::validate_relation_targets`),
+//! so it is not papered over here — silently degrading it to an id string would
+//! hide the bug. Same-name type collisions *are* caught here, at generation time
+//! (see `driver::check_type_name_collisions`).
 
 mod driver;
 mod go;

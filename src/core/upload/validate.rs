@@ -79,7 +79,7 @@ pub(super) fn validate_upload(
         validate_svg_content(&file.data)?;
     }
 
-    let max_size = upload_config.max_file_size.unwrap_or(global_max_file_size);
+    let max_size = upload_config.max_file_size_or(global_max_file_size);
 
     if file.data.len() as u64 > max_size {
         bail!(

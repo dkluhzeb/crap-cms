@@ -405,7 +405,7 @@ fn execute_render_hooks(lua: &Lua, context: JsonValue, info: &RenderInfo) -> Jso
         }
     };
 
-    let info_lua = match lua.to_value(info) {
+    let info_lua = match lua_api::to_lua_value(lua, info) {
         Ok(v) => v,
         Err(e) => {
             warn!("before_render: failed to convert render info to Lua: {e}");

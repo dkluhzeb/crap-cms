@@ -10,9 +10,8 @@ use crate::{
 };
 
 use super::post_process::{PostProcessCall, post_process_docs};
-use super::validate_filters::{
-    QueryFieldRefs, reject_unreadable_query_fields, validate_user_filters, validate_user_select,
-};
+use super::query_access::{QueryFieldRefs, reject_unreadable_query_fields};
+use super::validate_filters::{validate_user_filters, validate_user_select};
 
 type Result<T> = std::result::Result<T, ServiceError>;
 

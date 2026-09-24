@@ -7,11 +7,11 @@
 //! taken over live here, so no two conversions can disagree on when a shape
 //! counts as changed.
 
-use std::fmt::Write as _;
-
 use sha2::{Digest, Sha256};
 
-use crate::core::{BlockDefinition, FieldChildren, FieldDefinition, field_children};
+use crate::core::{
+    BlockDefinition, FieldChildren, FieldDefinition, field_children, hex::hex_encode,
+};
 
 /// Whether a leaf field takes part in a fingerprint.
 pub(in crate::db::migrate) type KeepLeaf<'a> = &'a dyn Fn(&FieldDefinition) -> bool;
@@ -26,12 +26,7 @@ pub(in crate::db::migrate) fn versioned_fingerprint(version: &str, parts: &[Stri
         hasher.update(format!("{part}\n").as_bytes());
     }
 
-    let mut value = format!("{version}:");
-    for byte in &hasher.finalize()[..8] {
-        let _ = write!(value, "{byte:02x}");
-    }
-
-    value
+    format!("{version}:{}", hex_encode(&hasher.finalize()[..8]))
 }
 
 /// The leaves of `fields` at any depth that `keep` accepts, named by path.

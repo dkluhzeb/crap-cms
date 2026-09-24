@@ -267,9 +267,17 @@ async fn pg_list_filters_match_element_by_element() {
 
 // ── The schema sync keeps every stored list a list ────────────────────────
 
+/// The relationship target of [`sync_registry`]'s `items.related`, named after
+/// the collection so concurrent tests never share it and
+/// [`drop_tables_matching`] removes it with the rest.
+fn target_slug(slug: &str) -> String {
+    format!("{slug}_things")
+}
+
 /// A collection whose `tags` (text), `scores` (number) and `code` (text)
 /// fields hold lists when `has_many`, and whose `items` rows hold a
-/// relationship — a has-many one when `has_many`.
+/// relationship — a has-many one when `has_many` — to a registered target
+/// collection (a dangling target fails the ref-count recompute).
 fn sync_registry(slug: &str, has_many: bool, code_type: FieldType) -> Registry {
     let field = |name: &str, ft: FieldType| {
         FieldDefinition::builder(name, ft)
@@ -277,7 +285,7 @@ fn sync_registry(slug: &str, has_many: bool, code_type: FieldType) -> Registry {
             .build()
     };
     let related = FieldDefinition::builder("related", FieldType::Relationship)
-        .relationship(RelationshipConfig::new("things", has_many))
+        .relationship(RelationshipConfig::new(target_slug(slug), has_many))
         .build();
 
     let mut def = CollectionDefinition::new(slug);
@@ -292,6 +300,7 @@ fn sync_registry(slug: &str, has_many: bool, code_type: FieldType) -> Registry {
 
     let mut registry = Registry::new();
     registry.register_collection(def);
+    registry.register_collection(CollectionDefinition::new(target_slug(slug)));
 
     registry
 }
@@ -375,11 +384,7 @@ async fn pg_sync_stores_single_values_as_lists() {
     );
 
     let registry = sync_registry(&slug, true, FieldType::Text);
-    let def = registry
-        .collections
-        .values()
-        .next()
-        .expect("the collection");
+    let def = registry.get_collection(&slug).expect("the collection");
     let filters = vec![FilterClause::Single(Filter {
         field: "scores".to_string(),
         op: FilterOp::GreaterThan("6".into()),

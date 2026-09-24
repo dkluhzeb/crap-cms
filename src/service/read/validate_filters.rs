@@ -29,152 +29,15 @@
 
 use std::collections::HashSet;
 
-use serde_json::Value;
-
 use crate::{
-    core::{CollectionDefinition, Document, FieldDefinition, prefixed_name, walk_leaf_fields},
+    core::{CollectionDefinition, FieldDefinition, prefixed_name, walk_leaf_fields},
     db::{Filter, FilterClause, FilterOp},
-    service::{ServiceContext, ServiceError, helpers::collect_api_hidden_field_names},
+    service::ServiceError,
 };
-
-/// What a read query references by field: the filter paths plus the sort
-/// column. Shared by the unreadable-field check across find/count/search.
-pub struct QueryFieldRefs<'a> {
-    pub filters: &'a [FilterClause],
-    pub order_by: Option<&'a str>,
-}
-
-/// Reject a filter or sort on a field the caller may not read.
-///
-/// A filter is an oracle: `where = { secret = { like = "a%" } }` recovers a
-/// value the read strip would have removed, and a sort exposes its ordering.
-/// Every read surface funnels through the service find/count/search, which
-/// call this; the rule itself is [`unreadable_query_paths`].
-///
-/// `_rank` is the one virtual sort and is skipped.
-///
-/// # Errors
-///
-/// Returns `AccessDenied` naming the first unreadable field, or the error from
-/// resolving the context's read hooks / collection definition.
-pub(crate) fn reject_unreadable_query_fields(
-    ctx: &ServiceContext,
-    locale: Option<&str>,
-    refs: &QueryFieldRefs<'_>,
-) -> Result<(), ServiceError> {
-    let paths = query_field_paths(refs);
-
-    match unreadable_query_paths(ctx, locale, &paths)?.first() {
-        Some(path) => Err(unreadable(path)),
-        None => Ok(()),
-    }
-}
-
-/// The subset of `paths` (in order) the caller may not filter or sort on. Two
-/// rules:
-///
-/// - **`hidden` fields** (API-hidden, at any depth) are never filterable or
-///   sortable — static, user-independent.
-/// - **Fields with an `access.read` rule** are filterable/sortable only when
-///   the rule allows without row data: the rule is evaluated once through the
-///   same read strip that guards responses, against a probe carrying the
-///   referenced keys with `null` values. A data-dependent rule that needs the
-///   row therefore denies (fail-closed).
-///
-/// The one predicate behind [`reject_unreadable_query_fields`]; the admin list
-/// view asks it too, so it never offers a column, sort, or filter the read
-/// would refuse.
-///
-/// # Errors
-///
-/// Returns the error from resolving the context's read hooks or collection
-/// definition.
-pub fn unreadable_query_paths(
-    ctx: &ServiceContext,
-    locale: Option<&str>,
-    paths: &[String],
-) -> Result<Vec<String>, ServiceError> {
-    if paths.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let hooks = ctx.read_hooks()?;
-    let def = ctx.collection_def()?;
-
-    let mut probe = Document::new(String::new());
-    for path in paths {
-        probe.fields.insert(root_key(path).to_string(), Value::Null);
-    }
-    hooks.strip_read_access_doc(&def.fields, &mut probe, ctx.slug, ctx.user, locale);
-
-    Ok(paths
-        .iter()
-        .filter(|path| {
-            is_hidden_query_path(def, path) || !probe.fields.contains_key(root_key(path))
-        })
-        .cloned()
-        .collect())
-}
-
-/// Whether `path` is, or lies beneath, a `hidden` field — never filterable or
-/// sortable for anyone. The static half of [`unreadable_query_paths`], exposed
-/// for definition-time checks (an `admin.default_sort` on a hidden field).
-#[must_use]
-pub fn is_hidden_query_path(def: &CollectionDefinition, path: &str) -> bool {
-    collect_api_hidden_field_names(&def.fields, "")
-        .iter()
-        .any(|d| denial_covers(&d.display_path(), path))
-}
-
-/// Every field path a query references: filter leaves (recursively through
-/// AND/OR groups) and the sort column (minus the `-` prefix and `_rank`).
-#[must_use]
-pub fn query_field_paths(refs: &QueryFieldRefs<'_>) -> Vec<String> {
-    let mut paths = Vec::new();
-    for clause in refs.filters {
-        collect_filter_paths(clause, &mut paths);
-    }
-
-    if let Some(order) = refs.order_by {
-        let col = order.strip_prefix('-').unwrap_or(order);
-        if col != "_rank" {
-            paths.push(col.to_string());
-        }
-    }
-
-    paths
-}
-
-fn collect_filter_paths(clause: &FilterClause, out: &mut Vec<String>) {
-    match clause {
-        FilterClause::Single(f) => out.push(f.field.clone()),
-        FilterClause::And(subs) | FilterClause::Or(subs) => {
-            for sub in subs {
-                collect_filter_paths(sub, out);
-            }
-        }
-    }
-}
-
-/// A denial at `denied` covers `path` when they are equal, when `path` is a
-/// dot-path beneath it (`arr.sub` under `arr`), or a flattened group child
-/// (`seo__title` under `seo`).
-fn denial_covers(denied: &str, path: &str) -> bool {
-    path == denied
-        || path
-            .strip_prefix(denied)
-            .is_some_and(|rest| rest.starts_with('.') || rest.starts_with("__"))
-}
 
 /// The document-level key a path resolves through: the first dot segment.
 fn root_key(path: &str) -> &str {
     path.split('.').next().unwrap_or(path)
-}
-
-fn unreadable(path: &str) -> ServiceError {
-    ServiceError::AccessDenied(format!(
-        "Cannot filter or sort on '{path}': the field is not readable in this context"
-    ))
 }
 
 /// Validate that user-supplied filter clauses do not target system columns.
@@ -205,12 +68,19 @@ fn walk_user_filter(clause: &FilterClause) -> Result<(), ServiceError> {
     }
 }
 
+/// Whether a user filter on `path` targets a system column — any path whose
+/// first dot-segment starts with `_`. User filters may not; the typed request
+/// flags (`trash`, `draft`) reach that data instead.
+#[must_use]
+pub fn is_system_filter_path(path: &str) -> bool {
+    root_key(path).starts_with('_')
+}
+
 /// Check a single filter's field against the system-column rule.
 fn check_single_filter(filter: &Filter) -> Result<(), ServiceError> {
     let field = &filter.field;
-    let first = field.split('.').next().unwrap_or(field);
 
-    if !first.starts_with('_') {
+    if !is_system_filter_path(field) {
         return Ok(());
     }
 
@@ -721,7 +591,7 @@ mod tests {
 /// Returns `HookError` naming the first unknown select entry.
 pub fn validate_user_select(
     select: Option<&[String]>,
-    def: &crate::core::CollectionDefinition,
+    def: &CollectionDefinition,
 ) -> Result<(), ServiceError> {
     let Some(select) = select else {
         return Ok(());

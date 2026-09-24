@@ -13,7 +13,9 @@
     </div>
   </crap-sticky-header>
   <crap-validate-form validate-url="/admin/collections/{{collection.slug}}{{#if editing}}/{{document.id}}{{/if}}/validate">
-    <crap-dirty-form>
+    <crap-dirty-form
+      {{#if unsaved}}data-unsaved{{/if}}
+    >
       <crap-scroll-restore>
         <crap-conditions
           collection="{{collection.slug}}"

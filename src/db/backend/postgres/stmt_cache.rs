@@ -53,6 +53,16 @@ impl managed::Manager for CachedManager {
         // (not on every checkout) so it's a one-time cost.
         client.batch_execute("SET timezone = 'UTC'").await?;
 
+        // Only warnings and errors reach the client. The schema sync runs
+        // `CREATE … IF NOT EXISTS` on every boot, and each one that finds its
+        // object answers with a NOTICE ("relation … already exists,
+        // skipping") that the connection driver logs at INFO — a page of noise
+        // per start, drowning the lines an operator reads. Any user may set
+        // this parameter.
+        client
+            .batch_execute("SET client_min_messages = 'warning'")
+            .await?;
+
         // Error classification reads SQLSTATE, but the one condition Postgres
         // gives no code of its own — a cached plan invalidated by a schema
         // change — is identifiable only by its message, and message text is

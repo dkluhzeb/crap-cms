@@ -33,6 +33,7 @@
 
 import { css } from './_internal/css.js';
 import { h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
 import { EV_CHANGE } from './events.js';
 
 const sheet = css`
@@ -295,7 +296,7 @@ class CrapTags extends HTMLElement {
         h('button', {
           type: 'button',
           class: 'chip__remove',
-          'aria-label': 'Remove',
+          'aria-label': t('remove_item', { name: value }),
           text: '×',
           onClick: () => this._removeValue(value),
         }),

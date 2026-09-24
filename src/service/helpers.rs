@@ -523,8 +523,24 @@ mod tests {
             CollectionDefinition, DocumentFields, FieldAdmin, FieldType,
             upload::{CollectionUpload, ImageSize},
         },
-        hooks::{AccessCheckInput, ValidationCtx},
+        hooks::{
+            AccessCheckInput, ValidationCtx, lifecycle::operation::COLLECTION_WRITE_OPERATIONS,
+        },
     };
+
+    /// The operation a state write names to its hooks is one the typed hook
+    /// contexts declare — `crap.hook.<Slug>.operation` is built from
+    /// `COLLECTION_WRITE_OPERATIONS`.
+    #[test]
+    fn state_change_operations_are_declared_write_operations() {
+        for change in [StateChange::Unpublish, StateChange::Undelete] {
+            assert!(
+                COLLECTION_WRITE_OPERATIONS.contains(&change.operation()),
+                "{change:?} names `{}`",
+                change.operation()
+            );
+        }
+    }
 
     /// Write hooks that run nothing.
     struct NoWriteHooks;

@@ -72,6 +72,10 @@ crap.fields.relationship({
 | `has_many` | boolean | `false` | Use a junction table for many-to-many. Lives **inside** the `relationship` table — a top-level `has_many` next to it is a load error (it would silently store a plain JSON array: no junction table, no populate, no ref-counting) |
 | `max_depth` | integer | `nil` | Per-field cap on population depth |
 
+Every target — each slug of a polymorphic list included — must be a defined
+collection. A target that is not defined fails the load, naming the
+collection or global, the field path and the slug.
+
 ### Legacy Flat Syntax (Deprecated)
 
 A flat syntax is still supported but **deprecated** — a warning is logged at startup when it's used:

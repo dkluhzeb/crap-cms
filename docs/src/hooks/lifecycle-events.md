@@ -95,15 +95,19 @@ Every **write** hook context (and `after_read`, which runs per document) exposes
 
 ## `before_broadcast`
 
-Fires after a `create`, `update`, or `delete` has been committed and the live setting
+Fires after a write that publishes a live event — `create`, `update`, `delete`,
+`undelete`, `unpublish` or a version `restore` — has been committed and the live setting
 check has passed, but **before** the event is dispatched on the EventBus to live
-subscribers (SSE, gRPC `Subscribe`). Runs in a background `spawn_blocking` task — never
-blocks the response to the originating request.
+subscribers (SSE, gRPC `Subscribe`). Runs on the originating request's worker thread
+right after the commit, so a slow hook delays that request's response (never its
+already-committed write).
 
 **No CRUD access** (the transaction is already closed).
 
 The hook receives a context table with `collection`, `operation` (`"create"`,
-`"update"`, or `"delete"`), and `data` (the document payload that would be broadcast).
+`"update"`, `"delete"`, `"undelete"`, `"unpublish"` or `"restore"` — a global's
+events are `"update"`, `"unpublish"` and `"restore"`), `id`, `edited_by`, and
+`data` (the document payload that would be broadcast).
 
 **Return values:**
 

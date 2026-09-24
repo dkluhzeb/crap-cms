@@ -48,12 +48,13 @@ use crate::{
     admin::{
         AdminState, CSP_NONCE, CspNonce, Translations, csrf,
         custom_pages::CustomPageRegistry,
+        global_body_limit,
         handlers::{
             auth as auth_handlers, collections, custom_route::custom_routes_router, dashboard,
-            events, globals, static_assets, uploads,
+            events, globals, shared::with_error_toast, static_assets, uploads,
         },
         server_builder::AdminStartParamsBuilder,
-        templates,
+        templates, upload_body_limit,
     },
     api::upload::upload_router,
     config::{CompressionMode, CrapConfig},
@@ -259,19 +260,26 @@ async fn serve_h2c(listener: TcpListener, app: Router, shutdown: CancellationTok
 
 /// Build reusable method routers for collection and global endpoints.
 #[cfg(not(tarpaulin_include))]
-fn method_routers() -> (
+fn method_routers(
+    state: &AdminState,
+) -> (
     MethodRouter<AdminState>,
     MethodRouter<AdminState>,
     MethodRouter<AdminState>,
 ) {
-    let slug = MethodRouter::new()
-        .get(collections::list_items)
-        .post(collections::create_action);
-    let item = MethodRouter::new()
-        .get(collections::edit_form)
-        .post(collections::update_action)
-        .put(collections::update_action)
-        .delete(collections::delete_action);
+    // Create and update may carry an upload collection's file: their body
+    // limit follows that collection instead of the global default.
+    let upload_limit = || middleware::from_fn_with_state(state.clone(), upload_body_limit);
+
+    let slug = get(collections::list_items)
+        .merge(post(collections::create_action).route_layer(upload_limit()));
+    let item = get(collections::edit_form)
+        .delete(collections::delete_action)
+        .merge(
+            post(collections::update_action)
+                .put(collections::update_action)
+                .route_layer(upload_limit()),
+        );
     let globals = MethodRouter::new()
         .get(globals::edit_form)
         .post(globals::update_action);
@@ -406,18 +414,12 @@ pub fn build_router(state: AdminState) -> Router {
     router.with_state(state)
 }
 
-/// The maximum admin request body size in bytes (upload cap + 1 MiB headroom),
-/// clamped to 50 MiB if the addition would overflow `usize`.
-fn request_body_limit(state: &AdminState) -> usize {
-    usize::try_from(state.config.upload.max_file_size + 1024 * 1024).unwrap_or(50 * 1024 * 1024)
-}
-
 /// Build the protected (auth-required) sub-router and, when the deployment
 /// has auth collections or `require_auth = true`, layer the auth middleware
 /// on top.
 #[cfg(not(tarpaulin_include))]
 fn protected_with_auth(state: &AdminState) -> Router<AdminState> {
-    let (slug_methods, item_methods, globals_methods) = method_routers();
+    let (slug_methods, item_methods, globals_methods) = method_routers(state);
     let protected = protected_routes(slug_methods, item_methods, globals_methods);
 
     let needs_auth_layer = state.has_auth || state.config.admin.require_auth;
@@ -498,7 +500,7 @@ fn assemble_base_router(
 #[cfg(not(tarpaulin_include))]
 fn with_request_layers(router: Router<AdminState>, state: &AdminState) -> Router<AdminState> {
     router
-        .layer(DefaultBodyLimit::max(request_body_limit(state)))
+        .layer(DefaultBodyLimit::max(global_body_limit(state)))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             csrf_middleware,
@@ -738,6 +740,15 @@ async fn html_cache_control(request: Request<Body>, next: Next) -> Response {
 /// `_csrf` field.
 const CSRF_FORM_BODY_LIMIT: usize = 2 * 1024 * 1024;
 
+/// Translation key of the refusal for a missing or mismatched CSRF token.
+const CSRF_FAILED_KEY: &str = "csrf_failed";
+
+/// Translation key of the refusal for a request without the token cookie.
+const CSRF_NO_COOKIE_KEY: &str = "csrf_no_cookie";
+
+/// Translation key of the refusal for a form body too large to validate.
+const CSRF_TOO_LARGE_KEY: &str = "csrf_body_too_large";
+
 /// The answer for a mutating submit whose body is too large for the CSRF
 /// fallback to read.
 ///
@@ -745,12 +756,24 @@ const CSRF_FORM_BODY_LIMIT: usize = 2 * 1024 * 1024;
 /// reach it — and answering 403 "CSRF validation failed" sent the user hunting
 /// for a token problem that never existed. One helper so the declared-size and
 /// discovered-while-reading cases can't drift apart.
-fn csrf_body_too_large() -> Response {
-    (
-        StatusCode::PAYLOAD_TOO_LARGE,
-        "Request body too large to validate",
-    )
-        .into_response()
+fn csrf_body_too_large(state: &AdminState) -> Response {
+    csrf_refusal(state, StatusCode::PAYLOAD_TOO_LARGE, CSRF_TOO_LARGE_KEY)
+}
+
+/// A refusal from the CSRF layer: the translation of `key` as the plain-text
+/// body (a native form submit shows it) and as an `X-Crap-Toast` (an htmx
+/// submit swaps nothing on an error status, so without the toast the click did
+/// nothing visible).
+///
+/// The CSRF layer runs before the session is resolved, so the viewer's own UI
+/// locale is not known yet: the message is in the admin default locale, the
+/// one the login page renders in.
+fn csrf_refusal(state: &AdminState, status: StatusCode, key: &str) -> Response {
+    let message = state
+        .translations
+        .get(&state.config.locale.default_locale, key);
+
+    with_error_toast((status, message.to_string()).into_response(), message)
 }
 
 /// Whether the request declares a body past [`CSRF_FORM_BODY_LIMIT`]. A native
@@ -770,6 +793,7 @@ fn declares_oversized_body(request: &Request<Body>) -> bool {
 /// Returns the (possibly re-assembled) request on success, or a 403 response.
 #[cfg(not(tarpaulin_include))]
 async fn validate_csrf_mutation(
+    state: &AdminState,
     request: Request<Body>,
     cookie_value: &str,
 ) -> Result<Request<Body>, Response> {
@@ -782,20 +806,20 @@ async fn validate_csrf_mutation(
     // means buffering the body and handing it back to the inner handler.
     if csrf::is_form_urlencoded(request.headers()) {
         if declares_oversized_body(&request) {
-            return Err(csrf_body_too_large());
+            return Err(csrf_body_too_large(state));
         }
 
         let (parts, body) = request.into_parts();
         let bytes = body::to_bytes(body, CSRF_FORM_BODY_LIMIT)
             .await
-            .map_err(|_| csrf_body_too_large())?;
+            .map_err(|_| csrf_body_too_large(state))?;
 
         if csrf::request_token_matches(cookie_value, &parts.headers, Some(&bytes)) {
             return Ok(Request::from_parts(parts, Body::from(bytes)));
         }
     }
 
-    Err((StatusCode::FORBIDDEN, "CSRF validation failed").into_response())
+    Err(csrf_refusal(state, StatusCode::FORBIDDEN, CSRF_FAILED_KEY))
 }
 
 /// Run the inner handler, validating the double-submit token first when the
@@ -807,27 +831,23 @@ async fn validate_csrf_mutation(
 /// cookie made every submit fail until the user reloaded a page by hand.
 #[cfg(not(tarpaulin_include))]
 async fn run_csrf_checked(
+    state: &AdminState,
     request: Request<Body>,
     next: Next,
-    method: &Method,
     cookie_value: Option<&str>,
 ) -> Response {
     if !matches!(
-        *method,
+        *request.method(),
         Method::POST | Method::PUT | Method::DELETE | Method::PATCH
     ) {
         return next.run(request).await;
     }
 
     let Some(cookie_value) = cookie_value else {
-        return (
-            StatusCode::FORBIDDEN,
-            "CSRF validation failed: no token cookie",
-        )
-            .into_response();
+        return csrf_refusal(state, StatusCode::FORBIDDEN, CSRF_NO_COOKIE_KEY);
     };
 
-    match validate_csrf_mutation(request, cookie_value).await {
+    match validate_csrf_mutation(state, request, cookie_value).await {
         Ok(request) => next.run(request).await,
         Err(response) => response,
     }
@@ -843,7 +863,6 @@ async fn csrf_middleware(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    let method = request.method().clone();
     let dev_mode = state.config.admin.dev_mode;
     let cookie_lifetime = state.config.admin.csrf_cookie_lifetime;
 
@@ -870,7 +889,7 @@ async fn csrf_middleware(
         .filter(|v| !v.is_empty())
         .map(std::string::ToString::to_string);
 
-    let mut response = run_csrf_checked(request, next, &method, csrf_cookie.as_deref()).await;
+    let mut response = run_csrf_checked(&state, request, next, csrf_cookie.as_deref()).await;
 
     ensure_csrf_cookie(
         &mut response,
@@ -925,6 +944,8 @@ use super::mcp_handler::{mcp_delete_session_handler, mcp_http_handler};
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "sqlite")]
+    use crate::admin::test_state::test_admin_state;
 
     /// A healthy database is not enough while startup recovery is still
     /// rewriting the job rows a previous process left `running` — reporting
@@ -949,8 +970,54 @@ mod tests {
         );
     }
 
+    /// Every CSRF refusal carries an error toast, so an htmx submit that is
+    /// refused does not fail silently.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn csrf_refusals_carry_an_error_toast() {
+        let state = test_admin_state();
+
+        for resp in [
+            csrf_body_too_large(&state),
+            csrf_refusal(&state, StatusCode::FORBIDDEN, CSRF_FAILED_KEY),
+            csrf_refusal(&state, StatusCode::FORBIDDEN, CSRF_NO_COOKIE_KEY),
+        ] {
+            let toast = resp
+                .headers()
+                .get("X-Crap-Toast")
+                .expect("toast header")
+                .to_str()
+                .unwrap()
+                .to_string();
+
+            assert!(toast.contains("\"type\":\"error\""), "{toast}");
+            assert!(!toast.contains("csrf_"), "a raw translation key: {toast}");
+        }
+    }
+
+    /// Regression: CSRF refusals were English whatever the admin locale. They
+    /// speak the admin default locale.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn csrf_refusals_speak_the_admin_default_locale() {
+        let mut state = test_admin_state();
+        state.config.locale.default_locale = "de".to_string();
+
+        let resp = csrf_refusal(&state, StatusCode::FORBIDDEN, CSRF_FAILED_KEY);
+        let expected = state.translations.get("de", CSRF_FAILED_KEY).to_string();
+        assert_ne!(
+            expected,
+            state.translations.get("en", CSRF_FAILED_KEY),
+            "the German translation exists"
+        );
+
+        let body = body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(String::from_utf8(body.to_vec()).unwrap(), expected);
+    }
+
     /// Regression: an oversized declared body is answered by size, not by
     /// blaming the CSRF token. A body at the limit still goes to the reader.
+    #[cfg(feature = "sqlite")]
     #[test]
     fn an_oversized_declared_body_is_recognised_before_reading() {
         let sized = |len: usize| {
@@ -974,7 +1041,7 @@ mod tests {
         ));
 
         assert_eq!(
-            csrf_body_too_large().status(),
+            csrf_body_too_large(&test_admin_state()).status(),
             StatusCode::PAYLOAD_TOO_LARGE
         );
     }

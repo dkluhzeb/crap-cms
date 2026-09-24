@@ -154,13 +154,18 @@ function M.up()
   local tag_webgl = crap.collections.tags.create({ name = "WebGL", slug = "webgl", tag_type = "technology" }, opts)
   local tag_figma = crap.collections.tags.create({ name = "Figma", slug = "figma", tag_type = "technology" }, opts)
   local tag_ux = crap.collections.tags.create({ name = "UX Research", slug = "ux-research", tag_type = "topic" }, opts)
-  local tag_a11y = crap.collections.tags.create({ name = "Accessibility", slug = "accessibility", tag_type = "topic" }, opts)
-  local tag_perf = crap.collections.tags.create({ name = "Performance", slug = "performance", tag_type = "topic" }, opts)
-  local tag_ds = crap.collections.tags.create({ name = "Design Systems", slug = "design-systems", tag_type = "topic" }, opts)
+  local tag_a11y =
+    crap.collections.tags.create({ name = "Accessibility", slug = "accessibility", tag_type = "topic" }, opts)
+  local tag_perf =
+    crap.collections.tags.create({ name = "Performance", slug = "performance", tag_type = "topic" }, opts)
+  local tag_ds =
+    crap.collections.tags.create({ name = "Design Systems", slug = "design-systems", tag_type = "topic" }, opts)
   local tag_ai = crap.collections.tags.create({ name = "AI/ML", slug = "ai-ml", tag_type = "technology" }, opts)
   local tag_fintech = crap.collections.tags.create({ name = "Fintech", slug = "fintech", tag_type = "industry" }, opts)
-  local tag_health = crap.collections.tags.create({ name = "Healthcare", slug = "healthcare", tag_type = "industry" }, opts)
-  local tag_ecom = crap.collections.tags.create({ name = "E-commerce", slug = "e-commerce", tag_type = "industry" }, opts)
+  local tag_health =
+    crap.collections.tags.create({ name = "Healthcare", slug = "healthcare", tag_type = "industry" }, opts)
+  local tag_ecom =
+    crap.collections.tags.create({ name = "E-commerce", slug = "e-commerce", tag_type = "industry" }, opts)
 
   -- ========================
   -- CLIENTS (5)
@@ -550,8 +555,12 @@ function M.up()
     categories = { cat_culture.id },
     content = rt.doc(
       rt.h2("Hello, World"),
-      rt.p("After years of freelancing and agency work, we've decided to build something of our own. Crap Studio is a creative technology studio that brings together design, engineering, and strategy under one roof."),
-      rt.p("We believe the best digital experiences come from teams that deeply understand both the craft of design and the power of technology. That's what we're building here.")
+      rt.p(
+        "After years of freelancing and agency work, we've decided to build something of our own. Crap Studio is a creative technology studio that brings together design, engineering, and strategy under one roof."
+      ),
+      rt.p(
+        "We believe the best digital experiences come from teams that deeply understand both the craft of design and the power of technology. That's what we're building here."
+      )
     ),
     published_at = "2024-01-15T10:00:00Z",
     featured = true,
@@ -567,9 +576,13 @@ function M.up()
     tags = { tag_rust.id, tag_perf.id },
     content = rt.doc(
       rt.h2("The Case for Rust"),
-      rt.p("When we started building our internal tools, we evaluated several backend languages. Rust won us over with its combination of performance, safety, and developer experience."),
+      rt.p(
+        "When we started building our internal tools, we evaluated several backend languages. Rust won us over with its combination of performance, safety, and developer experience."
+      ),
       rt.h2("Real-World Results"),
-      rt.p("After six months of running Rust in production, our API response times dropped by 60% and memory usage decreased by 75% compared to our previous Node.js services.")
+      rt.p(
+        "After six months of running Rust in production, our API response times dropped by 60% and memory usage decreased by 75% compared to our previous Node.js services."
+      )
     ),
     published_at = "2024-02-20T10:00:00Z",
   })
@@ -584,9 +597,13 @@ function M.up()
     tags = { tag_a11y.id, tag_ds.id, tag_figma.id },
     content = rt.doc(
       rt.h2("Accessibility as a Foundation"),
-      rt.p("Accessibility isn't an afterthought at Crap — it's baked into our design system from the ground up. Every component is tested against WCAG 2.1 AA standards."),
+      rt.p(
+        "Accessibility isn't an afterthought at Crap — it's baked into our design system from the ground up. Every component is tested against WCAG 2.1 AA standards."
+      ),
       rt.h2("Color System"),
-      rt.p("Our color tokens are generated with contrast ratios in mind. Every foreground/background combination in our palette meets at least 4.5:1 contrast ratio for normal text.")
+      rt.p(
+        "Our color tokens are generated with contrast ratios in mind. Every foreground/background combination in our palette meets at least 4.5:1 contrast ratio for normal text."
+      )
     ),
     published_at = "2024-03-10T10:00:00Z",
     featured = true,
@@ -601,8 +618,18 @@ function M.up()
     categories = { cat_motion.id, cat_design.id },
     content = rt.doc(
       rt.h2("Motion with Purpose"),
-      rt.p("Every animation should serve a purpose — guiding attention, providing feedback, or creating spatial awareness. Gratuitous animation is worse than no animation at all."),
-      rt.p("We follow three principles: ", rt.bold("purposeful"), " (serves a UX goal), ", rt.bold("performant"), " (60fps or bust), and ", rt.bold("accessible"), " (respects prefers-reduced-motion).")
+      rt.p(
+        "Every animation should serve a purpose — guiding attention, providing feedback, or creating spatial awareness. Gratuitous animation is worse than no animation at all."
+      ),
+      rt.p(
+        "We follow three principles: ",
+        rt.bold("purposeful"),
+        " (serves a UX goal), ",
+        rt.bold("performant"),
+        " (60fps or bust), and ",
+        rt.bold("accessible"),
+        " (respects prefers-reduced-motion)."
+      )
     ),
     published_at = "2024-04-05T10:00:00Z",
   })
@@ -618,9 +645,13 @@ function M.up()
     related_content = { "projects/" .. proj_nova_rebrand.id },
     content = rt.doc(
       rt.h2("From Brief to Launch"),
-      rt.p("The Nova Financial rebrand was our biggest brand project to date. Starting with extensive stakeholder interviews, we mapped the gap between their current perception and aspirational positioning."),
+      rt.p(
+        "The Nova Financial rebrand was our biggest brand project to date. Starting with extensive stakeholder interviews, we mapped the gap between their current perception and aspirational positioning."
+      ),
       rt.h2("Research Phase"),
-      rt.p("We conducted 40 user interviews, analyzed 15 competitors, and ran 3 rounds of concept testing before finalizing the direction.")
+      rt.p(
+        "We conducted 40 user interviews, analyzed 15 competitors, and ran 3 rounds of concept testing before finalizing the direction."
+      )
     ),
     published_at = "2024-09-15T10:00:00Z",
     featured = true,
@@ -636,7 +667,9 @@ function M.up()
     tags = { tag_webgl.id, tag_perf.id },
     content = rt.doc(
       rt.h2("GPU Budget Management"),
-      rt.p("The key to performant WebGL is understanding your GPU budget. On mobile devices, you're often limited to ~16ms per frame. Here's how we keep our 3D experiences smooth across devices.")
+      rt.p(
+        "The key to performant WebGL is understanding your GPU budget. On mobile devices, you're often limited to ~16ms per frame. Here's how we keep our 3D experiences smooth across devices."
+      )
     ),
     published_at = "2024-05-20T10:00:00Z",
   })
@@ -651,7 +684,9 @@ function M.up()
     tags = { tag_ds.id, tag_figma.id },
     content = rt.doc(
       rt.h2("What Are Design Tokens?"),
-      rt.p("Design tokens are the atomic values of your design system — colors, spacing, typography, shadows. They're the contract between design and engineering.")
+      rt.p(
+        "Design tokens are the atomic values of your design system — colors, spacing, typography, shadows. They're the contract between design and engineering."
+      )
     ),
     published_at = "2024-06-12T10:00:00Z",
   })
@@ -666,7 +701,9 @@ function M.up()
     tags = { tag_ux.id },
     content = rt.doc(
       rt.h2("Research-Driven Design"),
-      rt.p("At Crap, every project starts with understanding the people we're designing for. Our research process combines interviews, surveys, analytics, and usability testing.")
+      rt.p(
+        "At Crap, every project starts with understanding the people we're designing for. Our research process combines interviews, surveys, analytics, and usability testing."
+      )
     ),
     published_at = "2024-07-08T10:00:00Z",
   })
@@ -681,7 +718,9 @@ function M.up()
     tags = { tag_ai.id, tag_figma.id },
     content = rt.doc(
       rt.h2("AI as a Creative Partner"),
-      rt.p("AI won't replace designers, but designers who use AI will replace those who don't. Here's how we're integrating AI tools into our creative workflow.")
+      rt.p(
+        "AI won't replace designers, but designers who use AI will replace those who don't. Here's how we're integrating AI tools into our creative workflow."
+      )
     ),
     published_at = "2024-08-15T10:00:00Z",
   })
@@ -696,7 +735,9 @@ function M.up()
     tags = { tag_health.id, tag_rust.id },
     content = rt.doc(
       rt.h2("Security by Design"),
-      rt.p("HIPAA compliance isn't just about encryption — it's about building a security-first culture into every layer of your application.")
+      rt.p(
+        "HIPAA compliance isn't just about encryption — it's about building a security-first culture into every layer of your application."
+      )
     ),
     published_at = "2024-10-01T10:00:00Z",
   })
@@ -740,7 +781,9 @@ function M.up()
     categories = { cat_culture.id },
     content = rt.doc(
       rt.h2("What a Year"),
-      rt.p("2024 was our most ambitious year yet. We shipped 15 projects, grew the team from 3 to 6, and established ourselves as a go-to studio for design-forward technology.")
+      rt.p(
+        "2024 was our most ambitious year yet. We shipped 15 projects, grew the team from 3 to 6, and established ourselves as a go-to studio for design-forward technology."
+      )
     ),
     published_at = "2025-01-10T10:00:00Z",
     featured = true,
@@ -771,7 +814,9 @@ function M.up()
     tags = { tag_ds.id },
     content = rt.doc(
       rt.h2("Consistency at Scale"),
-      rt.p("A design system is the single source of truth for your brand's visual language. It speeds up development, ensures consistency, and reduces design debt.")
+      rt.p(
+        "A design system is the single source of truth for your brand's visual language. It speeds up development, ensures consistency, and reduces design debt."
+      )
     ),
     published_at = "2025-03-20T10:00:00Z",
   })
@@ -809,7 +854,9 @@ function M.up()
     tags = { tag_rust.id, tag_perf.id },
     content = rt.doc(
       rt.h2("When to Migrate"),
-      rt.p("Not every service needs Rust. Here's our framework for deciding when a migration makes sense and how to execute it incrementally.")
+      rt.p(
+        "Not every service needs Rust. Here's our framework for deciding when a migration makes sense and how to execute it incrementally."
+      )
     ),
     published_at = "2025-07-20T10:00:00Z",
   })
@@ -824,7 +871,9 @@ function M.up()
     tags = { tag_a11y.id },
     content = rt.doc(
       rt.h2("Beyond Compliance"),
-      rt.p("Companies that prioritize accessibility see 28% higher revenue, 2x user satisfaction scores, and significantly broader market reach.")
+      rt.p(
+        "Companies that prioritize accessibility see 28% higher revenue, 2x user satisfaction scores, and significantly broader market reach."
+      )
     ),
     published_at = "2025-09-10T10:00:00Z",
   })
@@ -838,7 +887,9 @@ function M.up()
     categories = { cat_culture.id },
     content = rt.doc(
       rt.h2("Busy Quarter"),
-      rt.p("Q1 2026 has been our busiest yet. We kicked off 3 new projects, spoke at 2 conferences, and are growing the team again.")
+      rt.p(
+        "Q1 2026 has been our busiest yet. We kicked off 3 new projects, spoke at 2 conferences, and are growing the team again."
+      )
     ),
     published_at = "2026-02-01T10:00:00Z",
   })
@@ -853,7 +904,9 @@ function M.up()
     tags = { tag_ds.id },
     content = rt.doc(
       rt.h2("Dark Mode Done Right"),
-      rt.p("Good dark mode design requires rethinking elevation, contrast, and color saturation — not just flipping a switch.")
+      rt.p(
+        "Good dark mode design requires rethinking elevation, contrast, and color saturation — not just flipping a switch."
+      )
     ),
     published_at = "2025-10-15T10:00:00Z",
   })
@@ -882,7 +935,9 @@ function M.up()
     categories = { cat_dev.id, cat_motion.id },
     content = rt.doc(
       rt.h2("The SVG Animation Landscape"),
-      rt.p("SVG offers unique animation possibilities that CSS and canvas can't match. Here's how we leverage them for interactive illustrations and UI flourishes.")
+      rt.p(
+        "SVG offers unique animation possibilities that CSS and canvas can't match. Here's how we leverage them for interactive illustrations and UI flourishes."
+      )
     ),
     published_at = "2025-12-10T10:00:00Z",
   })
@@ -897,7 +952,9 @@ function M.up()
     tags = { tag_react.id, tag_perf.id },
     content = rt.doc(
       rt.h2("Real-Time at Scale"),
-      rt.p("Greenfield needed to visualize data from 10,000 sensors in real-time. We built a dashboard that handles it with sub-100ms updates.")
+      rt.p(
+        "Greenfield needed to visualize data from 10,000 sensors in real-time. We built a dashboard that handles it with sub-100ms updates."
+      )
     ),
     published_at = "2026-01-05T10:00:00Z",
   })
@@ -912,7 +969,9 @@ function M.up()
     tags = { tag_ds.id },
     content = rt.doc(
       rt.h2("Type Matters"),
-      rt.p("Typography is the backbone of any design system. Here's everything we've learned about making type look great and load fast on the web.")
+      rt.p(
+        "Typography is the backbone of any design system. Here's everything we've learned about making type look great and load fast on the web."
+      )
     ),
     published_at = "2026-02-20T10:00:00Z",
   })
@@ -1235,10 +1294,14 @@ function M.up()
 
   crap.globals.navigation.update({
     main_nav = {
-      { label = "Work", url = "/projects", children = {
-        { label = "All Projects", url = "/projects" },
-        { label = "Case Studies", url = "/blog?type=case_study" },
-      } },
+      {
+        label = "Work",
+        url = "/projects",
+        children = {
+          { label = "All Projects", url = "/projects" },
+          { label = "Case Studies", url = "/blog?type=case_study" },
+        },
+      },
       { label = "Services", url = "/services" },
       { label = "Blog", url = "/blog" },
       { label = "About", url = "/about" },
@@ -1251,10 +1314,15 @@ function M.up()
     show_social_links = true,
   }, opts)
 
-  crap.log.info("Crap Studio seed complete: 6 users, 5 clients, 6 categories, 12 tags, 5 services, 10 projects, 20 posts, 4 pages, 5 events, 8 testimonials, 5 inquiries, 3 globals")
+  crap.log.info(
+    "Crap Studio seed complete: 6 users, 5 clients, 6 categories, 12 tags, 5 services, 10 projects, 20 posts, 4 pages, 5 events, 8 testimonials, 5 inquiries, 3 globals"
+  )
 end
 
 function M.down()
+  -- Referencing collections first: by the time a collection is emptied,
+  -- every seeded document that referenced its documents is gone, so none is
+  -- held back by delete protection.
   local collections = {
     "inquiries",
     "testimonials",
@@ -1266,18 +1334,29 @@ function M.down()
     "clients",
     "tags",
     "categories",
-    "media",
     "users",
+    "media",
   }
 
-  local opts = { override_access = true }
-
   for _, collection in ipairs(collections) do
-    local result = crap.collections.find(collection, { limit = 1000, override_access = true })
-    if result and result.documents then
-      for _, doc in ipairs(result.documents) do
-        crap.collections.delete(collection, doc.id, opts)
-      end
+    local result = crap.collections.delete_many(collection, {}, {
+      override_access = true,
+      -- A soft delete would only move posts and pages to the trash, where
+      -- they keep their references (and their unique slugs) — remove them.
+      force_hard_delete = true,
+      -- `prevent_last_admin` guards deleting users one by one; removing the
+      -- seed removes every user by design.
+      hooks = collection ~= "users",
+    })
+
+    if result.skipped > 0 then
+      error(
+        string.format(
+          "%d %s document(s) are still referenced by documents outside the seed",
+          result.skipped,
+          collection
+        )
+      )
     end
   end
 

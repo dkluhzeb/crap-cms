@@ -18,8 +18,8 @@ M.run = crap.any.job_handler(function(context)
     -- local data = context.data
 
     -- Example:
-    -- local docs = crap.collections.posts.find({ limit = 10 })
-    -- crap.log.info("Processing " .. #docs .. " documents")
+    -- local result = crap.collections.posts.find({ limit = 10 })
+    -- crap.log.info("Processing " .. #result.documents .. " documents")
 end)
 
 crap.jobs.define("{{slug}}", {

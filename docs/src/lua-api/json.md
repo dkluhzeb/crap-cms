@@ -22,6 +22,16 @@ type, and apply to every Lua↔JSON crossing (hook arguments, CRUD data,
 decoded and re-encoded comes back as `{}`; and an **integer above
 `i64::MAX`** (2⁶³−1) that Lua cannot hold exactly arrives as a float.
 
+### Null
+
+`crap.null` encodes as `null`; a `nil`-valued key is simply absent (Lua
+cannot store `nil` in a table). Use it to keep an explicit null:
+
+```lua
+crap.json.encode({ a = crap.null, list = { 1, crap.null } })
+-- '{"a":null,"list":[1,null]}'
+```
+
 ## crap.json.decode(str)
 
 Decode a JSON string into a Lua value.
@@ -37,9 +47,22 @@ print(data.count)  -- 42
 | `str` | string | JSON string |
 | **Returns** | any | Decoded Lua value |
 
+A `null` **object field** decodes to `nil` (the key is absent); a `null`
+**array element** decodes to `crap.null`, so the array keeps its length:
+
+```lua
+local list = crap.json.decode('[1, null, 3]')
+print(#list)                -- 3
+print(list[2] == crap.null) -- true (crap.null is truthy — compare, don't test)
+local obj = crap.json.decode('{"x": null}')
+print(obj.x)                -- nil
+```
+
+See [Null values](overview.md#null-values).
+
 ## Notes
 
-- **Integer precision** — JSON numbers are decoded into Lua number (`f64` under the hood). Integers larger than 2^53 (~9 × 10^15) lose precision. If you need to preserve large IDs exactly, encode them as strings before serializing.
+- **Integer precision** — JSON integers that fit a 64-bit signed integer decode to exact Lua integers; larger integers and all fractional numbers decode to Lua floats (`f64`), which are exact only up to 2^53 (~9 × 10^15). If you need to preserve very large IDs exactly, encode them as strings.
 - **Nesting depth** — encoder rejects tables nested more than 64 levels deep to guard against runaway recursion. A self-referential Lua table (`t.a = t`) will exceed this limit and error rather than looping forever.
 - **Decode of untrusted input** — decoding enforces serde_json's recursion limit (128 nesting levels): deeper input errors instead of overflowing the stack. Size is not limited — cap attacker-controlled payload sizes upstream (e.g. via `[hooks] http_max_response_bytes` for fetched bodies).
 

@@ -21,6 +21,7 @@ mod relationship_target;
 mod sync;
 mod tracking;
 
+pub(crate) use backfill_ref_counts::recompute_ref_counts;
 pub use locale_change::warn_on_default_locale_change;
 pub use orphan_tables::{OrphanKind, OrphanTable, find_orphan_tables};
 /// Test-only re-export so `test_helpers::setup_db` and the scheduler

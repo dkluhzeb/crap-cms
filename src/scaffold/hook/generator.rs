@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::{
     cli,
     hooks::lua_api::parse::{
-        ACCESS_KEYS, COLLECTION_HOOK_KEYS, FIELD_HOOK_KEYS, GLOBAL_ACCESS_KEYS,
+        ACCESS_KEYS, COLLECTION_HOOK_KEYS, FIELD_HOOK_KEYS, GLOBAL_ACCESS_KEYS, GLOBAL_HOOK_KEYS,
     },
     scaffold::{guards::refuse_file_overwrite, paths, render::render},
 };
@@ -91,12 +91,14 @@ impl HookType {
     /// Valid lifecycle positions for this hook type. Collection, field,
     /// and access positions come straight from the parser's accepted-key
     /// constants — the scaffold can never drift from what the runtime
-    /// actually accepts. Globals get the narrower access-key subset
-    /// (`create`/`delete`/`trash`/`unlock` never fire on a single-row
-    /// global and are rejected at load).
+    /// actually accepts. Globals get the narrower subsets: no
+    /// `before_delete`/`after_delete` hooks and no `create`/`delete`/
+    /// `trash`/`unlock` access — none of them fires on a single-row global,
+    /// and all are rejected at load.
     #[must_use]
     pub fn valid_positions(&self, is_global: bool) -> &'static [&'static str] {
         match self {
+            Self::Collection if is_global => GLOBAL_HOOK_KEYS,
             Self::Collection => COLLECTION_HOOK_KEYS,
             Self::Field => FIELD_HOOK_KEYS,
             Self::Access if is_global => GLOBAL_ACCESS_KEYS,
@@ -170,13 +172,15 @@ fn render_hook_lua(opts: &MakeHookOptions) -> Result<String> {
 
 /// Render a collection hook.
 fn render_collection_hook(opts: &MakeHookOptions) -> Result<String> {
-    // `before_delete` / `after_delete` / `before_broadcast` receive a
-    // generic `crap.HookContext` because the runtime doesn't know which
-    // collection's typed shape applies (delete carries only `{ id =
-    // "..." }`; broadcast may run cross-collection). For those use
-    // the generic `crap.any.collection_hook` factory; otherwise the
-    // per-collection accessor narrows `ctx` per collection — `after_read`
-    // through `read_hook`, whose `ctx.data` is the read-shape document.
+    // `before_delete` / `after_delete` / `before_broadcast` take the
+    // generic `crap.any.collection_hook` factory: a delete hook's
+    // `ctx.data` is the full stored document plus `id` and the
+    // `soft_delete` marker, not the write shape `crap.hook.<Slug>`
+    // describes, and a `before_broadcast` hook returns `false` / `nil` to
+    // suppress, which only the generic `crap.hook_fn` type allows.
+    // Otherwise the per-collection accessor narrows `ctx` per collection —
+    // `after_read` through `read_hook`, whose `ctx.data` is the read-shape
+    // document.
     let factory_expr = match opts.position {
         "before_delete" | "after_delete" | "before_broadcast" => {
             "crap.any.collection_hook(".to_string()
@@ -486,6 +490,17 @@ mod tests {
                 "make hook access (global) must not offer '{key}'"
             );
         }
+
+        // A global is never deleted: its lifecycle hooks omit the delete
+        // events the parser rejects on a global.
+        let global_hooks = HookType::Collection.valid_positions(true);
+        for key in ["before_delete", "after_delete"] {
+            assert!(
+                !global_hooks.contains(&key),
+                "make hook collection (global) must not offer '{key}'"
+            );
+        }
+        assert!(global_hooks.contains(&"before_change"));
     }
 
     // == Validation ======================================================

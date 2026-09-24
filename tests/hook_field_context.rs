@@ -184,6 +184,24 @@ fn check_live_setting_receives_document_id_and_editor() {
     );
 }
 
+/// Regression: the live-filter context was serialized with mlua's defaults,
+/// so a null field reached the filter as the truthy `NULL` sentinel instead
+/// of `nil`.
+#[test]
+fn check_live_setting_sees_null_fields_as_nil() {
+    use crap_cms::core::collection::LiveSetting;
+    let (_tmp, _pool, _registry, runner) = setup();
+    let live = LiveSetting::Function(HookRef::new("hooks.live.null_probe"));
+
+    let mut data = DocumentFields::new();
+    data.insert("x".to_string(), json!(null));
+
+    let broadcast = runner
+        .check_live_setting(Some(&live), "articles", "update", &data, "doc-1", None)
+        .expect("no error");
+    assert!(broadcast, "a null field must reach the live filter as nil");
+}
+
 // ── 4C. Field After Hooks ────────────────────────────────────────────────────
 
 #[test]

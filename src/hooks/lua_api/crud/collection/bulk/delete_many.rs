@@ -3,17 +3,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::hooks::lua_api::utils::lua_err;
+use crate::hooks::lua_api::{to_lua_value, utils::lua_err};
 use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     config::LocaleConfig,
-    core::{Registry, upload},
+    core::Registry,
     db::{FilterClause, FindQuery, LocaleContext},
     hooks::{
-        lifecycle::{LuaCrudInfra, LuaVmInfra, TxContext},
+        lifecycle::LuaCrudInfra,
         lua_api::crud::{
             filter::convert_where_clause,
             get_tx_conn,
@@ -26,6 +26,7 @@ use crate::{
     service::{
         LuaWriteHooks, ServiceContext,
         op::{DeleteMany, DeleteManyArgs, Operation},
+        warn_orphaned_files,
     },
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
@@ -135,6 +136,28 @@ pub(crate) struct CollectionsDeleteManyState {
     pub(crate) bulk_max_documents: i64,
 }
 
+/// Files after commit: this op always runs inside a transaction (the caller's,
+/// or the per-op one `auto_tx` opens), so the deleted documents' files go to
+/// that transaction's post-commit cleanup queue. Without a queue they stay in
+/// storage — deleting them now and then rolling back would leave restored rows
+/// pointing at nothing; an orphaned file is the safe direction.
+fn queue_files_for_commit(lua: &Lua, collection: &str, keys: Vec<String>) {
+    if keys.is_empty() {
+        return;
+    }
+
+    let Some(queue) = lua
+        .app_data_ref::<LuaCrudInfra>()
+        .and_then(|i| i.file_cleanup.clone())
+    else {
+        warn_orphaned_files(collection, "post-commit file cleanup queue", keys.len());
+
+        return;
+    };
+
+    queue.borrow_mut().extend(keys);
+}
+
 /// Delete multiple documents matching a query. All-or-nothing: checks
 /// delete access for every matched document first; if any fails, returns
 /// an error and nothing is modified. Fires per-document delete hooks
@@ -225,26 +248,8 @@ fn collections_delete_many(
 
     let svc_result = DeleteMany::run(&ctx, op_args).map_err(lua_err)?;
 
-    if !service_def.soft_delete && !svc_result.upload_keys_to_clean.is_empty() {
-        // Files after commit: in conn mode this runs
-        // inside the caller's transaction — queue for its post-commit
-        // flush. Pool mode (this op committed already) and legacy
-        // scopes without a queue delete immediately as before.
-        let queue = lua
-            .app_data_ref::<LuaCrudInfra>()
-            .and_then(|i| i.file_cleanup.clone());
-        let in_conn_mode = lua.app_data_ref::<TxContext>().is_some();
-
-        if let (true, Some(queue)) = (in_conn_mode, queue) {
-            queue
-                .borrow_mut()
-                .extend(svc_result.upload_keys_to_clean.iter().cloned());
-        } else if let Some(storage) = lua
-            .app_data_ref::<LuaVmInfra>()
-            .and_then(|i| i.storage.clone())
-        {
-            upload::delete_storage_keys(&*storage, &svc_result.upload_keys_to_clean);
-        }
+    if !service_def.soft_delete {
+        queue_files_for_commit(lua, &collection, svc_result.upload_keys_to_clean);
     }
 
     let result = DeleteManyResult {
@@ -252,7 +257,7 @@ fn collections_delete_many(
         skipped: svc_result.skipped,
     };
 
-    let Value::Table(tbl) = lua.to_value(&result)? else {
+    let Value::Table(tbl) = to_lua_value(lua, &result)? else {
         return Err(RuntimeError(
             "DeleteManyResult did not serialize to a table".into(),
         ));

@@ -36,6 +36,7 @@
 
 import { css } from './_internal/css.js';
 import { clear, h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
 import { EV_PILL_REMOVED } from './events.js';
 
 /**
@@ -178,7 +179,7 @@ export class CrapPillList extends HTMLElement {
           type: 'button',
           class: 'pill-list__chip-remove',
           text: '×',
-          'aria-label': `Remove ${item.label}`,
+          'aria-label': t('remove_item', { name: item.label }),
           onClick: () => this._emitRemoved(item.id),
         }),
     );

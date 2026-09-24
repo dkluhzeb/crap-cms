@@ -1,5 +1,6 @@
 /**
- * Upload-field preview — `<crap-upload-preview>`.
+ * Upload-field preview — `<crap-upload-preview>` — and the size check of an
+ * upload collection's file input.
  *
  * Refreshes the thumbnail + filename row when the user picks a
  * different upload. Two source shapes are supported:
@@ -11,6 +12,11 @@
  *  - **Legacy `<select>`** — only used for locale-locked fields. The
  *    picked option carries the metadata directly.
  *
+ * A file input carrying `data-max-file-size` (bytes) refuses a larger pick
+ * as soon as it is made: the input is cleared and an error toast names the
+ * limit (`data-max-file-size-display`). Sent anyway, the whole request would
+ * be refused by the server's body limit.
+ *
  * @module uploads
  * @category form-field
  * @stability stable
@@ -18,6 +24,7 @@
 
 import { h } from './_internal/h.js';
 import { t } from './_internal/i18n.js';
+import { toast } from './_internal/util/toast.js';
 import { EV_CHANGE } from './events.js';
 
 /**
@@ -128,3 +135,29 @@ class CrapUploadPreview extends HTMLElement {
 }
 
 customElements.define('crap-upload-preview', CrapUploadPreview);
+
+/**
+ * Refuse a picked file larger than its input's `data-max-file-size`: clear
+ * the input and toast the limit, so the form never sends a body the server
+ * refuses outright.
+ *
+ * @param {Event} e
+ */
+function checkPickedFileSize(e) {
+  const input = e.target;
+  if (!(input instanceof HTMLInputElement) || input.type !== 'file') return;
+
+  const max = Number(input.dataset.maxFileSize);
+  if (!Number.isFinite(max) || max <= 0) return;
+
+  const tooLarge = Array.from(input.files ?? []).some((file) => file.size > max);
+  if (!tooLarge) return;
+
+  input.value = '';
+  toast({
+    message: t('upload_too_large', { max: input.dataset.maxFileSizeDisplay || String(max) }),
+    type: 'error',
+  });
+}
+
+document.addEventListener('change', checkPickedFileSize);

@@ -11,6 +11,7 @@
  */
 
 import { h } from '../_internal/h.js';
+import { t } from '../_internal/i18n.js';
 
 /**
  * @typedef {(name: string) => boolean} FeatureCheck
@@ -116,10 +117,10 @@ function group(buttons) {
 /** @param {FeatureCheck} has */
 function inlineGroup(has) {
   const buttons = [
-    has('bold') && btn('bold', 'Bold (Ctrl+B)', h('strong', { text: 'B' })),
-    has('italic') && btn('italic', 'Italic (Ctrl+I)', h('em', { text: 'I' })),
-    has('code') && btn('code', 'Inline code (Ctrl+`)', h('code', { text: '</>' })),
-    has('link') && btn('link', 'Link', 'Link'),
+    has('bold') && btn('bold', t('richtext.bold'), h('strong', { text: 'B' })),
+    has('italic') && btn('italic', t('richtext.italic'), h('em', { text: 'I' })),
+    has('code') && btn('code', t('richtext.code'), h('code', { text: '</>' })),
+    has('link') && btn('link', t('richtext.link'), t('richtext.link')),
   ].filter(Boolean);
   return buttons.length > 0 ? group(/** @type {HTMLElement[]} */ (buttons)) : null;
 }
@@ -128,29 +129,36 @@ function inlineGroup(has) {
 function blockGroup(has) {
   if (!has('heading')) return null;
   return group([
-    btn('h1', 'Heading 1', 'H1'),
-    btn('h2', 'Heading 2', 'H2'),
-    btn('h3', 'Heading 3', 'H3'),
-    btn('paragraph', 'Paragraph', 'P'),
+    btn('h1', t('richtext.heading_1'), 'H1'),
+    btn('h2', t('richtext.heading_2'), 'H2'),
+    btn('h3', t('richtext.heading_3'), 'H3'),
+    btn('paragraph', t('richtext.paragraph'), 'P'),
   ]);
 }
 
 /** @param {FeatureCheck} has */
 function listGroup(has) {
   const buttons = [
-    has('bulletList') && btn('ul', 'Bullet list', 'UL'),
-    has('orderedList') && btn('ol', 'Ordered list', 'OL'),
-    has('blockquote') && btn('blockquote', 'Blockquote', 'Quote'),
-    has('horizontalRule') && btn('hr', 'Horizontal rule', 'HR'),
+    has('bulletList') && btn('ul', t('richtext.bullet_list'), 'UL'),
+    has('orderedList') && btn('ol', t('richtext.ordered_list'), 'OL'),
+    has('blockquote') && btn('blockquote', t('richtext.blockquote'), t('richtext.quote')),
+    has('horizontalRule') && btn('hr', t('richtext.horizontal_rule'), 'HR'),
   ].filter(Boolean);
   return buttons.length > 0 ? group(/** @type {HTMLElement[]} */ (buttons)) : null;
 }
 
 /** @param {CustomNodeRef[]} customNodes */
 function customNodeGroup(customNodes) {
-  return group(customNodes.map((nd) => btn(`insert-${nd.name}`, `Insert ${nd.label}`, nd.label)));
+  return group(
+    customNodes.map((nd) =>
+      btn(`insert-${nd.name}`, t('richtext.insert', { name: nd.label }), nd.label),
+    ),
+  );
 }
 
 function historyGroup() {
-  return group([btn('undo', 'Undo (Ctrl+Z)', 'Undo'), btn('redo', 'Redo (Ctrl+Shift+Z)', 'Redo')]);
+  return group([
+    btn('undo', t('richtext.undo_title'), t('richtext.undo')),
+    btn('redo', t('richtext.redo_title'), t('richtext.redo')),
+  ]);
 }

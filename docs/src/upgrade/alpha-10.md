@@ -150,6 +150,12 @@ of the API.
   read document is optional now, read documents gained `_status`,
   `_deleted_at` and `<name>_tz`, and localized collections get a
   `locale = "all"` read type (see Generated client types).
+- **Filter authors: a bare day covers the whole day.** On a date field and
+  on `created_at` / `updated_at`, `equals = "2026-01-15"` now matches any
+  instant on that UTC day (it used to mean the day's noon, or nothing on the
+  timestamps), `greater_than` a day starts at the next midnight and
+  `less_than_or_equal` includes the whole day. Operands with a time are
+  unchanged (see [Dates](../query-and-filters/overview.md#dates-a-bare-day-covers-the-whole-day)).
 - **Filter authors: a backslash escapes `%` and `_` in `like`.** Double a
   literal backslash; a pattern ending in a lone backslash is rejected (see
   Behavior changes).
@@ -475,8 +481,10 @@ Each only bites a definition that was already relying on ignored input:
   applies to `crap.email.queue`.
 - **Over-long generated identifiers** (>63 bytes — Postgres's limit) are
   rejected at migration — shorten very long collection/group/field/locale
-  name combinations. The error names the offending identifier. The check
-  runs on **every** backend, before any table is created, so an SQLite
+  name combinations. The error names the offending identifier. (The new
+  `parent_id` index of each array / blocks row table is not affected: a name
+  that would pass the limit is shortened with a hash of the table name.) The
+  check runs on **every** backend, before any table is created, so an SQLite
   project fails here rather than at its first Postgres deployment, where
   the identifier would be silently truncated and could collide.
 - **Present-but-invalid field constraints fail the load.** A negative,
@@ -484,6 +492,19 @@ Each only bites a definition that was already relying on ignored input:
   `max_length`, a non-boolean `integer`, or a non-finite `min` / `max` was
   dropped and left the field unbounded; the load now names the field and
   key. Fix the value (or remove the key to mean "no bound").
+- **A `_block_type` filter outside a block row is refused**: a path like
+  `content.meta._block_type` or `variants._block_type` (a group or an array
+  row has no block type) is now a validation error instead of reading as an
+  absent value. Point `_block_type` at the block row it names
+  (`content._block_type`, `content.nested._block_type`).
+- **Relationship, upload and join targets must be defined collections.**
+  A `relationship` / `upload` field (at any depth, including every target
+  of a polymorphic list) or a `join` field naming a collection that is not
+  defined used to load and then fail at startup's reference-count
+  recompute and on every write that adjusts reference counts. The load now
+  fails naming the collection or global, the field path and the target.
+  An `upload` field must also target an upload collection (`upload =
+  true`). Fix the slug, or define the missing collection.
 - **`make component` and `make field` refuse built-in names.** A component
   tag or field name that matches a built-in module, element or field
   template is rejected instead of shadowing the built-in; pick another
@@ -767,7 +788,12 @@ nothing to run. What you should do:
 A field marked `hidden = true`, or one whose `access.read` rule denies the
 caller, can no longer be used as a filter or sort target. The read fails
 with `Cannot filter or sort on '<field>': the field is not readable in this
-context` — `PERMISSION_DENIED` on gRPC, a 403 on the admin surface.
+context` — `PERMISSION_DENIED` on gRPC, a 403 on the admin surface. This
+holds at any depth: a filter on a group sub-field (`seo.secret`), an array
+row or block sub-field (`items.secret`, `content.body`), or a field nested
+inside a row is judged by that field's own rule and by the rules of the
+containers on its path — a block path in every block type that holds the
+field.
 
 This closes a leak rather than tightening a preference: a `like` filter or an
 ordering over a stripped field let a caller recover the value the read strip
@@ -1671,7 +1697,147 @@ it (or change the field definition back) and start again. Every write stores
 a has-many relationship or upload inside a row as its id list from now on, so
 a hook or client reading `"a,b"` from one reads `["a","b"]`.
 
+### 61. Hook authors: a null value reaches Lua as `nil` in every context
+
+The field-hook, validation (`validate` / `required_when`), access,
+live-filter, route, job, auth-strategy and MFA contexts, the render-hook
+`info`, and the tables `crap.*` calls return (`validate`, `delete_many`,
+`find` pagination, `list_versions`, `crap.http.request`, `crap.schema.*`)
+represented a JSON null — and an absent optional value — as a light-userdata
+sentinel. That sentinel is truthy in Lua, so `ctx.data.x == nil` was false and
+`if ctx.user then` took the branch for a null field or an anonymous request.
+They now hold `nil`, like the collection hook context and every document table
+already did, and a null key is simply absent from its table.
+
+**Action:** review Lua code that treated such a value as present. A
+truthiness test (`if ctx.data.x then`) now skips a null field; a check like
+`type(v) == "userdata"` or a comparison against the sentinel no longer
+matches — test `v == nil` instead.
+
+A null **array element** is not `nil` (that would leave a hole and truncate
+the array): it is the `crap.null` sentinel, from every context and from
+`crap.json.decode`, so `[1, null, 3]` keeps all three elements. `crap.null`
+is truthy — compare with `v == crap.null`.
+
+`crap.null` is also how Lua writes an explicit null back. A route or job
+used to forward a null it had received (the old sentinel round-tripped), and
+a `nil`-valued key is simply absent, so code that must clear a field or keep
+a present-null key in a response writes `crap.null`:
+
+```lua
+crap.collections.update("posts", id, { subtitle = crap.null })
+return { json = { next_cursor = crap.null } }
+```
+
+Access rules: a rule that reads a NULL `ctx.user` field and then returns a
+filter table is now **denied** — the NULL dropped its key out of the table,
+so `{ tenant_id = ctx.user.tenant_id, archived = false }` would have matched
+every tenant's rows. A `true` / `false` / `nil` return is unaffected.
+
+**Action (access rules):** guard optional user fields before building a
+constraint (`if ctx.user.tenant_id == nil then return false end`). A rule
+that probes an unrelated field first — `if ctx.user.role == "admin" then
+return true end; return { owner = ctx.user.id }` — is denied for a user
+whose `role` is NULL: give the field a default or make it required, or read
+it with `rawget(ctx.user, "role")`, which is not tracked. See
+[Filter Constraints](../access-control/filter-constraints.md#null-user-fields-fail-closed).
+
+### 62. Schema authors: globals refuse `hooks.before_delete` / `hooks.after_delete`
+
+A global is never deleted, so those hooks never ran. Defining one on a global
+now fails the load, naming the key — like the delete-side access keys already
+did — and `crap-cms make hook --global` no longer offers them.
+
+**Action:** remove `before_delete` / `after_delete` from every global's
+`hooks` table. Logic that belongs on a global write moves to
+`before_change` / `after_change`.
+
+### 63. Schema authors: an invalid `versions` setting fails the load
+
+A `max_versions` that is negative, fractional, text or above 4294967295 was
+read as `0` — unlimited history — without a word, and a `versions` value that
+is neither a boolean nor a table was ignored. Both are load errors now, naming
+the key.
+
+**Action:** if startup reports one, set `versions` to `true`, `false` or a
+table, and `max_versions` to a whole number from `0` (unlimited) to
+4294967295.
+
+### 64. Hook authors: regenerate your Lua types — the hook and query classes follow the runtime
+
+The generated Lua classes now describe what the runtime actually passes, so a
+type-checked project may report new diagnostics until the types are
+regenerated:
+
+- `crap.data.<Slug>` / `crap.global_data.<slug>` (a hook's `ctx.data`) mark
+  every field optional — an update's before-hooks see only the fields the
+  request sends. The create payload (`crap.input.<Slug>`) keeps `required`.
+- `ctx.operation` names every value the runtime passes (`undelete`,
+  `unpublish`, `restore` where they apply), and the typed hook contexts
+  declare `edited_by`.
+- `crap.field_hook.<Slug>` declares `id`, `locale`, `document` and `options`;
+  its `data` is `crap.data.<Slug>|table<string, any>` — a nested field's
+  `data` is its group object or row.
+- `crap.where.<Slug>` no longer offers `_status` / `_deleted_at`, and the
+  `order_by` values of `crap.query.<Slug>` drop has-many list columns and add
+  `"_rank"`.
+- `crap.hook_fn` returns `crap.HookContext|false|nil` (a `before_broadcast`
+  that suppresses with `return false` type-checks); `before_render` hooks are
+  typed through `crap.render_hook_fn` and `crap.template.render_info`;
+  `crap.hooks.list` returns an array of hook functions.
+
+**Action:** run `crap-cms typegen lua` (dev mode also regenerates on start),
+then narrow any `ctx.data.<field>` access that now reads as optional, and
+drop `_status` / `_deleted_at` from typed `where` tables — a user filter may
+not name them.
+
+### 65. Strategy authors: the authenticated user is the stored document
+
+A custom auth strategy's returned table now only **names** the user by its
+`id`. The request — and the login a strategy completes — carries the user's
+stored document, read from the auth collection exactly as for a bearer-token
+or session-cookie request. Before, `ctx.user` was the returned table itself:
+a NULL field's key had dropped out of it, so the NULL-field access guard could
+not fire and a rule such as `{ tenant_id = ctx.user.tenant_id, archived =
+false }` widened to every tenant's rows for a strategy user; and a document
+found through a Lua read lacked its hidden fields.
+
+- A returned `id` that names no stored user of the collection, or a trashed
+  one, is refused — a strategy can no longer authenticate a user that exists
+  only in its return value.
+- Fields the strategy adds to or changes on the returned table are not carried
+  into `ctx.user`.
+
+**Action:** make sure every strategy returns a user stored in its auth
+collection (look it up, or create it first — a create commits with the
+successful authentication). Store any per-user attribute a rule needs as a
+field of the collection instead of computing it in the strategy.
+
+### 66. Schema authors: a join's `on` must reference the owning collection
+
+A join field's `on` is now checked at load time. It must name a has-one,
+single-target `relationship` or `upload` field at the top level of the join's
+target collection (layout wrappers are transparent) whose target is the
+collection that owns the join. An unknown name, a field referencing another
+collection, a has-many or polymorphic relationship, and a field inside a group
+fail the load, as does a join defined in a global. None of these ever listed
+anything (a group field listed documents on single-document reads only), so no
+working join is affected.
+
+**Action:** if the load fails naming a join, point `on` at the back-reference
+field (for a group-nested one, move it to the top level of the target
+collection), or remove the join.
+
 ## Admin UI behavior
+
+### Template overrides: `layout/auth.hbs` must render the translations island
+
+The login and password-reset pages now ship the admin's JavaScript
+translations through a new partial, `partials/i18n-island.hbs`, included by
+both `layout/base.hbs` and `layout/auth.hbs`. If you override
+`layout/auth.hbs`, add `{{> partials/i18n-island}}` to its `<head>` —
+without it the password toggle on those pages announces raw translation keys
+(`password_show`) instead of its label.
 
 ### Template overrides: array and blocks row controls are gated on `readonly`
 
@@ -1943,6 +2109,16 @@ continue to work.
   included) on first startup — expect it once; no manual action. The
   `ALTER` takes an exclusive lock per table, so very large tables make
   that first startup correspondingly slower. SQLite is unaffected.
+- **Array and blocks row tables gain a `parent_id` index.** The first startup
+  creates `idx__rows_{table}` (`idx__lrows_{table}` for a localized field) on
+  every existing array and blocks row table — expect it once; no manual
+  action. The indexes are built inside the schema-sync transaction, so on a
+  large database that first startup takes correspondingly longer, and on
+  Postgres writes to those row tables from other running instances wait until
+  it commits (`CREATE INDEX` blocks writes to its table). In a multi-instance
+  deployment, upgrade at a quiet hour or start the upgraded instance first.
+  A row table name too long for the index name to fit Postgres's 63-byte
+  limit gets a shortened name ending in a hash of the table name.
 - **Restoring an old version leaves localized rows alone.** Version snapshots
   now keep each locale's array, blocks and has-many relationship rows apart, so
   a restore puts every locale's rows back where they belong. Snapshots taken
@@ -2536,6 +2712,16 @@ if you use versions on a localized collection.
   matching gRPC and admin. (Soft-deletes still keep the files.)
 
 ## Behavior changes (likely no action)
+
+- **An admin form's has-many value is a JSON array, and one plain value is
+  one element.** A field the admin form submits more than once (a
+  `<select multiple>`) reaches the server as a JSON array of its values, and a
+  single plain value of a `has_many` select, radio, text or number field is
+  that one value — an option value containing a comma (`10,5 cm`) is no
+  longer split in two. **Action:** only for scripts posting multipart forms to
+  `/api/upload/{slug}`: send a has-many field as a JSON array
+  (`tags=["a","b"]`) or repeat the field once per value; a comma-joined
+  `tags=a,b` is now the single value `a,b`.
 
 - **Four more hook references fail the boot when misspelled**: a collection
   or global's `live.filter`, an auth method's `mfa_when`, a field's

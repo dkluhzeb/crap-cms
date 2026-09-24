@@ -115,8 +115,8 @@ pub(crate) use persist::persist_bulk_update;
 pub use persist::{persist_create, persist_draft_version, persist_unpublish, persist_update};
 pub use read::{
     CollectionStats, QueryFieldRefs, collection_stats, count_documents, find_document_by_id,
-    find_documents, get_global_document, is_hidden_query_path, query_field_paths,
-    read_own_document, search_documents, unreadable_query_paths,
+    find_documents, get_global_document, is_hidden_query_path, is_system_filter_path,
+    query_field_paths, read_own_document, search_documents, unreadable_query_paths,
     validate_access_constraint_locales, validate_access_constraints, validate_user_filters,
 };
 pub(crate) use versions::{find_stored_version, read_version_snapshot, unpublish_with_snapshot};

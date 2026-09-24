@@ -147,3 +147,56 @@ async fn password_toggle_icon_renders_with_icon_font() {
 
     server_handle.abort();
 }
+
+// Regression: the login page shipped no `#crap-i18n` data island, so the
+// toggle labelled itself with the raw key `password_show`. The toggle is an
+// ARIA toggle button: its label stays fixed ("Show password") and only
+// `aria-pressed` reports the state — swapping the label as well would make a
+// screen reader announce a contradictory "Hide password, pressed".
+#[tokio::test(flavor = "multi_thread")]
+async fn password_toggle_has_translated_fixed_label_and_pressed_state() {
+    let (base_url, server_handle, _app) =
+        browser::spawn_server(vec![make_def(), make_users_def()], vec![]).await;
+
+    let (browser, _browser_handle) = browser::launch_browser().await;
+    let page = browser.new_page("about:blank").await.unwrap();
+
+    page.goto(format!("{base_url}/admin/login")).await.unwrap();
+
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "!!document.querySelector('crap-password-toggle')?.shadowRoot\
+             ?.querySelector('button.toggle')"
+        )
+        .await,
+        "password-toggle button should render in the shadow root"
+    );
+
+    let read_state = "const b = root.querySelector('button.toggle'); \
+                      return `${b.getAttribute('aria-label')}|${b.getAttribute('aria-pressed')}`;";
+
+    let initial = browser::shadow_eval(&page, "crap-password-toggle", read_state).await;
+    assert_eq!(initial, "Show password|false");
+
+    page.evaluate(
+        "() => document.querySelector('crap-password-toggle').shadowRoot \
+         .querySelector('button.toggle').click()",
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('crap-password-toggle input').type === 'text'"
+        )
+        .await,
+        "input type should become 'text' after revealing"
+    );
+
+    let revealed = browser::shadow_eval(&page, "crap-password-toggle", read_state).await;
+    assert_eq!(revealed, "Show password|true");
+
+    server_handle.abort();
+}

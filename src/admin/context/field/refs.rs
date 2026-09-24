@@ -95,6 +95,27 @@ pub struct RelationshipSelectedItem {
     /// also sets the form's hidden filename input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filename: Option<String>,
+
+    /// `Some(true)` for a stored reference the viewer cannot resolve (a target
+    /// they may not read, a trashed one, or one that cannot be fetched). It
+    /// carries only the stored `id` — no label, no title — and stays selected
+    /// so the form submits the reference back unchanged unless the user
+    /// removes it; the admin UI shows a generic label for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable: Option<bool>,
+}
+
+impl RelationshipSelectedItem {
+    /// The item for stored reference `id` that the viewer cannot resolve (see
+    /// the `unavailable` field).
+    #[must_use]
+    pub fn unavailable(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            unavailable: Some(true),
+            ..Self::default()
+        }
+    }
 }
 
 // ── Upload ────────────────────────────────────────────────────────
@@ -243,6 +264,7 @@ mod tests {
                 thumbnail_url: None,
                 is_image: None,
                 filename: None,
+                unavailable: None,
             }]),
         };
         let v = serde_json::to_value(FieldContext::Relationship(f)).unwrap();
@@ -269,6 +291,7 @@ mod tests {
                 thumbnail_url: None,
                 is_image: None,
                 filename: None,
+                unavailable: None,
             }]),
         };
         let v = serde_json::to_value(FieldContext::Relationship(f)).unwrap();

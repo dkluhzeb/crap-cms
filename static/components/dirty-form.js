@@ -7,6 +7,10 @@
  * mutations. Intercepts HTMX GET navigation, browser back/forward, and
  * tab close.
  *
+ * @attr data-unsaved  Start out dirty: the server re-rendered a submission
+ *                     it did not save (a validation error), so the form
+ *                     already holds unsaved input.
+ *
  * @module dirty-form
  * @category form-field
  * @stability stable
@@ -53,7 +57,7 @@ class CrapDirtyForm extends HTMLElement {
     this._connected = true;
 
     this._formUrl = location.href;
-    this._dirty = false;
+    this._dirty = this.hasAttribute('data-unsaved');
 
     // Defer arming until after child components finish initialising. Without
     // this, `crap:change` events fired during `<crap-relationship-search>`
@@ -93,21 +97,24 @@ class CrapDirtyForm extends HTMLElement {
     this._onPopState = () => this._onBrowserNav();
     window.addEventListener('popstate', this._onPopState);
 
-    // Form save (non-GET = POST/PUT/DELETE/PATCH) clears the dirty flag —
-    // but only THIS form's own request, and only once it is actually sent.
-    // `htmx:beforeSend` fires after every `htmx:beforeRequest` listener had
-    // its say, so a submit another component cancelled there (the pre-submit
-    // validation of upload forms, which then shows inline errors) never
-    // clears the flag; the `elt` check keeps an unrelated request (an
-    // inline-create panel posting its own form) from clearing it either.
-    // Both would otherwise let the user navigate away and lose their edits
-    // without the leave prompt.
-    this._onBeforeSend = (e) => {
-      const elt = /** @type {CustomEvent} */ (e).detail?.elt;
+    // A save (non-GET = POST/PUT/DELETE/PATCH) clears the dirty flag only
+    // once the server has accepted it — and only for THIS form's own
+    // request (an inline-create panel posting its own form must not clear
+    // it). `htmx:beforeOnLoad` fires before htmx acts on the response, so the
+    // flag is already clear when a success follows `HX-Redirect` (no leave
+    // prompt for the save itself). An error status (422 validation or hook
+    // error, 403, 409, 413) leaves the form as it was — still dirty. A 200
+    // validation re-render swaps in a fresh guard marked `data-unsaved`.
+    this._onBeforeOnLoad = (e) => {
+      const detail = /** @type {CustomEvent} */ (e).detail;
+      const elt = detail?.elt;
       if (!this._form || !(elt instanceof Node) || !this._form.contains(elt)) return;
-      if (getHttpVerb(e) !== 'GET') this._dirty = false;
+      if (getHttpVerb(e) === 'GET') return;
+
+      const status = /** @type {XMLHttpRequest|undefined} */ (detail.xhr)?.status ?? 0;
+      if (status >= 200 && status < 400) this._dirty = false;
     };
-    document.addEventListener('htmx:beforeSend', this._onBeforeSend);
+    document.addEventListener('htmx:beforeOnLoad', this._onBeforeOnLoad);
 
     this._onBeforeUnload = (e) => {
       if (this._dirty) e.preventDefault();
@@ -127,7 +134,8 @@ class CrapDirtyForm extends HTMLElement {
     if (this._onConfigRequest)
       document.removeEventListener('htmx:configRequest', this._onConfigRequest);
     if (this._onPopState) window.removeEventListener('popstate', this._onPopState);
-    if (this._onBeforeSend) document.removeEventListener('htmx:beforeSend', this._onBeforeSend);
+    if (this._onBeforeOnLoad)
+      document.removeEventListener('htmx:beforeOnLoad', this._onBeforeOnLoad);
     if (this._onBeforeUnload) window.removeEventListener('beforeunload', this._onBeforeUnload);
   }
 

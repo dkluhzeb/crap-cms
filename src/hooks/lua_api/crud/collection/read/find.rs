@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::hooks::lua_api::utils::lua_err;
+use crate::hooks::lua_api::{to_lua_value, utils::lua_err};
 use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::{Deserialize, Serialize};
@@ -142,7 +142,7 @@ impl FindQueryInput {
 }
 
 /// Result of `crap.collections.find(...)`. Constructed by the handler
-/// and serialized via `LuaSerdeExt::to_value` — the Lua-side
+/// and serialized via `to_lua_value` — the Lua-side
 /// `crap.FindResult` class is derived from this struct.
 #[derive(Serialize, LuaAnnotation)]
 #[lua(class = "crap.FindResult")]
@@ -327,18 +327,15 @@ fn find_inner(
         documents: &result.docs,
         pagination: &result.pagination,
     };
-    let Value::Table(tbl) = lua.to_value(&find_result)? else {
+    let Value::Table(tbl) = to_lua_value(lua, &find_result)? else {
         return Err(RuntimeError(
             "FindResult did not serialize to a table".into(),
         ));
     };
 
     // Rebuild `documents` through the canonical Document→Lua converter so a
-    // list read represents null/absent fields identically to `find_by_id` and
-    // every other document surface: serde `to_value` emits the `NULL` sentinel
-    // for absent timestamps and json-null fields, whereas `document_to_lua_table`
-    // omits absent timestamps and yields `nil`. Without this, `doc.field == nil`
-    // would differ between `find_by_id(...)` and an element of `find().documents`.
+    // list read builds each document exactly like `find_by_id` and every other
+    // document surface — one converter decides the document table's shape.
     let docs_tbl = lua.create_table()?;
     for (i, doc) in result.docs.iter().enumerate() {
         docs_tbl.set(i + 1, document_to_lua_table(lua, doc)?)?;

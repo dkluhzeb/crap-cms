@@ -145,9 +145,12 @@ macro_rules! pg_shared_methods {
                     DbValue::Text(format!("{prefix}%")),
                 ],
             )?;
+            // `LIKE` reads a `_` in the prefix as any character: keep only
+            // the names that really start with `prefix`.
             Ok(rows
                 .iter()
                 .filter_map(|r| r.get_string("indexname").ok())
+                .filter(|name| name.starts_with(prefix))
                 .collect())
         }
 

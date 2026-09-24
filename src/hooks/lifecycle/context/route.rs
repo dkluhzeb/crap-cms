@@ -2,7 +2,7 @@
 //!
 //! Mirrors the [`AuthStrategyContext`](super::strategy::AuthStrategyContext)
 //! pattern: `Serialize` so the route dispatcher builds it once and Lua sees it
-//! via `lua.to_value()`, and `LuaAnnotation` so the Lua-side type lives next to
+//! via `lua_api::to_lua_value`, and `LuaAnnotation` so the Lua-side type lives next to
 //! the Rust struct that produces it.
 
 use std::collections::HashMap;

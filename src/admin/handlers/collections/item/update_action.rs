@@ -3,13 +3,14 @@ use axum::{
     extract::{Path, Request, State},
     response::Response,
 };
-use tracing::error;
 
 use crate::{
     admin::{
         AdminState,
         handlers::{
-            collections::shared::{UpdateRequest, delete_action_impl, do_update},
+            collections::shared::{
+                UpdateRequest, delete_action_impl, do_update, form_parse_error_response,
+            },
             forms::parse_form,
             shared::{HxNav, paths, redirect_response},
         },
@@ -31,10 +32,7 @@ pub async fn update_action(
 
     let (mut form_data, file) = match parse_form(request, &state, &def).await {
         Ok(result) => result,
-        Err(e) => {
-            error!("{}", e);
-            return redirect_response(&paths::collection_item(&slug, &id));
-        }
+        Err(e) => return form_parse_error_response(&state, &def, auth_user.as_ref(), &e),
     };
 
     let method = form_data.remove("_method").unwrap_or_default();

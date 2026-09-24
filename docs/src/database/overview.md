@@ -118,7 +118,18 @@ CREATE TABLE posts_slides (
     image_url TEXT,
     caption TEXT
 );
+CREATE INDEX idx__rows_posts_slides ON posts_slides (parent_id);
 ```
+
+Every array and blocks row table is indexed on `parent_id` — named
+`idx__rows_{table}`, or `idx__lrows_{table}` on `(parent_id, _locale)` for a
+localized one — so loading a document's rows, row filters and the cascade
+delete from the parent never scan the whole table. A name that would pass
+Postgres's 63-byte identifier limit is shortened: the prefix, the start of the
+table name, `_` and 16 hex digits of a hash of the table name. The schema sync
+creates the index on new and existing tables and switches its form when the
+field gains or loses localization. A has-many junction needs none: its primary key leads with
+`parent_id`.
 
 ### Metadata Table
 
@@ -200,6 +211,12 @@ plan a schema change invalidated (another node's schema sync, `crap-cms db
 migrate`) is re-prepared once and the query retried in autocommit; inside a
 transaction — which the failure has already aborted — the statement is
 evicted and the error reported, and the next transaction re-prepares it.
+
+Every Postgres session is opened with `timezone = 'UTC'`, `lc_messages = 'C'`
+(when the server permits it) and `client_min_messages = 'warning'`. The last
+keeps the server's NOTICE messages — one "relation … already exists, skipping"
+per `CREATE … IF NOT EXISTS` the schema sync runs on every boot — out of the
+log; warnings and errors still arrive.
 
 - **Read operations** — `db/ops.rs` gets a connection from the read pool, calls `query::*` functions
 - **Write operations** — callers get a connection from the write pool, open a transaction, call `query::*`, then commit

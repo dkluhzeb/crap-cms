@@ -51,6 +51,37 @@ admin UI, Lua, and gRPC surfaces — so a filter behaves the same everywhere:
   orders correctly). If you want numeric ordering, use a `number` field — don't
   store numbers in a `text` field.
 
+### Dates: a bare day covers the whole day
+
+A date is stored as a UTC instant (`2026-01-15T09:30:00.000Z`), but a filter
+often names a calendar day — the admin filter builder sends `YYYY-MM-DD` for a
+`date` field and for `created_at` / `updated_at`. On a `date` field (in a
+column, a group, or an array or blocks row) and on the
+`created_at` / `updated_at` timestamps, an operand that is exactly a valid
+`YYYY-MM-DD` covers that whole **UTC** day, `[D 00:00, D+1 00:00)`:
+
+| Operator | `D` = `2026-01-15` matches |
+|---|---|
+| `equals` | any instant on the 15th |
+| `not_equals` | any instant not on the 15th |
+| `greater_than` | from `2026-01-16T00:00:00.000Z` on |
+| `greater_than_or_equal` | from `2026-01-15T00:00:00.000Z` on |
+| `less_than` | before `2026-01-15T00:00:00.000Z` |
+| `less_than_or_equal` | before `2026-01-16T00:00:00.000Z` |
+| `in` / `not_in` | on (not on) any listed day; a listed instant stays exact |
+
+An operand with a time (`2026-01-15T09:00`, `2026-01-15T09:00:00+02:00`) keeps
+its exact comparison, normalized to the stored UTC form. The day is always the
+UTC day of the stored value — a `timezone = true` field included, whose value
+is stored in UTC (a bare date written to such a field is the zone's local noon,
+which for a zone more than 12 hours from UTC — UTC+13/+14, UTC−12 — lies on the
+neighbouring UTC day). To select a local day in another zone, pass the zone's
+midnight bounds with an offset:
+`greater_than_or_equal = "2026-01-15T00:00:00-05:00"` and
+`less_than = "2026-01-16T00:00:00-05:00"`. A NULL date matches no comparison,
+`not_equals` and `not_in` included. SQL and the in-memory evaluator (live
+events, population gating) read dates alike.
+
 ### Has-many fields: element by element
 
 A field that holds a list — a `text`, `number`, `select` or `radio` field with
@@ -342,7 +373,7 @@ grpcurl -plaintext -d '{
 
 ## Field Validation
 
-All filter field names and `order_by` fields are validated against the collection's field definitions. Invalid field names return an error. This prevents SQL injection via field names.
+All filter field names and `order_by` fields are validated against the collection's field definitions, and so is every dot-notation path down to its last segment: an unknown field, an array or block sub-field the rows do not have, a sub-path into a field that has none, or a path ending on a container (a group, a nested array) is rejected before any SQL runs. The error is a validation error naming the path (or `order_by`), reported the same way on every surface and for every operation that filters — `Find`, `Count`, `UpdateMany` and `DeleteMany` answer `INVALID_ARGUMENT` over gRPC, MCP reports the message, Lua raises it. This also keeps field names from ever reaching SQL unchecked.
 
 ## Draft Parameter (Versioned Collections)
 
@@ -412,6 +443,8 @@ grpcurl -plaintext -d '{
 
 Filter by sub-field values in array rows. Uses an `EXISTS` subquery against the array join table. Returns parent documents that have **at least one** array row matching the condition — for every operator, `not_equals` included (`variants.color not_equals "red"` finds a document with at least one non-red variant). A has-many sub-field — a list, or a has-many relationship's ids (`variants.related`) — is then read element by element inside that row. A sub-field inside a layout `row`, `collapsible` or `tabs` is named directly (`variants.width`), since a row stores it under its own name.
 
+A group, nested array or nested blocks sub-field is stored as JSON in its row, and a path continues into it at any depth, exactly as it does inside a block row: `variants.dimensions.width` (group), `variants.sizes.label` (a nested array — some nested row matches), `variants.parts._block_type` (nested blocks). `variants.id` filters by the row's own id — the id every read returns for the row and every write round-trips. A row nested inside another row's JSON has no filterable id, and the row table's bookkeeping columns (`_order`, `parent_id`, `_locale`) are not filterable.
+
 **Lua:**
 
 ```lua
@@ -433,7 +466,7 @@ crap.collections.products.find({
 
 ### Block Sub-Fields
 
-Filter by field values inside block rows. Uses `json_extract` on the block `data` column. Returns parent documents that have **at least one** block row matching. A field inside a layout `row`, `collapsible` or `tabs` is named directly (`content.caption`), and a has-many list or relationship inside the block is read element by element.
+Filter by field values inside block rows. Uses `json_extract` on the block `data` column. Returns parent documents that have **at least one** block row matching. A field inside a layout `row`, `collapsible` or `tabs` is named directly (`content.caption`), and a has-many list or relationship inside the block is read element by element. Groups, nested arrays and nested blocks are followed at any depth; `_block_type` names the type of the block row it follows (`content._block_type`, `content.nested._block_type`) and is refused anywhere else. `content.id` filters by the block row's own id, as `variants.id` does for an array row.
 
 **Lua:**
 
@@ -540,7 +573,8 @@ The FTS index is automatically created and rebuilt on server startup for every c
 
 A filter or sort on a field the caller cannot read is rejected with an
 access error rather than answered — `hidden` fields for everyone, fields
-with an `access.read` rule for callers the rule denies. See
+with an `access.read` rule for callers the rule denies, at any depth of the
+path (a group, array-row, block or nested-row sub-field included). See
 [field-level access](../access-control/field-level.md#filtering-sorting-and-search).
 
 A filter value that does not fit the field's type — a non-numeric string
@@ -561,6 +595,6 @@ System columns (names starting with `_`, such as `_status`, `_deleted_at`, `_ref
 Additionally, you can filter on sub-fields using dot notation:
 
 - **Group sub-fields:** `group_name.sub_field` (syntactic sugar for `group_name__sub_field`)
-- **Array sub-fields:** `array_name.sub_field` or `array_name.group.sub_field` (group-in-array)
-- **Block sub-fields:** `blocks_name.field`, `blocks_name._block_type`, or `blocks_name.group.sub_field`
+- **Array sub-fields:** `array_name.sub_field`, `array_name.id` (the row's id), or a path into a group, nested array or nested blocks sub-field at any depth (`array_name.group.sub_field`, `array_name.nested.sub_field`)
+- **Block sub-fields:** `blocks_name.field`, `blocks_name._block_type`, `blocks_name.id` (the row's id), or a path into a group, nested array or nested blocks at any depth (`blocks_name.group.sub_field`)
 - **Has-many relationships:** `relationship_name.id`

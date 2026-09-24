@@ -9,7 +9,10 @@ use crate::{
     db::{FilterClause, FindQuery, LocaleContext},
 };
 
-use super::{columns::get_valid_filter_columns, filter::lookup_column_field};
+use super::{
+    columns::get_valid_filter_columns,
+    filter::{invalid_query, lookup_column_field},
+};
 
 /// Check that a string is a safe SQL identifier (alphanumeric + underscore).
 #[must_use]
@@ -165,8 +168,9 @@ pub fn validate_field_name(field: &str, valid_columns: &HashSet<String>) -> Resu
 ///
 /// # Errors
 ///
-/// Returns an error if any filter field or `order_by` references a column
-/// that does not exist on the collection.
+/// Returns a typed validation error (`ValidationError`, naming the filter path
+/// or `order_by`) if any filter field or `order_by` references a column that
+/// does not exist on the collection, or a sort the collection cannot order by.
 pub fn validate_query_fields(
     def: &CollectionDefinition,
     query: &FindQuery,
@@ -183,6 +187,7 @@ pub fn validate_query_fields(
     };
 
     validate_order_by(def, query, order, &exact_columns)
+        .map_err(|e| invalid_query("order_by", e.to_string()))
 }
 
 /// Validate `order_by`: a flat column (no sub-field sorting) holding one value
@@ -278,7 +283,8 @@ fn collect_prefix_roots(fields: &[FieldDefinition], prefixes: &mut HashSet<Strin
     }
 }
 
-/// Validate a single filter field name against exact columns or dot-path prefixes.
+/// Validate a single filter field name against exact columns or dot-path
+/// prefixes. An unknown field is a typed validation error naming it.
 pub(crate) fn validate_filter_field(
     field: &str,
     exact_columns: &HashSet<String>,
@@ -307,16 +313,21 @@ pub(crate) fn validate_filter_field(
         }
     }
 
-    bail!("Invalid field '{}'. Valid fields: {}", field, {
-        let mut all: Vec<String> = exact_columns.iter().cloned().collect();
+    let mut valid: Vec<String> = exact_columns.iter().cloned().collect();
 
-        for p in prefix_roots {
-            all.push(format!("{p}.*"));
-        }
+    for p in prefix_roots {
+        valid.push(format!("{p}.*"));
+    }
 
-        all.sort();
-        all.join(", ")
-    })
+    valid.sort();
+
+    Err(invalid_query(
+        field,
+        format!(
+            "Invalid field '{field}'. Valid fields: {}",
+            valid.join(", ")
+        ),
+    ))
 }
 
 /// Recursively validate every leaf field in a [`FilterClause`] tree against the
@@ -343,7 +354,9 @@ mod tests {
     use super::*;
     use crate::core::{
         CollectionDefinition, FieldDefinition, FieldTab, FieldType, RelationshipConfig,
+        ValidationError,
     };
+    use crate::db::{Filter, FilterOp};
 
     #[test]
     fn is_valid_identifier_accepts_valid() {
@@ -533,5 +546,40 @@ mod tests {
         assert!(err.to_string().contains("Cannot sort by 'tags'"), "{err}");
 
         assert!(validate_query_fields(&def, &query("title"), None).is_ok());
+    }
+
+    /// An unknown filter field and an impossible sort are the caller's
+    /// mistake: a typed validation error naming the path or `order_by`, which
+    /// every surface answers as invalid-argument rather than internal.
+    #[test]
+    fn query_field_errors_are_typed_validation_errors() {
+        let def = CollectionDefinition::builder("test")
+            .fields(vec![
+                FieldDefinition::builder("title", FieldType::Text).build(),
+            ])
+            .build();
+        let field_of = |query: &FindQuery| {
+            let err = validate_query_fields(&def, query, None).unwrap_err();
+            let ve = err
+                .downcast_ref::<ValidationError>()
+                .unwrap_or_else(|| panic!("untyped: {err:#}"));
+
+            ve.errors[0].field.clone()
+        };
+
+        let bad_filter = FindQuery {
+            filters: vec![FilterClause::Single(Filter {
+                field: "nope".to_string(),
+                op: FilterOp::Equals("x".to_string()),
+            })],
+            ..FindQuery::default()
+        };
+        let bad_sort = FindQuery {
+            order_by: Some("nope".to_string()),
+            ..FindQuery::default()
+        };
+
+        assert_eq!(field_of(&bad_filter), "nope");
+        assert_eq!(field_of(&bad_sort), "order_by");
     }
 }

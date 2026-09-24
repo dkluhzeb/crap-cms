@@ -195,7 +195,7 @@ fn get_bound(tbl: &Table, name: &str, key: &str) -> Result<Option<f64>> {
 /// `n` as an integer when it is a whole number within the exactly
 /// representable range.
 #[allow(clippy::cast_possible_truncation, clippy::float_cmp)]
-fn whole_number(n: f64) -> Option<i64> {
+pub(in crate::hooks::lua_api::parse) fn whole_number(n: f64) -> Option<i64> {
     // Exactness is checked before the cast: a whole number of magnitude
     // below 2^53 converts without truncation.
     (n.fract() == 0.0 && n.abs() < 9_007_199_254_740_992.0).then_some(n as i64)
@@ -211,7 +211,7 @@ fn exact_f64(i: i64) -> Option<f64> {
 
 /// A config value as an error message shows it: numbers by value, anything
 /// else by type.
-fn describe(value: &Value) -> String {
+pub(in crate::hooks::lua_api::parse) fn describe(value: &Value) -> String {
     match value {
         Value::Integer(i) => i.to_string(),
         Value::Number(n) => n.to_string(),

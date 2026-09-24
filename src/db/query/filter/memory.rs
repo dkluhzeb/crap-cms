@@ -68,7 +68,10 @@ use crate::{
     },
     db::{
         Filter, FilterClause, FilterOp,
-        query::helpers::{ListPlace, normalize_date_value},
+        query::{
+            filter::day::day_filter,
+            helpers::{ListPlace, normalize_date_value},
+        },
     },
 };
 
@@ -192,10 +195,21 @@ fn matches_leaf(value: &Value, op: &FilterOp, leaf: Option<&Leaf>) -> bool {
 /// Evaluate an operator against one present, non-null value.
 fn matches_value(value: &Value, op: &FilterOp, ft: Option<&FieldType>) -> bool {
     let value_str = value_to_string(value);
+
+    // A bare-day operand on a date covers its whole UTC day, as SQL reads it.
+    if matches!(ft, Some(FieldType::Date))
+        && let Some(day) = day_filter(op)
+    {
+        return day.matches(&normalize_date_value(&value_str));
+    }
+
     // Operands in the form the field's values are stored in, as SQL binds them:
     // otherwise an email typed with capitals fails `equals` and passes
     // `not_equals` here while SQL decides the reverse.
     let operand = |raw: &str| canonical_operand(ft, raw).into_owned();
+    // An ordered comparison's operand as SQL binds it: a date normalized to
+    // its stored form.
+    let bound = |raw: &str| ordered_operand(ft, raw);
 
     match op {
         // Equality/membership are coerced by field type so Checkbox/Number agree
@@ -209,17 +223,30 @@ fn matches_value(value: &Value, op: &FilterOp, ft: Option<&FieldType>) -> bool {
             .contains(&operand(needle).to_ascii_lowercase()),
         FilterOp::Like(pattern) => matches_like(&value_str, &operand(pattern)),
         FilterOp::GreaterThan(expected) => {
-            order_is(value, &operand(expected), Ordering::Greater, false)
+            order_is(value, &bound(expected), Ordering::Greater, false)
         }
-        FilterOp::LessThan(expected) => order_is(value, &operand(expected), Ordering::Less, false),
+        FilterOp::LessThan(expected) => order_is(value, &bound(expected), Ordering::Less, false),
         FilterOp::GreaterThanOrEqual(expected) => {
-            order_is(value, &operand(expected), Ordering::Greater, true)
+            order_is(value, &bound(expected), Ordering::Greater, true)
         }
         FilterOp::LessThanOrEqual(expected) => {
-            order_is(value, &operand(expected), Ordering::Less, true)
+            order_is(value, &bound(expected), Ordering::Less, true)
         }
         FilterOp::Exists => true, // the value is present (checked by the caller)
         FilterOp::NotExists => false, // present, but the op says it shouldn't be
+    }
+}
+
+/// The operand of an ordered comparison as SQL's `coerce_filter_value` binds
+/// it: in the field's canonical form, a date normalized to its stored form —
+/// so `> 2026-01-15T09:00` compares against `2026-01-15T09:00:00.000Z` on
+/// both paths.
+fn ordered_operand(ft: Option<&FieldType>, raw: &str) -> String {
+    let canonical = canonical_operand(ft, raw);
+
+    match ft {
+        Some(FieldType::Date) => normalize_date_value(&canonical),
+        _ => canonical.into_owned(),
     }
 }
 
@@ -245,8 +272,9 @@ fn typed_eq(stored: &Value, expected: &str, ft: Option<&FieldType>) -> bool {
         }
         // SQL binds a Date comparand through `normalize_date_value` (and the
         // stored column was normalized at write time), so normalize both sides
-        // here too — otherwise `2026-01-15` vs `2026-01-15T00:00:00.000Z` would
-        // diverge (fail-open for `NotEquals`/`NotIn`).
+        // here too — otherwise `2026-01-15T09:00` vs `2026-01-15T09:00:00.000Z`
+        // would diverge (fail-open for `NotEquals`/`NotIn`). A bare day never
+        // reaches here: it covers its whole day (`filter::day`).
         Some(FieldType::Date) => {
             normalize_date_value(&value_to_string(stored)) == normalize_date_value(expected)
         }
@@ -853,6 +881,27 @@ mod tests {
             FilterOp::NotEquals("2026-01-15T09:00:00Z".into()),
         );
         assert!(!matches_constraints_typed(&d, from_ref(&neq), &fields));
+    }
+
+    /// Regression: an ordered Date constraint compared its operand raw while
+    /// SQL binds it normalized, so `> 2026-01-15T09:00` matched a date stored
+    /// at exactly 09:00 (the longer string sorts after) where SQL did not.
+    #[test]
+    fn ordered_date_constraint_normalizes_the_operand_like_sql() {
+        let fields = vec![FieldDefinition::builder("published_at", FieldType::Date).build()];
+        let d = data(&[("published_at", json!("2026-01-15T09:00:00.000Z"))]);
+
+        let gt = typed_single(
+            "published_at",
+            FilterOp::GreaterThan("2026-01-15T09:00".into()),
+        );
+        assert!(!matches_constraints_typed(&d, from_ref(&gt), &fields));
+
+        let lte = typed_single(
+            "published_at",
+            FilterOp::LessThanOrEqual("2026-01-15T09:00".into()),
+        );
+        assert!(matches_constraints_typed(&d, from_ref(&lte), &fields));
     }
 
     /// Number constraints compare numerically (`3` == `3.0`), not as strings.

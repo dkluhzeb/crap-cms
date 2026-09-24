@@ -8,10 +8,12 @@ The `Subscribe` RPC provides a server-streaming endpoint for real-time mutation 
 message SubscribeRequest {
   repeated string collections = 1;  // empty = all accessible
   repeated string globals = 2;      // empty = all accessible
-  repeated string operations = 3;   // "create","update","delete" — empty = all
+  repeated string operations = 3;   // "create","update","delete","undelete","unpublish","restore" — empty = all
   string token = 4;                 // auth token from Login RPC
 }
 ```
+
+An unknown operation name is rejected with `INVALID_ARGUMENT`.
 
 ## Response Stream
 
@@ -20,11 +22,21 @@ message MutationEvent {
   uint64 sequence = 1;
   string timestamp = 2;
   MutationTarget target = 3;       // COLLECTION or GLOBAL
-  MutationOperation operation = 4; // CREATE, UPDATE, or DELETE
+  MutationOperation operation = 4; // CREATE, UPDATE, DELETE, UNDELETE, UNPUBLISH or RESTORE
   string collection = 5;
   string document_id = 6;
   DataMap data = 7;
   string publisher = 8;       // node that published it; sequence is per publisher
+}
+
+enum MutationOperation {
+  MUTATION_OPERATION_UNSPECIFIED = 0;
+  MUTATION_OPERATION_CREATE = 1;
+  MUTATION_OPERATION_UPDATE = 2;
+  MUTATION_OPERATION_DELETE = 3;
+  MUTATION_OPERATION_UNDELETE = 4;   // restored from the trash
+  MUTATION_OPERATION_UNPUBLISH = 5;  // published document/global reverted to draft
+  MUTATION_OPERATION_RESTORE = 6;    // version snapshot restored over the live one
 }
 ```
 
@@ -56,8 +68,13 @@ grpcurl -plaintext -d '{
 ## Access Control
 
 - Authentication via `token` field (same token as `Login` response)
-- Read access is checked at subscribe time for each requested collection/global
-- Collections/globals without read access are silently excluded
+- Access is resolved at subscribe time per content view — `read` (published),
+  `draft` and `trash` — for each requested collection/global, and each event is
+  delivered only to subscribers allowed the view it belongs to (a draft event
+  needs `draft`, a soft-delete `trash`); row constraints and, in `full` mode,
+  field-level access apply per subscriber. See
+  [Access Control](overview.md#access-control).
+- Collections/globals with no visible content view are silently excluded
 - Returns `PERMISSION_DENIED` if no collections or globals are accessible
 - Returns `UNAVAILABLE` if live updates are disabled in config
 

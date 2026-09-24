@@ -71,9 +71,12 @@ fn sqlite_index_names(conn: &dyn DbConnection, table: &str, prefix: &str) -> Res
         ],
     )?;
 
+    // `LIKE` reads a `_` in the prefix as any character, and ignores case:
+    // keep only the names that really start with `prefix`.
     Ok(rows
         .into_iter()
         .filter_map(|r| r.get_string("name").ok())
+        .filter(|name| name.starts_with(prefix))
         .collect())
 }
 
@@ -649,6 +652,24 @@ mod tests {
         let pool = pool::create_pool(dir.path(), &config).unwrap();
         let conn = pool.get().unwrap();
         (dir, conn)
+    }
+
+    /// Regression: the prefix was matched with `LIKE`, where `_` is any
+    /// character and case is ignored, so an index merely resembling the
+    /// prefix was listed — and dropped by the callers that remove the
+    /// indexes they no longer want.
+    #[test]
+    fn index_names_match_the_prefix_exactly() {
+        let (_dir, conn) = temp_conn();
+        conn.execute_batch(
+            "CREATE TABLE t (a TEXT, b TEXT, c TEXT);
+             CREATE INDEX idx_t_a ON t (a);
+             CREATE INDEX idxXtXb ON t (b);
+             CREATE INDEX IDX_T_C ON t (c);",
+        )
+        .unwrap();
+
+        assert_eq!(conn.index_names("t", "idx_t_").unwrap(), vec!["idx_t_a"]);
     }
 
     #[test]

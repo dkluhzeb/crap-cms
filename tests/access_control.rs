@@ -230,6 +230,135 @@ fn admin_only_allows_admin() {
     assert!(matches!(result, query::AccessResult::Allowed));
 }
 
+/// The single `field = value` constraint an access result carries.
+fn single_constraint(result: &query::AccessResult) -> (String, String) {
+    let query::AccessResult::Constrained(clauses) = result else {
+        panic!("expected a filter-table constraint, got {result:?}");
+    };
+
+    let [query::FilterClause::Single(filter)] = clauses.as_slice() else {
+        panic!("expected one field constraint, got {clauses:?}");
+    };
+
+    let query::FilterOp::Equals(value) = &filter.op else {
+        panic!("expected an equality constraint, got {:?}", filter.op);
+    };
+
+    (filter.field.clone(), value.clone())
+}
+
+/// Regression: the example's post `update` rule trusted the incoming patch —
+/// `author = <own id>` in the request granted an author any post. Ownership
+/// is now a filter table enforced on the stored row, and a patch that hands
+/// the post to someone else is refused.
+#[test]
+fn example_author_rule_checks_the_stored_post() {
+    let (_tmp, pool, _registry, runner) = setup();
+    let conn = pool.get().unwrap();
+    let author = make_user_doc("author-1", "author");
+    let hook = HookRef::new("access.author_or_editor");
+
+    let check = |patch: Value| {
+        let data: DocumentFields = serde_json::from_value(patch).unwrap();
+
+        runner
+            .check_access(
+                &AccessCheckInput::builder("update", "posts")
+                    .access(Some(&hook))
+                    .user(Some(&author))
+                    .id(Some("someone-elses-post"))
+                    .data(Some(&data))
+                    .build(),
+                &conn,
+            )
+            .unwrap()
+    };
+
+    assert_eq!(
+        single_constraint(&check(json!({ "author": "author-1" }))),
+        ("author".to_string(), "author-1".to_string()),
+        "claiming the post in the patch must not grant it"
+    );
+    assert_eq!(
+        single_constraint(&check(json!({ "title": "x" }))),
+        ("author".to_string(), "author-1".to_string())
+    );
+    assert!(matches!(
+        check(json!({ "author": "author-2" })),
+        query::AccessResult::Denied
+    ));
+}
+
+/// Regression: the example's project `update` rule read the team from the
+/// incoming patch — a partial update without `team` denied a member, and a
+/// patch listing its sender granted anyone. Its replacement returned a dotted
+/// `team.id` constraint, which access enforcement rejects. Membership is now
+/// checked by loading the stored project's team.
+#[test]
+fn example_team_rule_checks_the_stored_project() {
+    let (_tmp, pool, registry, runner) = setup();
+    let projects = registry.get_collection("projects").unwrap().clone();
+
+    let project_id = {
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Apollo"));
+        data.insert("slug".to_string(), json!("apollo"));
+        data.insert("status".to_string(), json!("planning"));
+        data.insert("team".to_string(), json!(["member-1"]));
+
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let doc = query::create(&tx, "projects", &projects, &data, None).unwrap();
+
+        query::save_join_table_data(&tx, "projects", &projects.fields, &doc.id, &data, None)
+            .unwrap();
+
+        tx.commit().unwrap();
+        doc.id.to_string()
+    };
+
+    let conn = pool.get().unwrap();
+    let hook = HookRef::new("access.team_or_admin");
+
+    let check = |user: &Document, patch: Value| {
+        let data: DocumentFields = serde_json::from_value(patch).unwrap();
+
+        runner
+            .check_access(
+                &AccessCheckInput::builder("update", "projects")
+                    .access(Some(&hook))
+                    .user(Some(user))
+                    .id(Some(project_id.as_str()))
+                    .data(Some(&data))
+                    .build(),
+                &conn,
+            )
+            .unwrap()
+    };
+
+    let member = make_user_doc("member-1", "author");
+    let outsider = make_user_doc("outsider-1", "author");
+
+    assert!(
+        matches!(
+            check(&member, json!({ "title": "x" })),
+            query::AccessResult::Allowed
+        ),
+        "a member of the stored team may edit without sending `team`"
+    );
+    assert!(matches!(
+        check(&outsider, json!({ "title": "x" })),
+        query::AccessResult::Denied
+    ));
+    assert!(
+        matches!(
+            check(&outsider, json!({ "team": ["outsider-1"] })),
+            query::AccessResult::Denied
+        ),
+        "listing the sender in the patch's team must not grant access"
+    );
+}
+
 /// Anonymous read access for posts resolves to `Allowed` — published-only
 /// scoping is the `read` *view's* job (the system composes `_status =
 /// 'published'`), not something the access hook expresses. A read hook may never

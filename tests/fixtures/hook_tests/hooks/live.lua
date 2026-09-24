@@ -37,4 +37,10 @@ function M.gate_on_id_and_editor(ctx)
     return ctx.edited_by.email == "editor@x.com"
 end
 
+--- Filter that broadcasts only when a null field and an absent editor reach
+--- Lua as `nil` (not a truthy sentinel value).
+function M.null_probe(ctx)
+    return ctx.data.x == nil and not ctx.data.x and ctx.edited_by == nil and ctx.options == nil
+end
+
 return M

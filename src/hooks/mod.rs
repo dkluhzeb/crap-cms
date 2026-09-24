@@ -47,5 +47,5 @@ pub use init::init_lua;
 pub(crate) use init::{install_relative_chunk_searcher, load_lua_dir, sandbox_lua};
 pub use lifecycle::{
     AccessCheckInput, ConditionContext, DisplayConditionResult, EventAfterReadInput, HookContext,
-    HookEvent, HookRunner, LuaCrudInfra, ValidationCtx, VmPoolExhausted,
+    HookEvent, HookRunner, LuaCrudInfra, MigrationCall, ValidationCtx, VmPoolExhausted,
 };

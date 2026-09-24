@@ -27,7 +27,7 @@ use syn::{
 use crate::shared::{extract_docs, strip_ref, unwrap_path};
 
 /// Attribute parser for
-/// `#[lua_fn(path = "...", returns = "...", returns_doc = "...")]`.
+/// `#[lua_fn(path = "...", returns = "...", returns_doc = "...", overload = "...")]`.
 ///
 /// `path` is the dotted Lua path the function is registered under.
 /// `returns` is an optional string override for the Lua return type —
@@ -43,6 +43,12 @@ struct LuaFnAttr {
     returns: Option<String>,
     #[darling(default)]
     returns_doc: Option<String>,
+    /// Extra `--- @overload` signatures (`fun(...)` literals), one per
+    /// repeated `overload = "..."`. For a function whose accepted argument
+    /// types depend on another argument's value — `crap.hooks.register`'s
+    /// hook function type depends on the event name.
+    #[darling(multiple, rename = "overload")]
+    overloads: Vec<String>,
     /// When `true`, the generated `_register` wrapper routes the user
     /// fn call through `with_lua_db`, which installs a per-op
     /// `TxContext` when running in pool-mode (job handler). User code
@@ -199,6 +205,7 @@ fn expand(attr: &LuaFnAttr, item_fn: &mut ItemFn) -> darling::Result<TokenStream
 
     let path = &attr.path;
     let doc_lines: Vec<TokenStream2> = fn_docs.iter().map(|s| quote! { #s }).collect();
+    let overloads = &attr.overloads;
 
     let spec_const_name = format_ident!("{}_SPEC", fn_name.to_string().to_uppercase());
     let register_fn_name = format_ident!("{}_register", fn_name);
@@ -233,6 +240,7 @@ fn expand(attr: &LuaFnAttr, item_fn: &mut ItemFn) -> darling::Result<TokenStream
             doc: &[#(#doc_lines),*],
             params: &[#(#param_decls),*],
             returns: #returns_decl,
+            overloads: &[#(#overloads),*],
         };
 
         // The wrapper closure that `lua.create_function` consumes uses

@@ -19,6 +19,27 @@ pub(crate) fn lookup_column_field_type(col: &str, fields: &[FieldDefinition]) ->
     lookup_column_field(col, fields).map(|f| f.field_type.clone())
 }
 
+/// The system timestamp columns every collection table carries, stored in the
+/// same UTC `YYYY-MM-DDTHH:MM:SS.mmmZ` form a Date field's instants take.
+const SYSTEM_TIMESTAMPS: &[&str] = &["created_at", "updated_at"];
+
+/// The type a filter compares a parent-table column that no field defines as:
+/// the system timestamps compare as dates — a bare day operand covers the
+/// whole day ([`DayRange`](crate::db::query::helpers::DayRange)) — and every
+/// other such column as text (`None`).
+pub(in crate::db::query::filter) fn system_column_type(col: &str) -> Option<FieldType> {
+    typed_system_columns()
+        .find(|(name, _)| *name == col)
+        .map(|(_, field_type)| field_type)
+}
+
+/// Every column [`system_column_type`] types, with its type — what the
+/// in-memory evaluator reads the same columns as.
+pub(in crate::db::query::filter) fn typed_system_columns()
+-> impl Iterator<Item = (&'static str, FieldType)> {
+    SYSTEM_TIMESTAMPS.iter().map(|col| (*col, FieldType::Date))
+}
+
 /// The leaf field a parent-table column stores — the definition behind
 /// [`lookup_column_field_type`], for callers that need more than the type
 /// (whether the column holds a has-many list, say).
@@ -187,5 +208,15 @@ mod tests {
         );
         assert!(find_field("first", &fields).is_some());
         assert!(find_field("missing", &fields).is_none());
+    }
+
+    /// The system timestamps filter as dates; any other column no field
+    /// defines keeps a text comparison.
+    #[test]
+    fn system_timestamps_filter_as_dates() {
+        assert_eq!(system_column_type("created_at"), Some(FieldType::Date));
+        assert_eq!(system_column_type("updated_at"), Some(FieldType::Date));
+        assert_eq!(system_column_type("id"), None);
+        assert_eq!(system_column_type("title"), None);
     }
 }

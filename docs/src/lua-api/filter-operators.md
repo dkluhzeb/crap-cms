@@ -8,8 +8,8 @@ Filters are used in `crap.collections.find()` / `count()` / `update_many()` / `d
 > `not_in`, `exists` and `not_exists` on **flat own columns**: pattern (`like`,
 > `contains`), ordered (`greater_than`, …) and dotted-path constraints are rejected
 > at load/evaluation time, and a constraint table that produces no filters
-> (nil-valued key) or fails to decode (`exists = false`, an unknown operator) is a
-> fail-closed **deny**. See [Filter Constraints](../access-control/filter-constraints.md).
+> (nil-valued key), fails to decode (`exists = false`, an unknown operator), or
+> comes from a rule that read a NULL `ctx.user` field is a fail-closed **deny**. See [Filter Constraints](../access-control/filter-constraints.md).
 
 ## Shorthand: Simple Equality
 
@@ -204,9 +204,9 @@ type.
 
 | Field type | Comparison bind type | Notes |
 |------------|---------------------|-------|
-| `number` | REAL | Filter value is parsed as a 64-bit float. Invalid input (non-numeric, `NaN`, `Infinity`) falls back to TEXT and logs a warning — the query still runs and will typically return no rows. |
-| `checkbox` | INTEGER (`0` / `1`) | Accepts `"true"`, `"false"`, `"1"`, `"0"`, `"yes"`, `"no"`, `"on"`, `"off"`. Anything else falls back to TEXT with a warning. |
-| `date` | TEXT (normalized ISO) | Stored as ISO-8601 strings; the filter value is normalized via the date coercer (e.g. `"2024-01-15"` → `"2024-01-15T12:00:00.000Z"`, **UTC noon** — the same normalization used when storing `dayOnly` values) so lexicographic comparison aligns with stored values. A bare-date `equals` therefore matches `dayOnly`-stored rows exactly. For range filters on full-timestamp fields note the noon anchor: `greater_than "2024-01-15"` means *after noon UTC* that day — pass an explicit time (`"2024-01-15T00:00:00Z"`) to bound at midnight. |
+| `number` | REAL | Filter value is parsed as a 64-bit float. Invalid input (non-numeric, `NaN`, `Infinity`) is a validation error naming the field — the query does not run. |
+| `checkbox` | INTEGER (`0` / `1`) | Accepts `"true"`, `"false"`, `"1"`, `"0"`, `"yes"`, `"no"`, `"on"`, `"off"`. Anything else is a validation error naming the field. |
+| `date` (and `created_at` / `updated_at`) | TEXT (normalized ISO) | Stored as UTC ISO-8601 strings; a filter value with a time is normalized to that form (`"2024-01-15T09:00"` → `"2024-01-15T09:00:00.000Z"`) so lexicographic comparison aligns with stored values. A bare day (`"2024-01-15"`) covers the whole UTC day: `equals` matches any instant on it (a `dayOnly` noon and a `dayAndTime` value alike), `greater_than` starts at the next midnight, `less_than_or_equal` includes the whole day. See [Dates](../query-and-filters/overview.md#dates-a-bare-day-covers-the-whole-day). |
 | `text`, `textarea`, `email`, `select`, `radio`, `json`, `code`, `richtext` | TEXT | Bound as-is. |
 | Field type unknown / not resolved | TEXT | Default fallback when the caller cannot determine the field type. |
 

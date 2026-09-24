@@ -9,6 +9,7 @@ use crate::db::DbConnection;
 use crate::db::migrate::helpers::add_column_if_missing;
 use crate::db::migrate::helpers::column_specs::{ensure_locale_column, locale_column_definition};
 use crate::db::migrate::helpers::introspection::{get_table_columns, table_exists};
+use crate::db::migrate::helpers::join_tables::parent_index::sync_row_parent_index;
 use crate::db::query::helpers::{join_table, quote_ident};
 
 /// Sync an array join table (create or alter).
@@ -40,7 +41,7 @@ pub(super) fn sync_array_table(
         )?;
     }
 
-    Ok(())
+    sync_row_parent_index(conn, &table_name, has_locale_col)
 }
 
 /// Create a new array join table.

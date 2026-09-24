@@ -5,7 +5,7 @@
 //! data. The hook returns either a bool, a structured `ConditionExpr` table, or
 //! `nil` (no condition → show normally). All error paths fail closed (hide).
 
-use mlua::{Lua, LuaSerdeExt as _, Value};
+use mlua::{Lua, Value};
 use serde_json::Value as JsonValue;
 use tracing::warn;
 
@@ -49,7 +49,7 @@ pub(crate) fn call_display_condition_with_lua(
             return None;
         }
     };
-    let ctx_lua = match lua.to_value(ctx) {
+    let ctx_lua = match lua_api::to_lua_value(lua, ctx) {
         Ok(v) => v,
         Err(e) => {
             warn!("Display condition '{func_ref}': context not convertible: {e:#} — showing field");

@@ -29,7 +29,7 @@ use crate::{
         upload::create_storage_with_lease,
     },
     db::{DbConnection, DbPool, FindQuery, LocaleContext, migrate, pool, query},
-    hooks::{self, HookRunner},
+    hooks::{self, HookRunner, LuaCrudInfra},
     service::{AppInfra, StandaloneInfra},
 };
 
@@ -232,27 +232,30 @@ pub fn cli_infra(
     })
 }
 
-/// Run `on_init` hooks if configured. Failure aborts startup.
+/// Run `on_init` hooks if configured, in one write transaction on the
+/// process's infrastructure: their writes clear its cache, publish their live
+/// events, and remove deleted uploads' files only after the commit. Failure
+/// aborts startup.
 ///
 /// # Errors
 ///
 /// Returns an error if a hook fails or its transaction can't be opened or
 /// committed.
-pub fn run_on_init_hooks(cfg: &CrapConfig, pool: &DbPool, hook_runner: &HookRunner) -> Result<()> {
+pub fn run_on_init_hooks(cfg: &CrapConfig, infra: &AppInfra) -> Result<()> {
     if cfg.hooks.on_init.is_empty() {
         return Ok(());
     }
 
     info!("Running on_init hooks...");
 
-    let mut conn = pool.get().context("DB connection for on_init")?;
-    let tx = conn.transaction().context("Transaction for on_init")?;
-
-    hook_runner
-        .run_system_hooks_with_conn(&cfg.hooks.on_init, &tx)
+    infra
+        .hook_runner
+        .run_system_hooks_in_tx(
+            &cfg.hooks.on_init,
+            &infra.pool,
+            Some(LuaCrudInfra::for_pool_crud(infra)),
+        )
         .context("on_init hooks failed")?;
-
-    tx.commit().context("Commit on_init transaction")?;
 
     info!("on_init hooks completed");
 

@@ -1,6 +1,6 @@
 //! Context types passed to auth/access hook callbacks. Each struct
 //! carries `Serialize` (so the hook runner builds it once and Lua sees
-//! it via `lua.to_value()`) and `LuaAnnotation` (so the Lua-side type
+//! it via `lua_api::to_lua_value`) and `LuaAnnotation` (so the Lua-side type
 //! lives next to the Rust struct that produces it).
 
 use std::collections::HashMap;

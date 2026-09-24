@@ -33,8 +33,8 @@ use crate::core::{
 use crate::db::query::PaginationResult;
 use crate::hooks::lifecycle::{
     AccessContext, AuthStrategyContext, ConditionContext, FieldHookContext, HookContext, HookEvent,
-    JobHandlerContext, JobInfo, LiveFilterContext, MfaDeliverContext, MfaWhenContext, RouteContext,
-    ValidateContext,
+    JobHandlerContext, JobInfo, LiveFilterContext, MfaDeliverContext, MfaWhenContext, RenderInfo,
+    RouteContext, ValidateContext,
 };
 use crate::hooks::lua_api::{
     access::render_crap_access_init_lua,
@@ -104,7 +104,7 @@ use crate::hooks::lua_api::{
     transaction::render_crap_transaction_lua,
     tx_hooks::render_crap_tx_lua,
     uploads::render_crap_uploads_lua,
-    utils::{render_crap_json_lua, render_crap_util_lua},
+    utils::{render_crap_json_lua, render_crap_null_lua, render_crap_util_lua},
     validation::render_crap_validation_lua,
 };
 use crate::service::{CreateManyResult, UpdateManyResult, jobs::JobDefinitionInfo};
@@ -303,6 +303,7 @@ fn render_hook_context_types(out: &mut String) {
     HookContext::render_lua_annotation(out);
     render_auth_user(out);
     AccessContext::render_lua_annotation(out);
+    RenderInfo::render_lua_annotation(out);
     render_callable_aliases(out);
     render_any_factories(out);
 }
@@ -421,8 +422,15 @@ fn render_callable_aliases(out: &mut String) {
 
 --- Generic collection hook. Use for hooks that take `crap.HookContext`
 --- (no per-collection narrowing); for typed contexts use
---- `crap.hook_fn.<Pascal>` from `hooks.lua`.
---- @alias crap.hook_fn fun(ctx: crap.HookContext): crap.HookContext
+--- `crap.hook_fn.<Pascal>` from `hooks.lua`. A `before_broadcast` hook
+--- returns `false` or `nil` to suppress the event; any other hook's
+--- `false` / `nil` keeps the context unchanged.
+--- @alias crap.hook_fn fun(ctx: crap.HookContext): crap.HookContext|false|nil
+
+--- A `before_render` hook (registered with `crap.hooks.register`):
+--- receives the template context and which page renders, returns the
+--- context (or `nil` to keep the one it edited in place).
+--- @alias crap.render_hook_fn fun(ctx: table<string, any>, info: crap.template.render_info): table<string, any>?
 
 --- Generic field hook. Use for hooks that take the generic
 --- `crap.FieldHookContext`; for typed contexts use
@@ -534,6 +542,8 @@ fn render_crap_log(out: &mut String) {
 }
 fn render_crap_json(out: &mut String) {
     render_crap_json_lua(out);
+    out.push('\n');
+    render_crap_null_lua(out);
     out.push('\n');
 }
 fn render_crap_validation(out: &mut String) {

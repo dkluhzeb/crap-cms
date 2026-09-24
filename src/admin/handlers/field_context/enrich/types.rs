@@ -88,7 +88,9 @@ fn doc_to_label_item(doc: &Document, title_field: Option<&String>) -> Relationsh
 ///
 /// Internal UI enrichment — direct query for display labels, not a user-facing read.
 /// Shared with the nested enrich path (a has-many relationship inside a
-/// group/array/block row resolves labels the same way).
+/// group/array/block row resolves labels the same way). An id the viewer
+/// cannot resolve stays in the list as an unavailable item, so the form
+/// submits it back instead of dropping the reference.
 pub(super) fn resolve_has_many_items(
     ids: &[String],
     collection: &str,
@@ -97,9 +99,11 @@ pub(super) fn resolve_has_many_items(
     ctx: &EnrichCtx,
 ) -> Vec<RelationshipSelectedItem> {
     ids.iter()
-        .filter_map(|id| {
-            gated_find_by_id(ctx, collection, related_def, id)
-                .map(|doc| doc_to_label_item(&doc, title_field))
+        .map(|id| {
+            gated_find_by_id(ctx, collection, related_def, id).map_or_else(
+                || RelationshipSelectedItem::unavailable(id.as_str()),
+                |doc| doc_to_label_item(&doc, title_field),
+            )
         })
         .collect()
 }
@@ -107,6 +111,7 @@ pub(super) fn resolve_has_many_items(
 /// Resolve a has-one selected item by looking up the current value in the DB.
 ///
 /// Internal UI enrichment — direct query for display labels, not a user-facing read.
+/// A stored id the viewer cannot resolve becomes an unavailable item.
 fn resolve_has_one_item(
     current_value: &str,
     collection: &str,
@@ -118,9 +123,12 @@ fn resolve_has_one_item(
         return Vec::new();
     }
 
-    gated_find_by_id(ctx, collection, related_def, current_value)
-        .map(|doc| vec![doc_to_label_item(&doc, title_field)])
-        .unwrap_or_default()
+    let item = gated_find_by_id(ctx, collection, related_def, current_value).map_or_else(
+        || RelationshipSelectedItem::unavailable(current_value),
+        |doc| doc_to_label_item(&doc, title_field),
+    );
+
+    vec![item]
 }
 
 /// Enrich a top-level Relationship field context with selected items from DB.
@@ -301,7 +309,8 @@ fn prepare_upload_doc(
 /// Resolve has-many upload items by looking up each ID in the DB.
 ///
 /// Internal UI enrichment — direct query for display labels, not a user-facing read.
-/// Shared with the nested enrich path (a has-many upload inside a row).
+/// Shared with the nested enrich path (a has-many upload inside a row). An id
+/// the viewer cannot resolve stays as an unavailable item.
 pub(super) fn resolve_upload_has_many(
     ids: &[String],
     collection: &str,
@@ -311,10 +320,11 @@ pub(super) fn resolve_upload_has_many(
     ctx: &EnrichCtx,
 ) -> Vec<RelationshipSelectedItem> {
     ids.iter()
-        .filter_map(|id| {
-            gated_find_by_id(ctx, collection, related_def, id).map(|doc| {
-                prepare_upload_doc(doc, related_def, title_field, admin_thumbnail, false)
-            })
+        .map(|id| {
+            gated_find_by_id(ctx, collection, related_def, id).map_or_else(
+                || RelationshipSelectedItem::unavailable(id.as_str()),
+                |doc| prepare_upload_doc(doc, related_def, title_field, admin_thumbnail, false),
+            )
         })
         .collect()
 }
@@ -338,7 +348,7 @@ fn resolve_upload_has_one(
     }
 
     let Some(doc) = gated_find_by_id(ctx, collection, related_def, current_value) else {
-        uf.selected_items = Some(Vec::new());
+        uf.selected_items = Some(vec![RelationshipSelectedItem::unavailable(current_value)]);
         return;
     };
 

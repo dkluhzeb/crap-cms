@@ -26,3 +26,34 @@ import { EV_TOAST_REQUEST } from '../../events.js';
 export function toast(detail) {
   document.dispatchEvent(new CustomEvent(EV_TOAST_REQUEST, { detail }));
 }
+
+/**
+ * Read an `X-Crap-Toast` header value: a JSON `{ message, type? }`, or a
+ * plain-text message. `null` for a missing or empty header.
+ *
+ * @param {string|null} header
+ * @returns {{ message: string, type?: ToastType }|null}
+ */
+export function parseToastHeader(header) {
+  if (!header) return null;
+  try {
+    const data = JSON.parse(header);
+    if (data && typeof data.message === 'string') return data;
+  } catch {
+    /* plain-text header */
+  }
+  return { message: header };
+}
+
+/**
+ * Toast the failure of a `fetch` the server refused: the message its
+ * `X-Crap-Toast` header carries (every admin error response sets one), or
+ * `fallback` when it carries none.
+ *
+ * @param {Response} resp
+ * @param {string} fallback
+ */
+export function toastFailedResponse(resp, fallback) {
+  const parsed = parseToastHeader(resp.headers.get('X-Crap-Toast'));
+  toast({ message: parsed?.message || fallback, type: 'error' });
+}

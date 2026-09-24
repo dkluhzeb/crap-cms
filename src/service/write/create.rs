@@ -196,7 +196,7 @@ pub(crate) fn create_document_gated(
 
     // The row as stored, before anything is shaped or stripped for the writer:
     // the live event is built from it.
-    let row = ctx.event_row(&doc);
+    let row = ctx.write_event_row(&doc, input.locale_ctx, false)?;
 
     // Strip read-denied fields from the returned document, after the hooks have
     // seen the full doc (hydration can add join data for denied fields).

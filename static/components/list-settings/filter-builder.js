@@ -75,6 +75,8 @@ export const OPS_BY_TYPE = {
     ['equals', 'op_is'],
     ['not_equals', 'op_is_not'],
   ],
+  // The draft/published pseudo-field: the server accepts only `equals`.
+  status: [['equals', 'op_is']],
   checkbox: [['equals', 'op_is']],
   date: [
     ['equals', 'op_is'],
@@ -94,6 +96,9 @@ export const OPS_BY_TYPE = {
     ['not_exists', 'op_not_exists'],
   ],
 };
+
+/** Field types whose value is picked from `FieldMeta.options`. */
+const CHOICE_TYPES = new Set(['select', 'radio', 'status']);
 
 /** Operators that take no value input. */
 const NO_VALUE_OPS = new Set(['exists', 'not_exists']);
@@ -246,7 +251,7 @@ export class CrapFilterBuilder extends HTMLElement {
           this._syncStatusConnectors(rowsEl);
         },
       },
-      h('span', { class: 'material-symbols-outlined', text: 'add' }),
+      h('span', { class: 'material-symbols-outlined', 'aria-hidden': 'true', text: 'add' }),
       ` ${t('add_condition')}`,
     );
   }
@@ -285,7 +290,11 @@ export class CrapFilterBuilder extends HTMLElement {
   _buildRow(fieldMetas, preset) {
     const connectorSelect = this._buildConnectorSelect(preset);
     const fieldSelect = this._buildFieldSelect(fieldMetas, preset);
-    const opSelect = h('select', { class: 'filter-builder__op', name: 'filter-op' });
+    const opSelect = h('select', {
+      class: 'filter-builder__op',
+      name: 'filter-op',
+      'aria-label': t('filter_operator'),
+    });
     const valueWrap = h('div', { class: 'filter-builder__value-wrap' });
 
     // `preset` reflects the URL-derived state at row-construction time;
@@ -324,9 +333,11 @@ export class CrapFilterBuilder extends HTMLElement {
       {
         type: 'button',
         class: ['button', 'button--ghost', 'button--small', 'filter-builder__remove'],
+        'aria-label': t('remove_condition'),
+        title: t('remove_condition'),
         onClick: () => this._removeRow(row),
       },
-      h('span', { class: 'material-symbols-outlined', text: 'close' }),
+      h('span', { class: 'material-symbols-outlined', 'aria-hidden': 'true', text: 'close' }),
     );
     row.append(connectorSelect, fieldSelect, opSelect, valueWrap, removeBtn);
     return row;
@@ -413,7 +424,11 @@ export class CrapFilterBuilder extends HTMLElement {
     const value = preset?.connector === 'OR' ? 'OR' : 'AND';
     return h(
       'select',
-      { class: 'filter-builder__connector', name: 'filter-connector' },
+      {
+        class: 'filter-builder__connector',
+        name: 'filter-connector',
+        'aria-label': t('filter_connector'),
+      },
       h('option', { value: 'AND', selected: value === 'AND', text: t('op_and') }),
       h('option', { value: 'OR', selected: value === 'OR', text: t('op_or') }),
     );
@@ -429,6 +444,7 @@ export class CrapFilterBuilder extends HTMLElement {
       {
         class: 'filter-builder__field',
         name: 'filter-field',
+        'aria-label': t('filter_field'),
       },
       fieldMetas.map((fm) =>
         h('option', {
@@ -487,7 +503,7 @@ export class CrapFilterBuilder extends HTMLElement {
    */
   _buildValueInput(fm, op, currentValue) {
     if (NO_VALUE_OPS.has(op)) return h('span');
-    if (fm.options && (fm.field_type === 'select' || fm.field_type === 'radio')) {
+    if (fm.options && CHOICE_TYPES.has(fm.field_type)) {
       return this._buildSelectInput(fm.options, currentValue);
     }
     if (fm.field_type === 'checkbox') {
@@ -503,7 +519,7 @@ export class CrapFilterBuilder extends HTMLElement {
   _buildSelectInput(options, currentValue) {
     return h(
       'select',
-      { name: 'filter-value' },
+      { name: 'filter-value', 'aria-label': t('filter_value') },
       options.map((opt) =>
         h('option', {
           value: opt.value,
@@ -518,7 +534,7 @@ export class CrapFilterBuilder extends HTMLElement {
   _buildBooleanSelect(currentValue) {
     return h(
       'select',
-      { name: 'filter-value' },
+      { name: 'filter-value', 'aria-label': t('filter_value') },
       h('option', { value: '1', selected: currentValue === '1', text: t('yes') }),
       h('option', { value: '0', selected: currentValue === '0', text: t('no') }),
     );
@@ -530,13 +546,25 @@ export class CrapFilterBuilder extends HTMLElement {
    */
   _buildTextInput(fieldType, currentValue) {
     if (fieldType === 'number') {
-      return h('input', { name: 'filter-value', type: 'number', step: 'any', value: currentValue });
+      return h('input', {
+        name: 'filter-value',
+        type: 'number',
+        step: 'any',
+        value: currentValue,
+        'aria-label': t('filter_value'),
+      });
     }
     if (fieldType === 'date') {
-      return h('input', { name: 'filter-value', type: 'date', value: currentValue });
+      return h('input', {
+        name: 'filter-value',
+        type: 'date',
+        value: currentValue,
+        'aria-label': t('filter_value'),
+      });
     }
     return h('input', {
       name: 'filter-value',
+      'aria-label': t('filter_value'),
       type: 'text',
       value: currentValue,
       placeholder: t('value_placeholder'),

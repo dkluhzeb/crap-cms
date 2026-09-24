@@ -44,12 +44,12 @@ fn build_filter_sql(
             ref join_table,
             ref parent_table,
             ref condition,
-            ref locale_constraint,
+            ref rows_locale,
         } => {
             let scope = SubqueryScope {
                 join_table,
                 parent_table,
-                locale_constraint: locale_constraint.as_deref(),
+                rows_locale: rows_locale.as_ref(),
             };
 
             build_subquery_sql(conn, &scope, condition, f, params)
@@ -484,7 +484,7 @@ mod tests {
         let sql = build_filter_sql(&conn, &f, "posts", &fields, None, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM \"posts_content\" WHERE \"posts_content\".parent_id = \"posts\".id AND json_extract(data, '$.body') LIKE ?1 ESCAPE '\\')"
+            "EXISTS (SELECT 1 FROM \"posts_content\" WHERE \"posts_content\".parent_id = \"posts\".id AND json_extract(posts_content.data, '$.body') LIKE ?1 ESCAPE '\\')"
         );
         assert_eq!(params.len(), 1);
     }

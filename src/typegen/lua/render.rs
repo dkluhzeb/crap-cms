@@ -15,7 +15,6 @@ use crate::{
         NavPageSection, PageMeta, UserContext, page::Breadcrumb,
     },
     core::{Registry, Slug},
-    hooks::lifecycle::RenderInfo,
     typegen::{
         helpers::{to_pascal_case, w},
         lua::LuaAnnotation,
@@ -131,7 +130,6 @@ fn render_template_data_types(out: &mut String) {
     DocumentRef::render_lua_annotation(out);
     EditorLocaleOption::render_lua_annotation(out);
     BasePageContext::render_lua_annotation(out);
-    RenderInfo::render_lua_annotation(out);
 
     out.push_str("---@alias crap.template_data_fn fun(ctx: crap.template_ctx): any\n\n");
 }

@@ -547,7 +547,12 @@ In cursor mode, `page`/`total_pages`/`page_start`/`next_page`/`prev_page` are re
 
 Supported operators: `equals`, `not_equals`, `greater_than`, `greater_than_or_equal`,
 `less_than`, `less_than_or_equal`, `like`, `contains`, `in` (array), `not_in` (array),
-`exists`, `not_exists`.
+`exists`, `not_exists`. On a has-many field — a `has_many` list, a has-many
+relationship's `.id`, a has-many relationship inside an array or blocks row —
+every operator reads the elements: `not_equals`, `not_in` and `not_exists` match
+when **no** element does, the others when **some** element does (see
+[Has-many fields](../query-and-filters/overview.md#has-many-fields-element-by-element)).
+An unknown field or dot-notation path is an error naming it.
 
 A malformed clause is **rejected loudly**, never silently dropped: an unknown
 operator, an `in` / `not_in` whose value is not an array, or a bare array as the

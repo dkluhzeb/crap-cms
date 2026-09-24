@@ -37,15 +37,16 @@ fn require_known_event(entry_point: &str, event: &str) -> LuaResult<()> {
 }
 
 /// Register a hook function for an event. Fires for all collections.
-#[lua_fn(path = "crap.hooks.register")]
+/// A `before_render` hook takes `(ctx, info)` — the template context and
+/// which page renders — and every other event's hook the hook context.
+#[lua_fn(
+    path = "crap.hooks.register",
+    overload = "fun(event: \"before_render\", func: crap.render_hook_fn)"
+)]
 fn hooks_register(
     lua: &Lua,
     #[lua(ty = "crap.HookEvent", doc = "The lifecycle event to hook into.")] event: String,
-    #[lua(
-        ty = "fun(context: crap.HookContext): crap.HookContext",
-        doc = "Hook function."
-    )]
-    func: Function,
+    #[lua(ty = "crap.hook_fn", doc = "Hook function.")] func: Function,
 ) -> LuaResult<()> {
     require_init_phase(
         lua,
@@ -61,15 +62,14 @@ fn hooks_register(
 }
 
 /// Remove a previously registered hook function (identity-based via rawequal).
-#[lua_fn(path = "crap.hooks.remove")]
+#[lua_fn(
+    path = "crap.hooks.remove",
+    overload = "fun(event: \"before_render\", func: crap.render_hook_fn)"
+)]
 fn hooks_remove(
     lua: &Lua,
     #[lua(ty = "crap.HookEvent", doc = "The lifecycle event.")] event: String,
-    #[lua(
-        ty = "fun(context: crap.HookContext): crap.HookContext",
-        doc = "The function to remove."
-    )]
-    func: Function,
+    #[lua(ty = "crap.hook_fn", doc = "The function to remove.")] func: Function,
 ) -> LuaResult<()> {
     require_init_phase(
         lua,
@@ -105,7 +105,7 @@ fn hooks_remove(
 /// the returned array does not change which hooks fire.
 #[lua_fn(
     path = "crap.hooks.list",
-    returns = "fun(context: crap.HookContext): crap.HookContext[]",
+    returns = "(crap.hook_fn|crap.render_hook_fn)[]",
     returns_doc = "Array of hook functions (a copy — mutating it does not affect the registered hooks)."
 )]
 fn hooks_list(

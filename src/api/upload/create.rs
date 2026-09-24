@@ -23,7 +23,7 @@ use crate::{
 
 use super::helpers::{
     DocumentBody, check_upload_access, extract_bearer_user, json_error, json_ok,
-    service_error_to_response,
+    multipart_error_response, service_error_to_response,
 };
 
 /// Owned bundle for the upload-create spawn-blocking body. Storage, locale
@@ -129,11 +129,7 @@ pub(super) async fn create_upload(
 
     let (form_data, file) = match parse_multipart_form(request, &state).await {
         Ok(result) => result,
-        Err(e) => {
-            error!("Upload multipart parse failed: {}", e);
-
-            return json_error(StatusCode::BAD_REQUEST, "Invalid multipart request");
-        }
+        Err(e) => return multipart_error_response(&e),
     };
 
     let Some(file) = file else {

@@ -5,7 +5,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     core::{
         BLOCK_TYPE_KEY, CollectionDefinition, Companion, FieldChildren, FieldDefinition, FieldType,
-        GlobalDefinition, JobStatus, LocalizedString, field_children,
+        GlobalDefinition, JobStatus, LocalizedString, field_children, upload::write_shape_fields,
     },
     service::op::wire::{self, OpWire, WireField, WireKind, WireSurfaces},
 };
@@ -380,7 +380,7 @@ fn add_wire_props(schema: &mut Value, wire: &OpWire, def: Option<&CollectionDefi
             WireKind::DataObject => {
                 let def = def.expect("DataObject op carries a collection definition");
                 json!({
-                    "allOf": [fields_to_object_schema(&def.fields, true)],
+                    "allOf": [fields_to_object_schema(&write_shape_fields(def), true)],
                     "description": field.doc
                 })
             }
@@ -466,7 +466,7 @@ fn add_password_prop(schema: &mut Value, description: &str) {
 /// optional, not required: bulk seeding may legitimately include strategy-only
 /// users without a password.
 fn create_many_item_schema(def: &CollectionDefinition) -> Value {
-    let mut schema = fields_to_object_schema(&def.fields, true);
+    let mut schema = fields_to_object_schema(&write_shape_fields(def), true);
 
     if def.is_auth_collection() {
         add_password_prop(&mut schema, CREATE_PASSWORD_DESCRIPTION);
@@ -486,13 +486,16 @@ impl CrudOp {
 /// Generate the input schema for a collection CRUD tool. The option fields
 /// come from the wire model ([`crate::service::op::wire`]); only the
 /// def-dependent parts (field-data spread, auth `password` rules, the
-/// partial-update required policy) remain per-op code here.
+/// partial-update required policy) remain per-op code here. The field data is
+/// the write shape: an upload collection's server-derived columns (`filename`,
+/// `url`, `mime_type`, …) are never advertised, let alone required.
 pub(in crate::mcp) fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value {
     let wire = op.wire();
+    let fields = write_shape_fields(def);
 
     match op {
         CrudOp::Create => {
-            let mut schema = data_spread_schema(&def.fields, wire);
+            let mut schema = data_spread_schema(&fields, wire);
 
             // Auth collections take an optional top-level `password` (hashed by
             // the service create chokepoint, never stored as field data).
@@ -503,7 +506,7 @@ pub(in crate::mcp) fn collection_input_schema(def: &CollectionDefinition, op: Cr
             schema
         }
         CrudOp::Update => {
-            let mut schema = data_spread_schema(&def.fields, wire);
+            let mut schema = data_spread_schema(&fields, wire);
 
             if def.is_auth_collection() {
                 add_password_prop(&mut schema, "Leave empty to keep current password");
@@ -517,7 +520,7 @@ pub(in crate::mcp) fn collection_input_schema(def: &CollectionDefinition, op: Cr
 
             schema
         }
-        CrudOp::Validate => data_spread_schema(&def.fields, wire),
+        CrudOp::Validate => data_spread_schema(&fields, wire),
         CrudOp::CreateMany | CrudOp::UpdateMany => options_schema(wire, Some(def)),
         CrudOp::Find
         | CrudOp::FindById
@@ -589,6 +592,7 @@ mod tests {
             BlockDefinition, FieldAdmin, FieldTab, LocalizedString, McpFieldConfig,
             RelationshipConfig, SelectOption,
         },
+        upload::CollectionUpload,
     };
 
     fn text_field(name: &str) -> FieldDefinition {
@@ -708,6 +712,45 @@ mod tests {
         assert!(s["properties"]["body"].is_object());
         let req = s["required"].as_array().unwrap();
         assert!(req.contains(&Value::String("title".to_string())));
+    }
+
+    /// Regression: the write-tool schemas of an upload collection were built
+    /// from the stored fields, so they advertised the server-derived columns
+    /// (`filename` even as required on create) that the service strips from
+    /// every write. They follow the write shape now, on every write tool.
+    #[test]
+    fn upload_write_schemas_follow_the_write_shape() {
+        let mut def = CollectionDefinition::new("media");
+        def.fields = vec![
+            required_text("filename"),
+            text_field("url"),
+            text_field("alt"),
+        ];
+        def.upload = Some(CollectionUpload::new());
+
+        for op in [CrudOp::Create, CrudOp::Update, CrudOp::Validate] {
+            let s = collection_input_schema(&def, op);
+            assert!(s["properties"]["alt"].is_object(), "{op:?}: {s}");
+
+            for derived in ["filename", "url"] {
+                assert!(
+                    s["properties"].get(derived).is_none(),
+                    "{op:?} {derived}: {s}"
+                );
+                let required = s["required"].as_array().cloned().unwrap_or_default();
+                assert!(!required.contains(&json!(derived)), "{op:?} {derived}: {s}");
+            }
+        }
+
+        let many = collection_input_schema(&def, CrudOp::CreateMany);
+        let item = &many["properties"]["documents"]["items"]["properties"];
+        assert!(item["alt"].is_object(), "{many}");
+        assert!(item.get("filename").is_none(), "{many}");
+
+        let bulk = collection_input_schema(&def, CrudOp::UpdateMany);
+        let data = bulk["properties"]["data"]["allOf"][0]["properties"].clone();
+        assert!(data["alt"].is_object(), "{bulk}");
+        assert!(data.get("url").is_none(), "{bulk}");
     }
 
     #[test]

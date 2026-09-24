@@ -151,7 +151,7 @@ pub(crate) fn update_many_single_in_conn(
 
     // The row as stored, before anything is shaped or stripped for the writer:
     // the live event is built from it.
-    let row = ctx.event_row(&doc);
+    let row = ctx.write_event_row(&doc, input.locale_ctx, snapshot_only)?;
 
     strip_reported(ctx, write_hooks, &mut doc, input.locale_ctx)?;
 

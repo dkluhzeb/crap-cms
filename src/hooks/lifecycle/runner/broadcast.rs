@@ -1,7 +1,7 @@
 //! `HookRunner` methods for event broadcasting.
 
 use anyhow::Result;
-use mlua::{LuaSerdeExt as _, Value};
+use mlua::Value;
 use tracing::{debug, warn};
 
 use crate::{
@@ -20,6 +20,7 @@ use crate::{
                 resolve_hook_function,
             },
         },
+        lua_api::to_lua_value,
     },
 };
 
@@ -252,7 +253,7 @@ impl HookRunner {
                     edited_by,
                     options: hook.options(),
                 };
-                let ctx_value = lua.to_value(&ctx)?;
+                let ctx_value = to_lua_value(&lua, &ctx)?;
 
                 let result: Value = func.call(ctx_value)?;
 

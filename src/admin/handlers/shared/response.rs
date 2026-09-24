@@ -317,7 +317,7 @@ pub fn forbidden(state: &AdminState, message: &str) -> Response {
 /// header on `htmx:afterRequest` instead. A direct browser navigation renders
 /// the body and ignores the header. Every admin error response goes through
 /// here so none of them is silent on an htmx request.
-fn with_error_toast(mut resp: Response, message: &str) -> Response {
+pub fn with_error_toast(mut resp: Response, message: &str) -> Response {
     resp.headers_mut()
         .insert("X-Crap-Toast", error_toast_header(message));
 
@@ -461,7 +461,14 @@ fn html_with_toast(state: &AdminState, template: &str, data: &Value, toast: &str
 /// Return a 422 response with only the toast header — HTMX won't swap the body,
 /// so the user keeps their form data while seeing the error notification.
 pub fn toast_only_error(msg: &str) -> Response {
-    with_error_toast(StatusCode::UNPROCESSABLE_ENTITY.into_response(), msg)
+    error_toast(StatusCode::UNPROCESSABLE_ENTITY, msg)
+}
+
+/// An error response of `status` carrying only the `X-Crap-Toast` header. An
+/// error status is never swapped by htmx, so the page — and any form on it —
+/// stays as the user left it while the toast says what went wrong.
+pub fn error_toast(status: StatusCode, msg: &str) -> Response {
+    with_error_toast(status.into_response(), msg)
 }
 
 /// Render a template, falling back to a plain error page on failure.

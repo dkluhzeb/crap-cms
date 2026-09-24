@@ -11,7 +11,7 @@ use crate::{
     mcp::tools::{
         ToolExecCtx,
         collection::helpers::{
-            doc_to_json, events_flag, extract_auth_password, extract_data_from_args,
+            doc_to_json, events_flag, extract_auth_password, extract_collection_data,
             reserved_data_keys,
         },
     },
@@ -49,7 +49,7 @@ pub(in crate::mcp::tools) fn exec_update(
     let draft = args.get("draft").and_then(Value::as_bool).unwrap_or(false);
     let events = events_flag(args);
 
-    let data = extract_data_from_args(args, &reserved_data_keys(def, true), &def.fields)?;
+    let data = extract_collection_data(args, &reserved_data_keys(def, true), def)?;
 
     let op_args = UpdateArgs::builder(id, data)
         .password(password)

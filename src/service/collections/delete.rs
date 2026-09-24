@@ -8,7 +8,7 @@ use crate::{
     },
     service::{
         ServiceContext, ServiceError, delete_document_in_conn, invalidate_user_streams_if_auth,
-        run_pool_write,
+        run_pool_write, warn_orphaned_files,
     },
 };
 
@@ -18,6 +18,12 @@ type Result<T> = std::result::Result<T, ServiceError>;
 ///
 /// **Pool mode** (`ctx.pool` set): opens a transaction, commits after success.
 /// **Conn mode** (`ctx.conn` set, Lua CRUD path): runs on the existing connection.
+///
+/// Upload files of a hard delete are removed only once the delete is durable:
+/// pool mode deletes them through `storage` after its own commit; conn mode
+/// hands them to the enclosing transaction's cleanup queue (`ctx.file_cleanup`)
+/// and, with none, leaves them in storage rather than delete them before the
+/// caller commits.
 ///
 /// # Errors
 ///
@@ -33,7 +39,7 @@ pub fn delete_document(
     if ctx.pool.is_some() {
         delete_document_pool(ctx, id, storage, locale_config)
     } else {
-        delete_document_conn(ctx, id, storage, locale_config)
+        delete_document_conn(ctx, id, locale_config)
     }
 }
 
@@ -60,44 +66,59 @@ fn delete_document_pool(
         },
     )?;
 
-    clean_up_files(ctx, storage, result.upload_keys);
+    // Post-commit: the rows are durably gone, so their files go now.
+    delete_committed_files(ctx, storage, &result.upload_keys);
 
     Ok(result.context)
 }
 
-/// Hand the deleted document's files over for cleanup after the commit.
-///
-/// In conn mode this runs INSIDE the caller's transaction — deleting the bytes
-/// now and then rolling back would leave the restored row pointing at nothing —
-/// so with an enclosing scope the keys are queued for its post-commit flush;
-/// without one (direct conn callers) they are deleted immediately.
+/// Delete the files of a delete this operation already committed.
 ///
 /// `keys` covers the published row's files AND every version snapshot's, and is
 /// empty for a soft delete, so an undelete still finds them. The write resolves
 /// them while the row and its snapshots still exist — the cross-collection
 /// queue stores keys, not documents, so this side no longer needs the
 /// collection's upload config.
-fn clean_up_files(ctx: &ServiceContext, storage: Option<&dyn StorageBackend>, keys: Vec<String>) {
+fn delete_committed_files(
+    ctx: &ServiceContext,
+    storage: Option<&dyn StorageBackend>,
+    keys: &[String],
+) {
     if keys.is_empty() {
         return;
     }
 
-    if let Some(queue) = &ctx.file_cleanup {
-        queue.borrow_mut().extend(keys);
+    let Some(s) = storage else {
+        warn_orphaned_files(ctx.slug, "storage backend", keys.len());
 
+        return;
+    };
+
+    upload::delete_storage_keys(s, keys);
+}
+
+/// Hand the files of a delete made INSIDE the caller's transaction to that
+/// transaction's post-commit cleanup queue. Deleting the bytes now and then
+/// rolling back would leave the restored row pointing at nothing, so without a
+/// queue the files stay: an orphaned file is the safe direction.
+fn queue_files_for_commit(ctx: &ServiceContext, keys: Vec<String>) {
+    if keys.is_empty() {
         return;
     }
 
-    if let Some(s) = storage {
-        upload::delete_storage_keys(s, &keys);
-    }
+    let Some(queue) = &ctx.file_cleanup else {
+        warn_orphaned_files(ctx.slug, "post-commit file cleanup queue", keys.len());
+
+        return;
+    };
+
+    queue.borrow_mut().extend(keys);
 }
 
 /// Conn-based delete: uses existing connection (Lua CRUD path).
 fn delete_document_conn(
     ctx: &ServiceContext,
     id: &str,
-    storage: Option<&dyn StorageBackend>,
     locale_config: Option<&LocaleConfig>,
 ) -> Result<ReqContext> {
     let result = delete_document_in_conn(ctx, id, locale_config)?;
@@ -111,7 +132,7 @@ fn delete_document_conn(
     // requests, so their open streams must be closed too. See the pool path.
     invalidate_user_streams_if_auth(ctx, id);
 
-    clean_up_files(ctx, storage, result.upload_keys);
+    queue_files_for_commit(ctx, result.upload_keys);
 
     Ok(result.context)
 }

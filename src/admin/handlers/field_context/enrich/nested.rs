@@ -17,7 +17,10 @@ use crate::{
         handlers::{
             field_context::{
                 MAX_FIELD_DEPTH, cascaded_readonly, collect_node_attr_errors,
-                enrich::{EnrichCtx, SubFieldOpts, field_types, gated_find_by_id},
+                enrich::{
+                    EnrichCtx, SubFieldOpts, field_types, gated_find_by_id,
+                    polymorphic_selected_from_value,
+                },
                 json_textarea_value, locale_locked_display, readonly_display, safe_template_id,
             },
             shared::admin_form_fields,
@@ -327,6 +330,19 @@ fn enrich_nested_relationship(
         return;
     };
 
+    // Polymorphic values are `collection/id` composites, each resolved in its
+    // own collection — never against the first target collection. Left
+    // unresolved, the component would submit an empty value and a save would
+    // clear the stored references.
+    if rc.is_polymorphic() {
+        rf.selected_items = Some(polymorphic_selected_from_value(
+            rc,
+            Some(&rf.base.value),
+            ctx,
+        ));
+        return;
+    }
+
     let Some(related_def) = ctx.reg.get_collection(&rc.collection) else {
         return;
     };
@@ -337,14 +353,8 @@ fn enrich_nested_relationship(
     // Has-many: resolve labels for every selected id from this row's value.
     // (Nothing "upstream" builds these — a has-many relationship inside a group
     // or array/block row previously rendered with no chips because the value
-    // carries the ids but the labels were never resolved.) Polymorphic nested
-    // relationships aren't resolved server-side here (pre-existing); leave them
-    // to the client.
+    // carries the ids but the labels were never resolved.)
     if rc.has_many {
-        if rc.is_polymorphic() {
-            return;
-        }
-
         let ids = selected_ids_from_value(&rf.base.value);
         rf.selected_items = Some(super::types::resolve_has_many_items(
             &ids,
@@ -377,10 +387,10 @@ fn enrich_nested_relationship(
         }
     });
 
-    rf.selected_items = Some(match item {
-        Some(it) => vec![it],
-        None => Vec::new(),
-    });
+    // A target the viewer cannot resolve keeps its stored id (unlabelled).
+    let item = item.unwrap_or_else(|| RelationshipSelectedItem::unavailable(current_value));
+
+    rf.selected_items = Some(vec![item]);
 }
 
 fn enrich_nested_upload(uf: &mut UploadField, field_def: &FieldDefinition, ctx: &EnrichCtx) {
@@ -425,7 +435,7 @@ fn enrich_nested_upload(uf: &mut UploadField, field_def: &FieldDefinition, ctx: 
 
     // Access-gated: never label a nested upload target the viewer cannot read.
     let Some(mut doc) = gated_find_by_id(ctx, &rc.collection, related_def, current_value) else {
-        uf.selected_items = Some(Vec::new());
+        uf.selected_items = Some(vec![RelationshipSelectedItem::unavailable(current_value)]);
         return;
     };
 

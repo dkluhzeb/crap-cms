@@ -176,7 +176,14 @@ All read and write RPCs accept an optional `locale` parameter:
 { "title": { "en": "Hello World", "de": "Hallo Welt" } }
 ```
 
-When `fallback = true` and a field is NULL for the requested locale, the default locale value is returned instead.
+When `fallback = true` and a field is NULL for the requested locale, the default locale value is returned instead. A localized array, blocks or has-many relationship falls back as a whole: a document holding no row for the requested locale returns the default locale's rows.
+
+Filters match what the read returns. A filter on a localized field compares the
+value the response shows, fallback included — a document listed with its
+default-locale title is matched by a filter on that title, and a document
+listed with its default-locale tags is matched (and, for `not_equals` /
+`not_in` / `not_exists`, excluded) by a filter on `tags.id`. With
+`locale = "all"`, filters and sorting use the default locale's values and rows.
 
 ### Writing
 

@@ -9,17 +9,17 @@
 -- flight keeps running, which `crap.jobs.cancel_run` reports as `false`
 -- rather than an error.
 return crap.any.route_handler(function(ctx)
-	local id = ctx.form and ctx.form.id
+  local id = ctx.form and ctx.form.id
 
-	if not id or id == "" then
-		return { status = 400, json = { error = "id is required" } }
-	end
+  if not id or id == "" then
+    return { status = 400, json = { error = "id is required" } }
+  end
 
-	local cancelled = crap.jobs.cancel_run(id)
+  local cancelled = crap.jobs.cancel_run(id)
 
-	if not cancelled then
-		crap.log.info(string.format("[jobs] run %s was not cancellable", id))
-	end
+  if not cancelled then
+    crap.log.info(string.format("[jobs] run %s was not cancellable", id))
+  end
 
-	return { redirect = "/admin/p/jobs" }
+  return { redirect = "/admin/p/jobs" }
 end)

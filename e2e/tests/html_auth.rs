@@ -17,6 +17,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use serde_json::Value;
 use tower::ServiceExt;
 
 use crap_cms_e2e::{helpers::*, html};
@@ -42,6 +43,31 @@ async fn login_page_renders_form() {
     html::assert_exists(&doc, "input[name=\"password\"]", "password input");
     // Submit button
     html::assert_exists(&doc, "button[type=\"submit\"]", "submit button");
+}
+
+// ── login_page_ships_js_translations ──────────────────────────────────────
+
+// Regression: the auth layout rendered no `#crap-i18n` data island, so the
+// password toggle on the login page labelled itself with the raw key
+// `password_show` instead of the translated "Show password".
+#[tokio::test]
+async fn login_page_ships_js_translations() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+
+    let resp = app
+        .router
+        .oneshot(Request::get("/admin/login").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    let doc = html::parse(&body);
+
+    let island = html::select_one(&doc, "script#crap-i18n");
+    let json: Value = serde_json::from_str(island.inner_html().trim())
+        .expect("the i18n island must be valid JSON");
+
+    assert_eq!(json["password_show"], "Show password");
 }
 
 // ── 22. login_failure_shows_error ─────────────────────────────────────────

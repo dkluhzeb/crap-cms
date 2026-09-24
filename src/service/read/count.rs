@@ -8,9 +8,8 @@ use crate::{
     },
 };
 
-use super::validate_filters::{
-    QueryFieldRefs, reject_unreadable_query_fields, validate_user_filters,
-};
+use super::query_access::{QueryFieldRefs, reject_unreadable_query_fields};
+use super::validate_filters::validate_user_filters;
 
 type Result<T> = std::result::Result<T, ServiceError>;
 

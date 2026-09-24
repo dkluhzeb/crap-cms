@@ -4,16 +4,17 @@
 //! - `table` → Constrained (read-only WHERE filters merged into the query)
 
 use anyhow::Result;
-use mlua::{Lua, LuaSerdeExt, Value};
+use mlua::{Lua, Table, Value};
 use tracing::warn;
 
+use super::null_guard::NullReadGuard;
 use crate::{
     db::{AccessResult, query::filter::decode_where_map},
     hooks::{
         lifecycle::{
             AccessCheckInput, AccessContext, LuaVmInfra, execution::resolve_hook_function,
         },
-        lua_api::lua_to_json,
+        lua_api::{lua_to_json, to_lua_value},
     },
     service::{validate_access_constraint_locales, validate_access_constraints},
 };
@@ -52,7 +53,8 @@ pub(crate) fn check_access_with_lua(
         ui_locale: input.ui_locale,
         options: hook.options(),
     };
-    let ctx_table = lua.to_value(&ctx)?;
+    let ctx_table = to_lua_value(lua, &ctx)?;
+    let null_reads = NullReadGuard::install(lua, &ctx_table, input.user)?;
 
     // A Lua error inside the access function (e.g. typo, runtime
     // exception, called a nil method) is fail-safe: treat as
@@ -73,10 +75,51 @@ pub(crate) fn check_access_with_lua(
         }
     };
 
+    Ok(interpret_access_result(
+        &result,
+        &null_reads,
+        input,
+        func_ref,
+    ))
+}
+
+/// Map an access function's return value to an [`AccessResult`]: `true`
+/// allows, `false`/`nil` deny, a table constrains, anything else denies.
+///
+/// A constraint table from a rule that read a NULL `ctx.user` field fails
+/// CLOSED: the NULL read as `nil`, and a `nil`-valued key silently drops out
+/// of the table constructor, so the constraint is (almost always) wider than
+/// the author meant — `{ tenant_id = ctx.user.tenant_id, archived = false }`
+/// for a tenantless user would match every tenant's rows. A boolean verdict
+/// is the rule's explicit decision and stands.
+fn interpret_access_result(
+    result: &Value,
+    null_reads: &NullReadGuard,
+    input: &AccessCheckInput<'_>,
+    func_ref: &str,
+) -> AccessResult {
     match result {
-        Value::Boolean(true) => Ok(AccessResult::Allowed),
-        Value::Boolean(false) | Value::Nil => Ok(AccessResult::Denied),
-        Value::Table(tbl) => Ok(parse_access_constraints(lua, &tbl)),
+        Value::Boolean(true) => AccessResult::Allowed,
+        Value::Boolean(false) | Value::Nil => AccessResult::Denied,
+        Value::Table(tbl) => {
+            let read = null_reads.null_reads();
+
+            if read.is_empty() {
+                return parse_access_constraints(tbl);
+            }
+
+            warn!(
+                "Access function '{func_ref}' returned a constraint table for '{}' on \
+                 collection '{}' after reading NULL user field(s) [{}]; denying. Guard \
+                 the NULL value explicitly (return false, or true) before building \
+                 the filter.",
+                input.operation,
+                input.collection,
+                read.join(", ")
+            );
+
+            AccessResult::Denied
+        }
         other => {
             warn!(
                 "Access function '{}' returned unexpected type '{}', denying access",
@@ -84,7 +127,7 @@ pub(crate) fn check_access_with_lua(
                 other.type_name()
             );
 
-            Ok(AccessResult::Denied)
+            AccessResult::Denied
         }
     }
 }
@@ -165,9 +208,7 @@ pub(crate) fn check_collection_access(
 /// - **An empty constraint set denies** — see the warning below. (An empty
 ///   group *inside* an `or` needs no case here: the decoder itself rejects
 ///   it for every surface, and that error lands in the deny-on-error arm.)
-fn parse_access_constraints(lua: &Lua, tbl: &mlua::Table) -> AccessResult {
-    let _ = lua;
-
+fn parse_access_constraints(tbl: &Table) -> AccessResult {
     let json = match lua_to_json(&Value::Table(tbl.clone())) {
         Ok(v) => v,
         Err(e) => {
@@ -343,6 +384,33 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(result, AccessResult::Denied));
+    }
+
+    /// Regression: the access context was serialized with mlua's defaults, so
+    /// a null field and an absent user reached Lua as the truthy `NULL`
+    /// sentinel — `ctx.data.x == nil` was false and `if ctx.user then` took
+    /// the branch for an anonymous request. Both are `nil` now.
+    #[test]
+    fn access_context_null_values_are_nil() {
+        let lua = setup_lua();
+        lua.load(
+            r#"
+            package.loaded["null_probe"] = {
+                check = function(ctx)
+                    return ctx.data.x == nil and not ctx.data.x and ctx.user == nil
+                        and not ctx.user and ctx.id == nil
+                end,
+            }
+        "#,
+        )
+        .exec()
+        .unwrap();
+
+        let data: DocumentFields = [("x".to_string(), json!(null))].into_iter().collect();
+        let hook = HookRef::new("null_probe.check");
+
+        let result = check_access_with_lua(&lua, &acc(Some(&hook), Some(&data))).unwrap();
+        assert!(matches!(result, AccessResult::Allowed), "{result:?}");
     }
 
     /// Regression: the chokepoint used to hard-code `injecting_status = false`,

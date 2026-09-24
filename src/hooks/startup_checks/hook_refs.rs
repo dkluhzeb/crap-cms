@@ -273,7 +273,11 @@ pub fn validate_admin_access_ref(lua: &Lua, admin_access: Option<&HookRef>) -> R
 
 /// Render the `{source} field 'a' block 'b' …` source label for a field from
 /// its [`SchemaStep`] ancestor chain.
-fn field_source_label(source: &str, path: &[SchemaStep<'_>], field: &FieldDefinition) -> String {
+pub(super) fn field_source_label(
+    source: &str,
+    path: &[SchemaStep<'_>],
+    field: &FieldDefinition,
+) -> String {
     let mut label = String::from(source);
 
     for step in path {

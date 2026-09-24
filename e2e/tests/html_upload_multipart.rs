@@ -18,13 +18,24 @@
 //! image-size variant, and fetch the stored files back through the serve
 //! route.
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
-use crap_cms::core::collection::CollectionDefinition;
-use crap_cms::core::field::{FieldDefinition, FieldType};
-use crap_cms::core::upload::{CollectionUpload, ImageSizeBuilder};
+use std::{iter::repeat_n, net::SocketAddr};
+
+use axum::{
+    body::Body,
+    extract::ConnectInfo,
+    http::{Request, StatusCode},
+};
 use serde_json::Value;
 use tower::ServiceExt;
+
+use crap_cms::{
+    config::CrapConfig,
+    core::{
+        collection::CollectionDefinition,
+        field::{FieldDefinition, FieldType},
+        upload::{CollectionUpload, ImageSizeBuilder},
+    },
+};
 
 use crap_cms_e2e::helpers::*;
 
@@ -199,4 +210,209 @@ async fn multipart_upload_creates_document_with_metadata_and_thumbnail() {
             "stored file `{name}` must be served"
         );
     }
+}
+
+/// Regression: an admin upload over the body limit answered a plain 303
+/// redirect. htmx followed it and swapped a blank form into the page, so the
+/// user's edits vanished without a word. The refusal must be an error status
+/// (htmx swaps nothing) carrying a toast that names the limit.
+#[tokio::test]
+async fn admin_upload_over_the_body_limit_answers_413_with_a_toast() {
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.upload.max_file_size = 1024;
+
+    let ctx = setup_html_test_with_config(
+        vec![make_users_def(), make_media_def()],
+        vec![],
+        config,
+        "uploader@test.com",
+        "pass123",
+    );
+
+    // Past the body limit (upload maximum + 1 MiB headroom).
+    let boundary = "X-CRAP-TEST-BOUNDARY";
+    let oversized: Vec<u8> = repeat_n(0_u8, 2 * 1024 * 1024 + 4096).collect();
+    let body = multipart_body(boundary, &oversized);
+
+    let resp = ctx
+        .app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/admin/collections/media")
+                .header("Cookie", auth_and_csrf(&ctx.cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header("HX-Request", "true")
+                .header(
+                    "Content-Type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(resp.headers().get("location").is_none(), "no redirect");
+    assert!(resp.headers().get("hx-redirect").is_none(), "no redirect");
+
+    let toast = resp
+        .headers()
+        .get("X-Crap-Toast")
+        .expect("an error toast")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        toast.contains("1.0 KB"),
+        "the toast names the limit: {toast}"
+    );
+}
+
+const MIB: usize = 1024 * 1024;
+
+/// A multipart body carrying `data` as a generic binary `_file`.
+fn multipart_binary_body(boundary: &str, data: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"_file\"; filename=\"big.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(data);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
+}
+
+/// A config whose global upload maximum is tiny, next to a `media`
+/// collection that allows 4 MiB files of its own.
+fn big_collection_limit_ctx() -> HtmlTestCtx {
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.upload.max_file_size = 1024;
+
+    let mut media = make_media_def();
+    if let Some(upload) = media.upload.as_mut() {
+        upload.image_sizes.clear();
+        upload.max_file_size = Some(u64::try_from(4 * MIB).unwrap());
+    }
+
+    setup_html_test_with_config(
+        vec![make_users_def(), media],
+        vec![],
+        config,
+        "uploader@test.com",
+        "pass123",
+    )
+}
+
+/// A collection allowing larger files than the global maximum accepts them
+/// on its admin create route and on the upload API — the body limit there
+/// follows the collection, not the global default.
+#[tokio::test]
+async fn a_collection_limit_above_the_global_admits_larger_uploads() {
+    let ctx = big_collection_limit_ctx();
+    let boundary = "X-CRAP-TEST-BOUNDARY";
+    let file: Vec<u8> = repeat_n(7_u8, 2 * MIB).collect();
+
+    let admin = ctx
+        .app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/admin/collections/media")
+                .header("Cookie", auth_and_csrf(&ctx.cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header(
+                    "Content-Type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(multipart_binary_body(boundary, &file)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_ne!(admin.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let token = ctx
+        .cookie
+        .strip_prefix("crap_session=")
+        .expect("session cookie")
+        .to_string();
+
+    let api = ctx
+        .app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/api/upload/media")
+                .header("Authorization", format!("Bearer {token}"))
+                .header(
+                    "Content-Type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(multipart_binary_body(boundary, &file)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = api.status();
+    let body = body_string(api.into_body()).await;
+    assert!(
+        status.is_success(),
+        "upload API refused it: {status} {body}"
+    );
+}
+
+/// Regression: the largest collection upload limit was applied to the whole
+/// router, so every route — the unauthenticated login form included —
+/// buffered bodies up to that size. Routes that take no upload keep the
+/// global limit.
+#[tokio::test]
+async fn routes_without_uploads_keep_the_global_body_limit() {
+    let ctx = big_collection_limit_ctx();
+
+    // Past the global limit (1 KiB + 1 MiB headroom), well inside the
+    // collection's 4 MiB.
+    let form = format!("email=a%40b.c&password={}", "x".repeat(2 * MIB));
+
+    let login = ctx
+        .app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/admin/login")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Cookie", format!("crap_csrf={TEST_CSRF}"))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let json = format!(r#"{{"caption":"{}"}}"#, "x".repeat(2 * MIB));
+
+    let validate = ctx
+        .app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/admin/collections/media/validate")
+                .header("Cookie", auth_and_csrf(&ctx.cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header("Content-Type", "application/json")
+                .body(Body::from(json))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(validate.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }

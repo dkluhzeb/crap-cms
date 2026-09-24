@@ -13,11 +13,23 @@ use crate::{
 
 use super::field::{LuaShape, write_field};
 
+/// A Lua union of string literals: `"a" | "b"`.
+pub(super) fn literal_union(values: &[&str]) -> String {
+    values
+        .iter()
+        .map(|v| format!("\"{v}\""))
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
 /// The stored system keys a read document carries besides its fields.
 pub(super) fn write_system_fields(out: &mut String, drafts: bool, soft_delete: bool) {
     if drafts {
-        let values = DRAFT_STATUS_VALUES.map(|v| format!("\"{v}\""));
-        w!(out, "---@field _status? {}", values.join(" | "));
+        w!(
+            out,
+            "---@field _status? {}",
+            literal_union(&DRAFT_STATUS_VALUES)
+        );
     }
 
     if soft_delete {
@@ -76,12 +88,38 @@ pub(super) fn write_hook_context_tail(out: &mut String) {
     w!(out, "---@field user? table");
     w!(out, "---@field ui_locale? string");
     w!(out, "---@field options? table");
+    w!(out, "---@field edited_by? {{ id: string, email: string }}");
+    out.push('\n');
+}
+
+/// The keys of a typed field-hook context after its `collection` line — the
+/// table the runtime builds for a field hook (`crap.FieldHookContext`),
+/// closing the class. `document` is the owner's full document (`doc_class`);
+/// `data` is the nearest scope, which is that document only for a top-level
+/// field — a group object or an array/blocks row for a nested one.
+pub(super) fn write_field_hook_context(out: &mut String, doc_class: &str) {
+    w!(out, "---@field field_name string");
+    w!(out, "---@field operation string");
+    w!(out, "---@field id? string");
+    w!(out, "---@field locale? string");
+    w!(
+        out,
+        "---@field data {doc_class}|table<string, any> The nearest scope: the document for a top-level field, the group object or array/blocks row for a nested one"
+    );
+    w!(out, "---@field document {doc_class}");
+    w!(out, "---@field user? table");
+    w!(out, "---@field ui_locale? string");
+    w!(out, "---@field options? table");
     out.push('\n');
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        hooks::lifecycle::{FieldHookContext, HookContext},
+        typegen::LuaAnnotation,
+    };
 
     /// The typed hook contexts carry every key the runtime sets on a hook's
     /// context table, `ctx.id` and the per-ref `options` included.
@@ -99,8 +137,72 @@ mod tests {
             "---@field user? table",
             "---@field ui_locale? string",
             "---@field options? table",
+            "---@field edited_by? { id: string, email: string }",
         ] {
             assert!(out.contains(line), "{line}: {out}");
+        }
+    }
+
+    /// The typed field-hook contexts carry every key the runtime
+    /// `crap.FieldHookContext` sets — `id`, `locale`, `document` and `options`
+    /// included — and type `data` as the nearest scope, not the document.
+    #[test]
+    fn field_hook_context_matches_the_runtime_table() {
+        let mut out = String::new();
+        write_field_hook_context(&mut out, "crap.data.Posts");
+
+        for line in [
+            "---@field field_name string",
+            "---@field operation string",
+            "---@field id? string",
+            "---@field locale? string",
+            "---@field data crap.data.Posts|table<string, any> ",
+            "---@field document crap.data.Posts",
+            "---@field user? table",
+            "---@field ui_locale? string",
+            "---@field options? table",
+        ] {
+            assert!(out.contains(line), "{line}: {out}");
+        }
+    }
+
+    /// The field names of a derive-rendered class, `?` stripped.
+    fn runtime_field_names(render: fn(&mut String)) -> Vec<String> {
+        let mut class = String::new();
+        render(&mut class);
+
+        class
+            .lines()
+            .filter_map(|line| line.strip_prefix("--- @field "))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .map(|name| name.trim_end_matches('?').to_string())
+            .collect()
+    }
+
+    /// Every key of the runtime contexts is declared on the per-collection
+    /// typed contexts, so a new runtime key cannot be missed by the typed
+    /// classes again.
+    #[test]
+    fn typed_contexts_declare_every_runtime_key() {
+        let mut hook =
+            String::from("---@field collection x\n---@field operation x\n---@field data x\n");
+        write_hook_context_tail(&mut hook);
+
+        for name in runtime_field_names(HookContext::render_lua_annotation) {
+            assert!(
+                hook.contains(&format!("---@field {name}")),
+                "hook context lacks {name}"
+            );
+        }
+
+        let mut field_hook = String::from("---@field collection x\n");
+        write_field_hook_context(&mut field_hook, "crap.data.Posts");
+
+        for name in runtime_field_names(FieldHookContext::render_lua_annotation) {
+            assert!(
+                field_hook.contains(&format!("---@field {name}")),
+                "field hook context lacks {name}"
+            );
         }
     }
 

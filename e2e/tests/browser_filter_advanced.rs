@@ -378,6 +378,18 @@ async fn filter_builder_keeps_status_out_of_mixed_or_groups() {
         "a _status row must not join a title row with OR"
     );
 
+    // The server accepts only `equals` on `_status`: the row offers nothing
+    // else, and its value is a choice between the two statuses.
+    let ops = wait_drawer_eq(
+        &page,
+        "const r = root.querySelectorAll('.filter-builder__row')[1]; \
+         return [...r.querySelector('.filter-builder__op').options].map((o) => o.value).join(',') \
+         + '|' + [...r.querySelectorAll('select[name=\"filter-value\"] option')].map((o) => o.value).join(',');",
+        "equals|published,draft",
+    )
+    .await;
+    assert_eq!(ops, "equals|published,draft", "_status offers only `is`");
+
     // A `_status` row below another `_status` row may use OR again.
     add_row(&page, 3).await;
     set_row_select(&page, 2, "filter-builder__field", "_status").await;

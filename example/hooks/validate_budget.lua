@@ -8,8 +8,9 @@ return crap.collections.projects.field_hook("budget", function(value, _context)
     return value
   end
 
-  if value > (tonumber(crap.env.get("CRAP_MAX_BUDGET")) or 500000) then
-    error(string.format("Budget cannot exceed %d", value))
+  local limit = tonumber(crap.env.get("CRAP_MAX_BUDGET")) or 500000
+  if value > limit then
+    error(string.format("Budget cannot exceed %s", limit))
   end
 
   if value < 0 then

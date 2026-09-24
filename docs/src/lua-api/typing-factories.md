@@ -35,16 +35,17 @@ Wraps a collection lifecycle hook that takes the generic
 the runtime always passes a generic context).
 
 ```lua
--- hooks/set_published_at.lua — used by posts AND projects
+-- hooks/audit.lua — used by posts AND projects
 return crap.any.collection_hook(function(context)
-    -- Publish intent rides `context.draft` (the engine sets the `_status`
-    -- column during persist, after this hook runs).
-    if not context.draft and not context.data.published_at then
-        context.data.published_at = crap.util.date_now()
+    if context.hook_depth == 0 then
+        crap.log.info(context.operation .. " on " .. context.collection)
     end
     return context
 end)
 ```
+
+The function type (`crap.hook_fn`) lets it return `false` or `nil` too — a
+`before_broadcast` hook suppresses the event that way.
 
 For collection-specific narrowing, use
 [`crap.collections.<slug>.hook(fn)`](collections.md).

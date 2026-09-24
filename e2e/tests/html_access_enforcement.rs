@@ -23,7 +23,7 @@ use std::collections::HashMap;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use serde_json::json;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use crap_cms::core::DocumentFields;
@@ -31,7 +31,7 @@ use crap_cms::core::HookRef;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 use crap_cms::db::{DbConnection, DbValue, query};
-use crap_cms_e2e::helpers::*;
+use crap_cms_e2e::{helpers::*, html};
 
 // Lua access functions — same shapes as html_access_gating.rs.
 
@@ -328,4 +328,100 @@ async fn unauthenticated_post_returns_unauthorized() {
         "unauthenticated POST should redirect to login or return 403/401, got: {}",
         resp.status()
     );
+}
+
+// ── unreadable_reference_keeps_its_stored_id ─────────────────────────────
+//
+// Regression: a relationship whose target the viewer may not read rendered
+// with no selection, so the form submitted an empty value and saving the
+// document silently cleared the stored reference — for a read-only field as
+// much as an editable one. The stored id is kept as an "unavailable" item
+// (no label, no title leak) and submitted back unchanged.
+
+fn make_secrets_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("secrets");
+    def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+    def.admin.use_as_title = Some("title".to_string());
+    def.access.read = Some(HookRef::new("access.never"));
+    def
+}
+
+fn make_articles_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("articles");
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text).build(),
+        FieldDefinition::builder("secret", FieldType::Relationship)
+            .relationship(RelationshipConfig::new("secrets", false))
+            .build(),
+        FieldDefinition::builder("locked", FieldType::Relationship)
+            .relationship(RelationshipConfig::new("secrets", false))
+            .admin(FieldAdmin::builder().readonly(true).build())
+            .build(),
+    ];
+    def.access = Access {
+        read: Some(HookRef::new("access.authenticated")),
+        update: Some(HookRef::new("access.authenticated")),
+        ..Default::default()
+    };
+    def
+}
+
+fn seed_doc(app: &TestApp, slug: &str, data: Value) -> String {
+    let def = app.registry.get_collection(slug).unwrap().clone();
+    let mut conn = app.pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let fields: DocumentFields = serde_json::from_value(data).unwrap();
+    let doc = query::create(&tx, slug, &def, &fields, None).unwrap();
+    tx.commit().unwrap();
+    doc.id.to_string()
+}
+
+#[tokio::test]
+async fn unreadable_reference_keeps_its_stored_id() {
+    let app = setup_app_with_access_files(
+        vec![
+            make_users_def_with_role(),
+            make_secrets_def(),
+            make_articles_def(),
+        ],
+        vec![],
+        &access_files(),
+    );
+    let viewer_id = create_test_user_with_role(&app, "ref@test.com", "pw", "viewer");
+    let cookie = make_auth_cookie(&app, &viewer_id, "ref@test.com");
+
+    let secret_id = seed_doc(&app, "secrets", json!({ "title": "Classified" }));
+    let article_id = seed_doc(
+        &app,
+        "articles",
+        json!({ "title": "A", "secret": secret_id, "locked": secret_id }),
+    );
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get(format!("/admin/collections/articles/{article_id}"))
+                .header("Cookie", auth_and_csrf(&cookie))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert!(!body.contains("Classified"), "the target's title leaked");
+
+    let doc = html::parse(&body);
+    for field in ["secret", "locked"] {
+        let host = html::select_one(
+            &doc,
+            &format!("crap-relationship-search[field-name=\"{field}\"]"),
+        );
+        let selected: Value =
+            serde_json::from_str(host.value().attr("selected").expect("selected attr")).unwrap();
+
+        assert_eq!(selected[0]["id"], secret_id.as_str(), "{field}: {selected}");
+        assert_eq!(selected[0]["unavailable"], true, "{field}: {selected}");
+    }
 }

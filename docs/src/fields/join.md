@@ -17,10 +17,18 @@ This reads as: "Show me all documents in the `posts` collection where `posts.aut
 | `name` | string | yes | Field name (display only, no column created) |
 | `type` | `"join"` | yes | Must be `"join"` |
 | `collection` | string | yes | Target collection slug to query |
-| `on` | string | yes | Field name on the target collection that holds the reference |
+| `on` | string | yes | Field on the target collection that references this collection — a has-one relationship or upload field |
 
 Both `collection` and `on` are required non-empty strings — a missing,
-wrong-typed, or empty value is a hard error at load time. Setting
+wrong-typed, or empty value is a hard error at load time, and so is a
+`collection` that is not a defined collection. `on` must name a
+**has-one, single-target** `relationship` or `upload` field at the top level
+of the target collection (layout wrappers — row, collapsible, tabs — are
+transparent) whose target is the collection that owns the join; anything else
+— an unknown name, a field referencing another collection, a has-many or
+polymorphic relationship, a field inside a group — is a load error, since the
+join would never list anything. For the same reason a join is rejected in a
+global: nothing can reference a global. Setting
 `required`, `localized`, or `required_locales` on a join is also a
 **hard load error** (a join is virtual and read-only, so those flags
 are meaningless — they are rejected rather than silently ignored).

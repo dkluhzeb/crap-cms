@@ -12,7 +12,10 @@ use crate::{
     admin::{
         AdminState,
         handlers::{
-            collections::shared::{SubmittedMeta, WriteErrorParams, handle_collection_write_error},
+            collections::shared::{
+                SubmittedMeta, WriteErrorParams, form_parse_error_response,
+                handle_collection_write_error,
+            },
             forms::{FormData, parse_form},
             shared::{
                 HxNav, get_user_doc, htmx_inline_created, htmx_redirect_with_created,
@@ -179,10 +182,7 @@ pub async fn create_action(
 
     let (form_data, file) = match parse_form(request, &state, &def).await {
         Ok(result) => result,
-        Err(e) => {
-            error!("{}", e);
-            return redirect_response(&paths::collection_create(&slug));
-        }
+        Err(e) => return form_parse_error_response(&state, &def, auth_user.as_ref(), &e),
     };
 
     let mut form = FormData::from_raw(form_data, &def.fields);

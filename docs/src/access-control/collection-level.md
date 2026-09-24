@@ -128,6 +128,20 @@ a no-op:
   otherwise it is denied. This is how you express "users may only update/delete
   rows where `created_by = me`", or "a moderator may only unlock users in their
   own org (`{ org = ctx.user.org }`)" — a real ownership-scoping feature.
+  Use it for every ownership rule: an update's `ctx.data` is the caller's
+  patch, so comparing `ctx.data.author` with `ctx.user.id` checks what the
+  caller *sent*, not who owns the row. A filter must name a flat own column,
+  so membership in a has-many relationship (`team`) cannot be a filter —
+  load the stored row instead and decide on it (the example's
+  `access/team_or_admin.lua`):
+
+  ```lua
+  local project = crap.collections.projects.find_by_id(ctx.id, {
+    depth = 0, -- a has-many relationship reads as a list of ids
+    select = { "team" },
+    override_access = true,
+  })
+  ```
 - **`create`** — a filter table is a **configuration error**: there is no target
   row yet, so gate creates with `true`/`false` based on `ctx.data`.
 - **`versions`** — a filter table is a **configuration error**: it is a boolean

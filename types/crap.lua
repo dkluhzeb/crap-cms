@@ -813,7 +813,7 @@ function crap.fields.join(config) end
 --- @field search? string FTS5 full-text search query.
 
 --- Result of `crap.collections.find(...)`. Constructed by the handler
---- and serialized via `LuaSerdeExt::to_value` — the Lua-side
+--- and serialized via `to_lua_value` — the Lua-side
 --- `crap.FindResult` class is derived from this struct.
 --- @class crap.FindResult
 --- @field documents crap.Document[] Matching documents.
@@ -833,7 +833,7 @@ function crap.fields.join(config) end
 --- top-level API call, `1+` from Lua CRUD invoked inside another hook.
 --- @class crap.HookContext
 --- @field collection string Collection slug.
---- @field operation "create"|"update"|"delete"|"find"|"find_by_id"|"get"|"init" The operation being performed.
+--- @field operation "create"|"update"|"undelete"|"delete"|"find"|"find_by_id"|"unpublish"|"restore"|"get"|"init" The operation being performed.
 --- @field data table<string, any> Document data. For read hooks, contains document fields including `id` / timestamps. For `before_delete` / `after_delete` hooks, contains the deleted document's fields plus `id` (and `soft_delete` for a soft delete) — so a hook can inspect what is being removed; a hard delete leaves no row to re-fetch, so `after_delete` relies on this snapshot. In `after_change` hooks, `data.id` carries the new document ID.
 --- @field locale? string The content locale this operation targets (e.g. `"en"`, `"de"`) — the requested locale, or the default locale when none was given. Nil when localization is disabled (and on the locale-agnostic `before_delete` / `after_delete` hooks, which remove the whole row across all locales). Otherwise the same resolved value every hook surface sees (field hooks, validators, access functions).
 --- @field draft? boolean `true` when this is a draft save (only set for collections with `versions.drafts` enabled).
@@ -868,12 +868,30 @@ function crap.fields.join(config) end
 --- @field ui_locale? string Admin UI locale code (e.g. `"en"`, `"de"`) when the check originates from an admin request; `nil` otherwise (gRPC/REST/internal checks). Distinct from `locale` (the content locale) — this is the operator's UI language.
 --- @field options? table Per-config options from the hook ref's `{ ref, options }` table; `nil` when the access rule was configured as a bare ref string.
 
+--- Which page is being rendered — the second argument handed to every
+--- `before_render` hook.
+---
+--- Without this a hook has to infer the page from which context keys happen
+--- to exist, which silently breaks whenever a page grows a field.
+--- @class crap.template.render_info
+--- @field page string The page discriminant, matching `ctx.page.type` (`"dashboard"`, `"collection_items"`, `"error_404"`, …).
+--- @field template string The template being rendered, e.g. `"collections/items"`. Reflects the built-in name even when an overlay template has replaced it.
+--- @field collection? string Collection slug, on pages scoped to one collection.
+--- @field global? string Global slug, on pages scoped to one global.
+
 -- ── Function-type aliases (one-liner `---@type` for callables) ─────
 
 --- Generic collection hook. Use for hooks that take `crap.HookContext`
 --- (no per-collection narrowing); for typed contexts use
---- `crap.hook_fn.<Pascal>` from `hooks.lua`.
---- @alias crap.hook_fn fun(ctx: crap.HookContext): crap.HookContext
+--- `crap.hook_fn.<Pascal>` from `hooks.lua`. A `before_broadcast` hook
+--- returns `false` or `nil` to suppress the event; any other hook's
+--- `false` / `nil` keeps the context unchanged.
+--- @alias crap.hook_fn fun(ctx: crap.HookContext): crap.HookContext|false|nil
+
+--- A `before_render` hook (registered with `crap.hooks.register`):
+--- receives the template context and which page renders, returns the
+--- context (or `nil` to keep the one it edited in place).
+--- @alias crap.render_hook_fn fun(ctx: table<string, any>, info: crap.template.render_info): table<string, any>?
 
 --- Generic field hook. Use for hooks that take the generic
 --- `crap.FieldHookContext`; for typed contexts use
@@ -1354,19 +1372,23 @@ function crap.globals.validate(slug, data_table, opts) end
 crap.hooks = {}
 
 --- Register a hook function for an event. Fires for all collections.
+--- A `before_render` hook takes `(ctx, info)` — the template context and
+--- which page renders — and every other event's hook the hook context.
 --- @param event crap.HookEvent  The lifecycle event to hook into.
---- @param func fun(context: crap.HookContext): crap.HookContext  Hook function.
+--- @param func crap.hook_fn  Hook function.
+--- @overload fun(event: "before_render", func: crap.render_hook_fn)
 function crap.hooks.register(event, func) end
 
 --- Remove a previously registered hook function (identity-based via rawequal).
 --- @param event crap.HookEvent  The lifecycle event.
---- @param func fun(context: crap.HookContext): crap.HookContext  The function to remove.
+--- @param func crap.hook_fn  The function to remove.
+--- @overload fun(event: "before_render", func: crap.render_hook_fn)
 function crap.hooks.remove(event, func) end
 
 --- List all registered hook functions for an event. Returns a copy: editing
 --- the returned array does not change which hooks fire.
 --- @param event crap.HookEvent  The lifecycle event.
---- @return fun(context: crap.HookContext): crap.HookContext[] # Array of hook functions (a copy — mutating it does not affect the registered hooks).
+--- @return (crap.hook_fn|crap.render_hook_fn)[] # Array of hook functions (a copy — mutating it does not affect the registered hooks).
 function crap.hooks.list(event) end
 
 --- Events that trigger hooks.
@@ -1441,15 +1463,35 @@ function crap.log.error(msg) end
 --- @class crap.json
 crap.json = {}
 
---- Encode a Lua value as a JSON string.
+--- Encode a Lua value as a JSON string. `crap.null` encodes as `null` (a
+--- `nil`-valued key is simply absent).
 --- @param value any  Lua value to encode.
 --- @return string # JSON string.
 function crap.json.encode(value) end
 
---- Decode a JSON string into a Lua value.
+--- Decode a JSON string into a Lua value. A `null` object field decodes to
+--- `nil` (the key is absent); a `null` array element decodes to `crap.null`,
+--- so the array keeps its length.
 --- @param str string  JSON string.
 --- @return any # Decoded Lua value.
 function crap.json.decode(str) end
+
+
+-- ── crap.null ────────────────────────────────────────────────
+
+--- Opaque sentinel type of `crap.null`.
+--- @class crap.Null
+
+--- An explicit JSON `null`. Lua `nil` cannot be stored in a table (assigning
+--- it erases the key or leaves a hole in an array), so use `crap.null` wherever
+--- data handed back to the CMS must carry a null: `{ field = crap.null }` in
+--- hook/CRUD write data clears the field, and a route response or job result
+--- keeps the key as `null`. Reading data, a null object field is `nil`, while
+--- a null array element is `crap.null` so the array keeps its length (also
+--- from `crap.json.decode`). The sentinel is truthy — compare with
+--- `v == crap.null`.
+--- @type crap.Null
+crap.null = nil
 
 
 -- ── crap.util ────────────────────────────────────────────────
@@ -1726,7 +1768,7 @@ function crap.http.request(opts) end
 
 --- Response returned by `crap.http.request(opts)`. Both `LuaAnnotation`
 --- (for `types/crap.lua`) and `Serialize` (for the runtime
---- `lua.to_value(&self)` conversion); the same Rust struct is the
+--- `to_lua_value` conversion); the same Rust struct is the
 --- single source of truth.
 --- @class crap.HttpResponse
 --- @field status integer HTTP status code.

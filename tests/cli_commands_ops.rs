@@ -21,16 +21,17 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 
 use crap_cms::commands::{
-    self, UserChangePasswordParams, UserLookup, db::BackupOpts, user_change_password, user_lock,
-    user_unlock,
+    self, UserChangePasswordParams, UserLookup, db::BackupOpts, user_account_action,
+    user_change_password,
 };
 use std::sync::LazyLock;
 
-use crap_cms::config::{CrapConfig, LocaleConfig, PasswordPolicy};
+use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::{DocumentFields, Registry, auth};
 use crap_cms::db::{DbPool, migrate, ops, pool, query};
 use crap_cms::hooks;
 use crap_cms::scaffold;
+use crap_cms::service::{AppInfra, auth::AccountAction};
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -179,13 +180,25 @@ fn user_lookup<'a>(
     }
 }
 
-static LOCALE: LazyLock<LocaleConfig> = LazyLock::new(LocaleConfig::default);
+/// The CLI's own infrastructure over the fixture project, as `user` commands
+/// build it.
+fn cli_infra_for(
+    tmp: &tempfile::TempDir,
+    pool: &DbPool,
+    registry: &std::sync::Arc<Registry>,
+) -> std::sync::Arc<AppInfra> {
+    let config_dir = tmp.path().join("config");
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
 
-static PASSWORD_POLICY: LazyLock<PasswordPolicy> = LazyLock::new(PasswordPolicy::default);
+    commands::cli_infra(&config_dir, registry, &cfg, pool).expect("cli infra")
+}
+
+static LOCALE: LazyLock<LocaleConfig> = LazyLock::new(LocaleConfig::default);
 
 #[test]
 fn cmd_user_lock_by_email() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let infra = cli_infra_for(&tmp, &pool, &registry);
     let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
@@ -202,13 +215,17 @@ fn cmd_user_lock_by_email() {
     drop(conn);
 
     // Lock via command
-    user_lock(&user_lookup(
-        &pool,
-        &registry,
-        "users",
-        Some("lockme@example.com".to_string()),
-        None,
-    ))
+    user_account_action(
+        &user_lookup(
+            &pool,
+            &registry,
+            "users",
+            Some("lockme@example.com".to_string()),
+            None,
+        ),
+        &infra,
+        AccountAction::Lock,
+    )
     .unwrap();
 
     // Verify locked
@@ -216,9 +233,66 @@ fn cmd_user_lock_by_email() {
     assert!(query::is_locked(&conn, "users", &doc.id).unwrap());
 }
 
+/// Regression: `user lock` wrote the lock with no invalidation transport, so a
+/// locked user's open live-update streams kept running. It now runs on the
+/// CLI's infrastructure and tears them down.
+#[tokio::test]
+async fn cmd_user_lock_tears_down_the_users_streams() {
+    let (tmp, pool, registry) = full_setup();
+    let infra = cli_infra_for(&tmp, &pool, &registry);
+    let def = registry.get_collection("users").unwrap().clone();
+
+    let doc = create_user(&pool, &def, "streams@example.com", "pw", &[("name", "S")]);
+    let mut rx = infra.invalidation_transport.subscribe();
+
+    user_account_action(
+        &user_lookup(&pool, &registry, "users", None, Some(doc.id.to_string())),
+        &infra,
+        AccountAction::Lock,
+    )
+    .unwrap();
+
+    let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+        .await
+        .expect("recv timed out")
+        .expect("an invalidation signal");
+    assert_eq!(received, doc.id.to_string());
+}
+
+/// `user change-password` ends the user's streams the same way.
+#[tokio::test]
+async fn cmd_user_change_password_tears_down_the_users_streams() {
+    let (tmp, pool, registry) = full_setup();
+    let infra = cli_infra_for(&tmp, &pool, &registry);
+    let def = registry.get_collection("users").unwrap().clone();
+
+    let doc = create_user(
+        &pool,
+        &def,
+        "chpw-streams@example.com",
+        "oldpw",
+        &[("name", "S")],
+    );
+    let mut rx = infra.invalidation_transport.subscribe();
+
+    user_change_password(
+        &user_lookup(&pool, &registry, "users", None, Some(doc.id.to_string())),
+        &infra,
+        UserChangePasswordParams::new(Some("a-long-new-password".to_string()), false),
+    )
+    .unwrap();
+
+    let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+        .await
+        .expect("recv timed out")
+        .expect("an invalidation signal");
+    assert_eq!(received, doc.id.to_string());
+}
+
 #[test]
 fn cmd_user_lock_by_id() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let infra = cli_infra_for(&tmp, &pool, &registry);
     let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
@@ -230,13 +304,11 @@ fn cmd_user_lock_by_id() {
     );
 
     // Lock via ID
-    user_lock(&user_lookup(
-        &pool,
-        &registry,
-        "users",
-        None,
-        Some(doc.id.to_string()),
-    ))
+    user_account_action(
+        &user_lookup(&pool, &registry, "users", None, Some(doc.id.to_string())),
+        &infra,
+        AccountAction::Lock,
+    )
     .unwrap();
 
     let conn = pool.get().unwrap();
@@ -245,7 +317,8 @@ fn cmd_user_lock_by_id() {
 
 #[test]
 fn cmd_user_unlock_by_email() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let infra = cli_infra_for(&tmp, &pool, &registry);
     let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
@@ -263,13 +336,17 @@ fn cmd_user_unlock_by_email() {
     drop(conn);
 
     // Unlock via command
-    user_unlock(&user_lookup(
-        &pool,
-        &registry,
-        "users",
-        Some("unlockme@example.com".to_string()),
-        None,
-    ))
+    user_account_action(
+        &user_lookup(
+            &pool,
+            &registry,
+            "users",
+            Some("unlockme@example.com".to_string()),
+            None,
+        ),
+        &infra,
+        AccountAction::Unlock,
+    )
     .unwrap();
 
     let conn = pool.get().unwrap();
@@ -370,7 +447,8 @@ fn cmd_user_delete_nonexistent_email_errors() {
 
 #[test]
 fn cmd_user_change_password_by_email() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let infra = cli_infra_for(&tmp, &pool, &registry);
     let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
@@ -382,17 +460,17 @@ fn cmd_user_change_password_by_email() {
     );
 
     // Change password via command (programmatic, not interactive)
-    user_change_password(UserChangePasswordParams {
-        pool: &pool,
-        registry: &registry,
-        collection: "users",
-        email: Some("chpw@example.com".to_string()),
-        id: None,
-        password: Some("newpw123".to_string()),
-        password_stdin: false,
-        password_policy: &PASSWORD_POLICY,
-        locale: &LOCALE,
-    })
+    user_change_password(
+        &user_lookup(
+            &pool,
+            &registry,
+            "users",
+            Some("chpw@example.com".to_string()),
+            None,
+        ),
+        &infra,
+        UserChangePasswordParams::new(Some("newpw123".to_string()), false),
+    )
     .unwrap();
 
     // Verify new password works
@@ -406,7 +484,8 @@ fn cmd_user_change_password_by_email() {
 
 #[test]
 fn cmd_user_change_password_by_id() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let infra = cli_infra_for(&tmp, &pool, &registry);
     let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
@@ -417,17 +496,11 @@ fn cmd_user_change_password_by_id() {
         &[("name", "ChPW ID")],
     );
 
-    user_change_password(UserChangePasswordParams {
-        pool: &pool,
-        registry: &registry,
-        collection: "users",
-        email: None,
-        id: Some(doc.id.to_string()),
-        password: Some("newpw456".to_string()),
-        password_stdin: false,
-        password_policy: &PASSWORD_POLICY,
-        locale: &LOCALE,
-    })
+    user_change_password(
+        &user_lookup(&pool, &registry, "users", None, Some(doc.id.to_string())),
+        &infra,
+        UserChangePasswordParams::new(Some("newpw456".to_string()), false),
+    )
     .unwrap();
 
     let conn = pool.get().unwrap();
@@ -439,33 +512,39 @@ fn cmd_user_change_password_by_id() {
 
 #[test]
 fn cmd_user_change_password_nonexistent_errors() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let infra = cli_infra_for(&tmp, &pool, &registry);
 
-    let result = user_change_password(UserChangePasswordParams {
-        pool: &pool,
-        registry: &registry,
-        collection: "users",
-        email: Some("noone@example.com".to_string()),
-        id: None,
-        password: Some("newpw".to_string()),
-        password_stdin: false,
-        password_policy: &PASSWORD_POLICY,
-        locale: &LOCALE,
-    });
+    let result = user_change_password(
+        &user_lookup(
+            &pool,
+            &registry,
+            "users",
+            Some("noone@example.com".to_string()),
+            None,
+        ),
+        &infra,
+        UserChangePasswordParams::new(Some("newpw".to_string()), false),
+    );
     assert!(result.is_err());
 }
 
 #[test]
 fn cmd_user_lock_non_auth_errors() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let infra = cli_infra_for(&tmp, &pool, &registry);
 
-    let result = user_lock(&user_lookup(
-        &pool,
-        &registry,
-        "posts",
-        Some("anyone@example.com".to_string()),
-        None,
-    ));
+    let result = user_account_action(
+        &user_lookup(
+            &pool,
+            &registry,
+            "posts",
+            Some("anyone@example.com".to_string()),
+            None,
+        ),
+        &infra,
+        AccountAction::Lock,
+    );
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("not an auth collection"), "error: {err}");
@@ -473,15 +552,20 @@ fn cmd_user_lock_non_auth_errors() {
 
 #[test]
 fn cmd_user_unlock_non_auth_errors() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let infra = cli_infra_for(&tmp, &pool, &registry);
 
-    let result = user_unlock(&user_lookup(
-        &pool,
-        &registry,
-        "posts",
-        Some("anyone@example.com".to_string()),
-        None,
-    ));
+    let result = user_account_action(
+        &user_lookup(
+            &pool,
+            &registry,
+            "posts",
+            Some("anyone@example.com".to_string()),
+            None,
+        ),
+        &infra,
+        AccountAction::Unlock,
+    );
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("not an auth collection"), "error: {err}");
@@ -510,19 +594,20 @@ fn cmd_user_delete_non_auth_errors() {
 
 #[test]
 fn cmd_user_change_password_non_auth_errors() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let infra = cli_infra_for(&tmp, &pool, &registry);
 
-    let result = user_change_password(UserChangePasswordParams {
-        pool: &pool,
-        registry: &registry,
-        collection: "posts",
-        email: Some("anyone@example.com".to_string()),
-        id: None,
-        password: Some("newpw".to_string()),
-        password_stdin: false,
-        password_policy: &PASSWORD_POLICY,
-        locale: &LOCALE,
-    });
+    let result = user_change_password(
+        &user_lookup(
+            &pool,
+            &registry,
+            "posts",
+            Some("anyone@example.com".to_string()),
+            None,
+        ),
+        &infra,
+        UserChangePasswordParams::new(Some("newpw".to_string()), false),
+    );
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("not an auth collection"), "error: {err}");
@@ -530,18 +615,20 @@ fn cmd_user_change_password_non_auth_errors() {
 
 #[test]
 fn cmd_user_create_missing_collection_errors() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
 
     let result = commands::user_create(commands::UserCreateParams {
         pool: &pool,
         registry: &registry,
+        config: &cfg,
+        config_dir: &config_dir,
         collection: "nonexistent",
         email: Some("test@example.com".to_string()),
         password: Some("pw".to_string()),
         password_stdin: false,
         fields: vec![],
-        password_policy: &PASSWORD_POLICY,
-        locale: &LOCALE,
     });
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();

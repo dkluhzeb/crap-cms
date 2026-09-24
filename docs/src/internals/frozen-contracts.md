@@ -234,6 +234,17 @@ freeze is unconditional.
   startup.
 - **Index names are unique per database.** Startup rejects two indexes — of
   one collection or of two — that would get the same `idx_{slug}_…` name.
+- **Array / blocks row tables carry a `parent_id` index** named
+  `idx__rows_{table}` on `(parent_id)`, or `idx__lrows_{table}` on
+  `(parent_id, _locale)` for a localized one; the prefixes are disjoint from
+  every `idx_{slug}_…` and `idx__ver_…` name. A name that would pass 63 bytes
+  keeps its prefix and the first bytes of the table name, then `_` and the
+  first 16 hex digits of the table name's SHA-256 — 63 bytes exactly. The
+  sync drops any other `idx__rows_` / `idx__lrows_` index of the table, so
+  the name form can change without leaving a stale index.
+- **A join's `on` is a top-level, has-one, single-target relationship or
+  upload field of the target that references the owning collection** —
+  checked at load; a join in a global is rejected.
 
 ## Client-visible shapes
 
@@ -617,14 +628,34 @@ changing a representation is a breaking change to every consumer.
   clear-to-null request) that a hook does not replace is re-inserted as null when
   `ctx.data` is rebuilt — the clear is never silently downgraded to "no change",
   matching the field-hook `was_present` rule.
+- **Null reaches Lua as `nil` on every surface.** Every context, argument and
+  result table the runtime builds for Lua maps JSON null, unit and an absent
+  optional value to `nil` (one serializer, `lua_api::to_lua_value`), never to
+  a truthy sentinel value — `ctx.data.x == nil` holds for a null field in hook,
+  field-hook, access, validation, live-filter, route, job, strategy and MFA
+  contexts alike. The exception is a null **array element**, which is the
+  `crap.null` sentinel (mlua's null light-userdata) so arrays never have
+  holes; `lua_api::to_lua_value` and `json_to_lua` share this rule. mlua's own
+  serializer (`LuaSerdeExt::to_value` / `to_value_with`) is banned by
+  `clippy.toml` (`disallowed-methods`), so no context can bypass it.
+- **`crap.null` is JSON null on every Lua→Rust path** (`lua_to_json`, and
+  the serde deserializer behind `lua.from_value`), so it is the one way Lua
+  writes an explicit null (clear a field, keep a present-null key).
+- **An access constraint from a rule that read a NULL `ctx.user` field is
+  denied.** The access evaluator records reads of NULL-valued user fields
+  (an `__index` metamethod; `rawget` is untracked) and fails a returned
+  filter table closed; boolean verdicts are unaffected.
 - **Hook-return semantics.** Only `data` and `context` are read back; `data`
   **replaces** `ctx.data` wholesale. A normal hook returning `false` is ignored
   (only `error()` aborts); `before_broadcast`/live-filter returning `false`/`nil`
   suppresses, a table is a hook error and any other type suppresses with a
   warning (fail-closed, like every boolean gate). These asymmetric meanings
   are locked.
-- **`ctx.operation` value set**: `create` / `update` / `delete` / `find` /
-  `find_by_id` / `get` / `init` (hook context); access functions also see
+- **`ctx.operation` value set**: `create` / `update` / `undelete` / `delete` /
+  `find` / `find_by_id` / `get` / `init`, plus `unpublish` / `restore` on an
+  `after_read` or `before_broadcast` shaping a live event (hook context; the
+  one list is `hooks::lifecycle::operation`, which the typed contexts are
+  generated from); access functions also see
   `trash` / `undelete` / `unpublish` / `restore` / `count` / `search` / `read` /
   `subscribe` / `trigger`. Hook/field-hook context key names are frozen.
 
@@ -868,9 +899,11 @@ changing a representation is a breaking change to every consumer.
 - **A field the caller cannot read is never a query oracle.** `hidden`
   fields are never filterable, sortable, or searchable; a field with an
   `access.read` rule is filterable/sortable only when the rule allows the
-  caller without row data, and is out of the default search index (listing
-  it in `list_searchable_fields` is an explicit opt-in). Enforced at the
-  service find/count/search chokepoint.
+  caller without row data — judged for every field on the path (group,
+  array-row, block and nested-row sub-fields and their containers; a block
+  path in every block type holding the field) — and is out of the default
+  search index (listing it in `list_searchable_fields` is an explicit
+  opt-in). Enforced at the service find/count/search chokepoint.
 - **The full-text index is row-backed and write-path complete.** The
   per-document sync reads the indexed columns from the row itself (both
   backends index exactly `get_fts_columns`), so it cannot depend on the
@@ -992,6 +1025,12 @@ changing a representation is a breaking change to every consumer.
   A draft save judges the *published* row — a pending draft's values never
   grant field write rights before publish — and a version restore judges the
   live row, not the snapshot.
+- **`ctx.user` is the stored user document, whatever the auth method.** A
+  bearer token, a session cookie, a custom strategy and a claims reload all
+  read the user through one reader (the default-locale stored row: every
+  field present, NULL as `null`, hidden fields included); a strategy's
+  returned table only names the user by `id`, and an id naming no stored,
+  non-trashed user is refused.
 
 ## Auth tokens
 

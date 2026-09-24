@@ -149,9 +149,18 @@ surface (`find`, `count`, search, the admin list), a `where` filter or an
 
 - a field with `hidden = true` — always, for every caller;
 - a field with an `access.read` rule — when the rule denies for this caller
-  **without row data**. The rule is evaluated once, through the same read
-  strip that guards responses, against a probe carrying `null` values; a
-  rule that needs the row to decide therefore denies.
+  **without row data**. The rule is evaluated through the same read strip
+  that guards responses, against a probe carrying `null` values; a rule that
+  needs the row to decide therefore denies.
+
+The check covers every field on the path, not just the first segment: a
+group sub-field (`seo.secret` / `seo__secret`), an array row sub-field
+(`items.secret`), a block sub-field (`content.body`), and anything nested
+inside a row (`items.sizes.label`) are rejected when their own rule — or the
+rule of any group, array or blocks field on the way — denies. A block path
+does not name its block type, so it is rejected when the field's rule denies
+in **any** block type that holds a field of that name. A relationship's
+`.id` path is judged by the relationship field's own rule.
 
 Full-text search follows the same idea at index time: hidden fields and
 fields with an `access.read` rule are excluded from the default searchable

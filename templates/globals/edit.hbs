@@ -6,7 +6,9 @@
     </div>
   </crap-sticky-header>
   <crap-validate-form validate-url="/admin/globals/{{global.slug}}/validate">
-    <crap-dirty-form>
+    <crap-dirty-form
+      {{#if unsaved}}data-unsaved{{/if}}
+    >
       <crap-scroll-restore>
         <crap-conditions
           collection="{{global.slug}}"

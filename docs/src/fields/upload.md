@@ -35,7 +35,7 @@ crap.fields.upload({
 
 > **Note:** The flat `relation_to` syntax is deprecated for upload fields too. Use `relationship = { collection = "..." }` instead.
 
-The target collection should be an upload collection (defined with `upload = true`).
+The target collection must be a defined upload collection (`upload = true`); a target that is not defined, or not an upload collection, fails the load naming the field and the slug.
 
 ## API Representation
 

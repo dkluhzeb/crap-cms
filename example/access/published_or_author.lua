@@ -9,5 +9,5 @@
 ---
 --- So this hook only decides *who* may read published posts: everyone.
 return crap.any.access(function(context)
-	return true
+  return true
 end)

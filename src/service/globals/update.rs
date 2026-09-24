@@ -229,7 +229,7 @@ fn update_global_gated(
 
     // The global as stored, before anything is shaped or stripped for the
     // writer: the live event is built from it.
-    let row = ctx.event_row(&doc);
+    let row = ctx.write_event_row(&doc, input.locale_ctx, is_draft && def.has_versions())?;
 
     svc_helpers::strip_reported(ctx, write_hooks, &mut doc, input.locale_ctx)?;
 

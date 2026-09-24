@@ -272,6 +272,7 @@ pub(in crate::admin::handlers::collections) async fn render_form_with_error(
         sidebar_fields,
         editing,
         has_drafts: p.def.has_drafts(),
+        unsaved: true,
         upload_hidden_fields,
     };
 

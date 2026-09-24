@@ -1,0 +1,10 @@
+{{!-- Translations the admin JavaScript reads through `t(key)`. Every layout
+      that loads `/static/components/index.js` must render this island, or
+      the components fall back to showing raw translation keys. --}}
+<script
+  type="application/json"
+  id="crap-i18n"
+  nonce="{{crap.csp_nonce}}"
+>
+{{{admin_i18n}}}
+</script>

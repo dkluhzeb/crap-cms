@@ -6,6 +6,7 @@
 mod boolean;
 mod collection;
 mod field;
+mod null_guard;
 #[cfg(test)]
 mod test_helpers;
 

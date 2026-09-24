@@ -9,9 +9,10 @@ use crate::{
     commands::{MigrateAction, helpers, load_config},
     config::CrapConfig,
     core::Registry,
-    db::{DbPool, migrate as db_migrate, pool},
-    hooks::{self, HookRunner},
+    db::{DbConnection, DbPool, migrate as db_migrate, pool},
+    hooks::{self, LuaCrudInfra, MigrationCall},
     scaffold,
+    service::AppInfra,
 };
 
 /// Handle the `migrate` subcommand — dispatches to the appropriate action handler.
@@ -85,13 +86,9 @@ fn migrate_up(
         return Ok(());
     }
 
-    let hook_runner = HookRunner::builder()
-        .config_dir(config_dir)
-        .registry(Arc::clone(registry))
-        .config(cfg)
-        .build()?;
+    let infra = helpers::cli_infra(config_dir, registry, cfg, pool)?;
 
-    run_migrations(pool, &hook_runner, &migrations_dir, &pending, "up")?;
+    run_migrations(&infra, &migrations_dir, &pending, "up")?;
 
     cli::success(&format!("{} migration(s) applied.", pending.len()));
 
@@ -116,12 +113,7 @@ fn migrate_down(
         return Ok(());
     }
 
-    let hook_runner = HookRunner::builder()
-        .config_dir(config_dir)
-        .registry(Arc::clone(registry))
-        .config(cfg)
-        .build()?;
-
+    let infra = helpers::cli_infra(config_dir, registry, cfg, pool)?;
     let migrations_dir = config_dir.join("migrations");
 
     for filename in &to_rollback {
@@ -131,14 +123,10 @@ fn migrate_down(
             bail!("Migration file not found: {}", path.display());
         }
 
-        let mut conn = pool.get().context("Failed to get DB connection")?;
-        let tx = conn.transaction().context("Failed to begin transaction")?;
-
-        hook_runner.run_migration(&path, "down", &tx)?;
-        db_migrate::remove_migration(&tx, filename)?;
-
-        tx.commit()
-            .with_context(|| format!("Failed to commit rollback of {filename}"))?;
+        run_one(&infra, &MigrationCall::new(&path, "down"), |conn| {
+            db_migrate::remove_migration(conn, filename)
+        })
+        .with_context(|| format!("Failed to roll back {filename}"))?;
 
         cli::success(&format!("Rolled back: {filename}"));
     }
@@ -180,15 +168,9 @@ fn migrate_list(config_dir: &Path, pool: &DbPool) -> Result<()> {
     Ok(())
 }
 
-/// Drop all tables, recreate schema from Lua definitions, and run all
-/// migrations. The caller holds the instance lock.
+/// Drop every table and recreate the schema from the Lua definitions.
 #[cfg(not(tarpaulin_include))]
-fn migrate_fresh(
-    config_dir: &Path,
-    cfg: &CrapConfig,
-    registry: &Arc<Registry>,
-    pool: &DbPool,
-) -> Result<()> {
+fn recreate_schema(cfg: &CrapConfig, registry: &Arc<Registry>, pool: &DbPool) -> Result<()> {
     let spin = Spinner::new("Dropping all tables...");
     db_migrate::drop_all_tables(pool)?;
     spin.finish_success("Tables dropped");
@@ -197,17 +179,36 @@ fn migrate_fresh(
     db_migrate::sync_all(pool, registry, &cfg.locale).context("Failed to sync database schema")?;
     spin.finish_success("Schema sync complete");
 
+    Ok(())
+}
+
+/// Drop all tables, recreate schema from Lua definitions, and run all
+/// migrations. The caller holds the instance lock.
+///
+/// Everything that can fail without touching the database — listing the
+/// migration files and building the infrastructure they run on (a configured
+/// Redis is pinged here) — happens before the first table is dropped, so an
+/// unreachable Redis fails the command with the database still intact.
+#[cfg(not(tarpaulin_include))]
+fn migrate_fresh(
+    config_dir: &Path,
+    cfg: &CrapConfig,
+    registry: &Arc<Registry>,
+    pool: &DbPool,
+) -> Result<()> {
     let migrations_dir = config_dir.join("migrations");
     let all_files = db_migrate::list_migration_files(&migrations_dir)?;
 
-    if !all_files.is_empty() {
-        let hook_runner = HookRunner::builder()
-            .config_dir(config_dir)
-            .registry(Arc::clone(registry))
-            .config(cfg)
-            .build()?;
+    let infra = if all_files.is_empty() {
+        None
+    } else {
+        Some(helpers::cli_infra(config_dir, registry, cfg, pool)?)
+    };
 
-        run_migrations(pool, &hook_runner, &migrations_dir, &all_files, "up")?;
+    recreate_schema(cfg, registry, pool)?;
+
+    if let Some(infra) = infra {
+        run_migrations(&infra, &migrations_dir, &all_files, "up")?;
 
         cli::success(&format!("{} migration(s) applied.", all_files.len()));
     }
@@ -217,28 +218,94 @@ fn migrate_fresh(
     Ok(())
 }
 
+/// Run one migration on the CLI's infrastructure — the configured cache,
+/// live transports and storage — so its writes behave like the server's:
+/// `record` runs in the migration's transaction, and the cache clear, live
+/// events and upload-file removal all follow the commit.
+#[cfg(not(tarpaulin_include))]
+fn run_one(
+    infra: &AppInfra,
+    call: &MigrationCall<'_>,
+    record: impl FnOnce(&dyn DbConnection) -> Result<()>,
+) -> Result<()> {
+    infra.hook_runner.run_migration(
+        call,
+        &infra.pool,
+        Some(LuaCrudInfra::for_pool_crud(infra)),
+        record,
+    )
+}
+
 /// Run a list of migration files in order, recording each in the migrations table.
 #[cfg(not(tarpaulin_include))]
 fn run_migrations(
-    pool: &DbPool,
-    hook_runner: &HookRunner,
+    infra: &AppInfra,
     migrations_dir: &Path,
     filenames: &[String],
     direction: &str,
 ) -> Result<()> {
     for filename in filenames {
         let path = migrations_dir.join(filename);
-        let mut conn = pool.get().context("Failed to get DB connection")?;
-        let tx = conn.transaction().context("Failed to begin transaction")?;
 
-        hook_runner.run_migration(&path, direction, &tx)?;
-        db_migrate::record_migration(&tx, filename)?;
-
-        tx.commit()
-            .with_context(|| format!("Failed to commit migration {filename}"))?;
+        run_one(infra, &MigrationCall::new(&path, direction), |conn| {
+            db_migrate::record_migration(conn, filename)
+        })
+        .with_context(|| format!("Failed to apply {filename}"))?;
 
         cli::success(&format!("Applied: {filename}"));
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::config::LiveTransport;
+
+    /// Regression: `migrate fresh` built the migrations' infrastructure only
+    /// after dropping every table, so an unreachable Redis failed the command
+    /// with the database already emptied. The infrastructure is now built
+    /// first, and a failure leaves every table in place.
+    #[test]
+    fn fresh_with_unreachable_redis_fails_before_dropping_anything() {
+        let dir = TempDir::new().unwrap();
+        let migrations_dir = dir.path().join("migrations");
+        fs::create_dir_all(&migrations_dir).unwrap();
+        fs::write(
+            migrations_dir.join("20260101000000_seed.lua"),
+            "local M = {}\nfunction M.up() end\nfunction M.down() end\nreturn M\n",
+        )
+        .unwrap();
+
+        let mut cfg = CrapConfig::test_default();
+        cfg.database.path = "test.db".into();
+        cfg.live.enabled = true;
+        cfg.live.transport = LiveTransport::Redis;
+        cfg.cache.redis_url = "redis://127.0.0.1:1/".into();
+
+        let db_pool = pool::create_pool(dir.path(), &cfg).unwrap();
+        db_pool
+            .get()
+            .unwrap()
+            .execute_batch("CREATE TABLE keep_me (id TEXT)")
+            .unwrap();
+
+        let registry = Arc::new(Registry::default());
+
+        let result = migrate_fresh(dir.path(), &cfg, &registry, &db_pool);
+
+        assert!(
+            result.is_err(),
+            "an unreachable Redis must fail the command"
+        );
+        assert!(
+            db_pool.get().unwrap().table_exists("keep_me").unwrap(),
+            "no table may be dropped before the infrastructure is built"
+        );
+    }
 }

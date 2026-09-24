@@ -146,14 +146,16 @@ async fn dirty_form_armed_after_input() {
     server_handle.abort();
 }
 
-// ── only_the_forms_own_sent_request_clears_the_dirty_flag ───────────────
+// ── only_the_forms_own_accepted_save_clears_the_dirty_flag ─────────────
 
-/// The dirty flag clears only when the form's OWN request is actually sent:
-/// a request cancelled at `htmx:beforeRequest` (pre-submit validation that
-/// failed) and a non-GET request from an unrelated element (an inline-create
-/// panel) must leave the page dirty, or the leave prompt would be lost.
+/// The dirty flag clears only when the server has ACCEPTED the form's own
+/// save: a request cancelled at `htmx:beforeRequest` (pre-submit validation
+/// that failed), a non-GET response for an unrelated element (an
+/// inline-create panel), and the form's own save answered with an error
+/// status (422 validation, 403) must all leave the page dirty, or the leave
+/// prompt would be lost with the edits still unsaved.
 #[tokio::test(flavor = "multi_thread")]
-async fn only_the_forms_own_sent_request_clears_the_dirty_flag() {
+async fn only_the_forms_own_accepted_save_clears_the_dirty_flag() {
     let BrowserTestCtx {
         base_url,
         server_handle,
@@ -212,25 +214,31 @@ async fn only_the_forms_own_sent_request_clears_the_dirty_flag() {
                 cancelled.preventDefault();
                 document.body.dispatchEvent(cancelled);
                 const afterCancelled = df._dirty;
-                // 2. A request actually sent by an UNRELATED element.
-                document.body.dispatchEvent(new CustomEvent('htmx:beforeSend', {
-                  bubbles: true, detail: { elt: document.body, ...cfg },
-                }));
+                // 2. A response to a request from an UNRELATED element.
+                const onLoad = (elt, status) => document.body.dispatchEvent(
+                  new CustomEvent('htmx:beforeOnLoad', {
+                    bubbles: true, detail: { elt, xhr: { status }, ...cfg },
+                  }),
+                );
+                const form = df.querySelector('#edit-form');
+                onLoad(document.body, 200);
                 const afterUnrelated = df._dirty;
-                // 3. The form's own request actually sent.
-                document.body.dispatchEvent(new CustomEvent('htmx:beforeSend', {
-                  bubbles: true, detail: { elt: df.querySelector('#edit-form'), ...cfg },
-                }));
-                const afterOwnSend = df._dirty;
-                return [afterCancelled, afterUnrelated, afterOwnSend].join(',');
+                // 3. The form's own save, refused (validation / access).
+                onLoad(form, 422);
+                onLoad(form, 403);
+                const afterRefused = df._dirty;
+                // 4. The form's own save, accepted.
+                onLoad(form, 200);
+                const afterAccepted = df._dirty;
+                return [afterCancelled, afterUnrelated, afterRefused, afterAccepted].join(',');
             }",
         )
         .await
         .unwrap();
     let outcome: String = outcome.into_value().unwrap();
     assert_eq!(
-        outcome, "true,true,false",
-        "cancelled and unrelated requests keep the flag; only the own send clears it"
+        outcome, "true,true,true,false",
+        "only the form's own accepted save clears the flag"
     );
 
     server_handle.abort();

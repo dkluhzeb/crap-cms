@@ -572,13 +572,31 @@ For a `posts` collection with `title`, `slug`, `status` (select), `content` (ric
 
 ---@class crap.hook.Posts
 ---@field collection "posts"
----@field operation "create" | "update" | "delete" | "find" | "find_by_id"
+---@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id"
 ---@field data crap.data.Posts
+---@field id? string
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
+---@field options? table
+---@field edited_by? { id: string, email: string }
 
 ---@class crap.read_hook.Posts
 ---@field collection "posts"
----@field operation "find" | "find_by_id" | "create" | "update" | "delete"
+---@field operation "find" | "find_by_id" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
 ---@field data crap.doc.Posts
+---@field id? string
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
+---@field options? table
+---@field edited_by? { id: string, email: string }
 ```
 
 ## Why a schemaless DataMap?

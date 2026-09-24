@@ -1,16 +1,56 @@
 //! Form parsing: multipart and regular form extraction.
 
-use anyhow::anyhow;
-use axum::extract::{Form, FromRequest, Multipart, Request, multipart::Field};
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    error::Error,
+    fmt::{self, Display, Formatter},
+};
 
-use crate::{admin::AdminState, core::upload::UploadedFile};
+use axum::{
+    extract::{Form, FromRequest, Multipart, Request, multipart::Field},
+    http::StatusCode,
+};
+use serde_json::json;
+
+use crate::{
+    admin::AdminState,
+    core::{CollectionDefinition, upload::UploadedFile},
+};
 
 /// Parsed form result: field data and optional uploaded file.
 pub(crate) type ParsedForm = (HashMap<String, String>, Option<UploadedFile>);
 
+/// Why a submitted form could not be read, with the HTTP status the
+/// extractor assigned — `413 Payload Too Large` when the body exceeded the
+/// request size limit (an upload over the configured maximum), `400` / `415`
+/// for a malformed or mistyped body.
+#[derive(Debug)]
+pub(crate) struct FormParseError {
+    status: StatusCode,
+    detail: String,
+}
+
+impl FormParseError {
+    pub(crate) fn new(status: StatusCode, detail: String) -> Self {
+        Self { status, detail }
+    }
+
+    /// Whether the body exceeded the request size limit.
+    pub(crate) fn is_too_large(&self) -> bool {
+        self.status == StatusCode::PAYLOAD_TOO_LARGE
+    }
+}
+
+impl Display for FormParseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{} ({})", self.detail, self.status)
+    }
+}
+
+impl Error for FormParseError {}
+
 /// Extract an uploaded file from a multipart field.
-async fn extract_upload_field(field: Field<'_>) -> Result<Option<UploadedFile>, anyhow::Error> {
+async fn extract_upload_field(field: Field<'_>) -> Result<Option<UploadedFile>, FormParseError> {
     let filename = field.file_name().unwrap_or("").to_string();
     let content_type = field
         .content_type()
@@ -20,7 +60,7 @@ async fn extract_upload_field(field: Field<'_>) -> Result<Option<UploadedFile>, 
     let data = field
         .bytes()
         .await
-        .map_err(|e| anyhow!("Failed to read file data: {e}"))?;
+        .map_err(|e| FormParseError::new(e.status(), format!("Failed to read file data: {e}")))?;
 
     if data.is_empty() {
         return Ok(None);
@@ -33,65 +73,73 @@ async fn extract_upload_field(field: Field<'_>) -> Result<Option<UploadedFile>, 
     }))
 }
 
-/// Collapse a list of `(key, value)` pairs into a `HashMap<String, String>`,
-/// comma-joining every value for keys that appear more than once.
+/// Collapse a list of `(key, value)` pairs into a `HashMap<String, String>`.
 ///
-/// `<select multiple>` and any other widget that submits the same name more
-/// than once would otherwise be silently truncated to the last value by
-/// `HashMap`. Joining with commas matches the input shape that
-/// `transform_select_has_many` already expects for `has_many` fields.
+/// A key submitted once keeps its value as-is. A key submitted more than once
+/// (`<select multiple>`, or any widget that repeats a name) becomes the JSON
+/// array of its non-empty values — the canonical wire form of a list, which
+/// every has-many reader parses — so a value containing a comma survives
+/// intact. When only one of the repeated values is non-empty it stands alone,
+/// and when none is, the key holds the empty string.
 fn collapse_duplicates(pairs: Vec<(String, String)>) -> HashMap<String, String> {
-    let mut form_data: HashMap<String, String> = HashMap::new();
+    let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
 
     for (name, value) in pairs {
-        match form_data.entry(name) {
-            std::collections::hash_map::Entry::Occupied(mut e) => {
-                let existing = e.get_mut();
-
-                if !existing.is_empty() && !value.is_empty() {
-                    existing.push(',');
-                }
-
-                existing.push_str(&value);
-            }
-            std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert(value);
-            }
-        }
+        grouped.entry(name).or_default().push(value);
     }
 
-    form_data
+    grouped
+        .into_iter()
+        .map(|(name, values)| (name, collapse_values(values)))
+        .collect()
+}
+
+/// One key's submitted values as a single form string (see
+/// [`collapse_duplicates`]).
+fn collapse_values(mut values: Vec<String>) -> String {
+    if values.len() == 1 {
+        return values.pop().unwrap_or_default();
+    }
+
+    let mut present: Vec<String> = values.into_iter().filter(|v| !v.is_empty()).collect();
+
+    match present.len() {
+        0 => String::new(),
+        1 => present.pop().unwrap_or_default(),
+        _ => json!(present).to_string(),
+    }
 }
 
 /// Parse a multipart form request, extracting form fields and an optional file upload.
 pub(crate) async fn parse_multipart_form(
     request: Request,
     state: &AdminState,
-) -> Result<(HashMap<String, String>, Option<UploadedFile>), anyhow::Error> {
+) -> Result<ParsedForm, FormParseError> {
     let mut multipart = Multipart::from_request(request, state)
         .await
-        .map_err(|e| anyhow!("Failed to parse multipart: {e}"))?;
+        .map_err(|e| FormParseError::new(e.status(), format!("Failed to parse multipart: {e}")))?;
 
     let mut pairs: Vec<(String, String)> = Vec::new();
     let mut file: Option<UploadedFile> = None;
 
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| anyhow!("Failed to read multipart field: {e}"))?
-    {
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        FormParseError::new(e.status(), format!("Failed to read multipart field: {e}"))
+    })? {
         let name = field.name().unwrap_or("").to_string();
 
         if name == "_file" && field.file_name().is_some() {
             file = extract_upload_field(field).await?;
-        } else {
-            let text = field
-                .text()
-                .await
-                .map_err(|e| anyhow!("Failed to read form field '{name}': {e}"))?;
-
-            pairs.push((name, text));
+            continue;
         }
+
+        let text = field.text().await.map_err(|e| {
+            FormParseError::new(
+                e.status(),
+                format!("Failed to read form field '{name}': {e}"),
+            )
+        })?;
+
+        pairs.push((name, text));
     }
 
     Ok((collapse_duplicates(pairs), file))
@@ -101,27 +149,33 @@ pub(crate) async fn parse_multipart_form(
 pub(crate) async fn parse_form(
     request: Request,
     state: &AdminState,
-    def: &crate::core::CollectionDefinition,
-) -> Result<ParsedForm, String> {
+    def: &CollectionDefinition,
+) -> Result<ParsedForm, FormParseError> {
     if def.is_upload_collection() {
-        parse_multipart_form(request, state)
-            .await
-            .map_err(|e| format!("Multipart parse error: {e}"))
-    } else {
-        // `Vec<(String, String)>` preserves every `name=value` pair, including
-        // duplicates that `HashMap<String, String>` would silently drop — the
-        // `<select multiple>` / has_many failure mode prior to this change.
-        let form = Form::<Vec<(String, String)>>::from_request(request, state)
-            .await
-            .map_err(|e| format!("Form parse error: {e}"))?;
-
-        Ok((collapse_duplicates(form.0), None))
+        return parse_multipart_form(request, state).await;
     }
+
+    // `Vec<(String, String)>` preserves every `name=value` pair, including
+    // the repeated ones `<select multiple>` submits.
+    let form = Form::<Vec<(String, String)>>::from_request(request, state)
+        .await
+        .map_err(|e| FormParseError::new(e.status(), format!("Form parse error: {e}")))?;
+
+    Ok((collapse_duplicates(form.0), None))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn form_parse_error_reports_an_oversized_body() {
+        let too_large = FormParseError::new(StatusCode::PAYLOAD_TOO_LARGE, "limit".into());
+        assert!(too_large.is_too_large());
+
+        let malformed = FormParseError::new(StatusCode::BAD_REQUEST, "bad".into());
+        assert!(!malformed.is_too_large());
+    }
 
     #[test]
     fn collapse_duplicates_preserves_single_values() {
@@ -135,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn collapse_duplicates_joins_multiple_values() {
+    fn collapse_duplicates_turns_repeated_keys_into_a_json_array() {
         let pairs = vec![
             ("skills".into(), "design".into()),
             ("skills".into(), "motion".into()),
@@ -145,23 +199,41 @@ mod tests {
         let form = collapse_duplicates(pairs);
         assert_eq!(
             form.get("skills").unwrap(),
-            "design,motion,3d",
-            "duplicate keys from `<select multiple>` must be joined, not truncated to the last"
+            r#"["design","motion","3d"]"#,
+            "duplicate keys from `<select multiple>` must all be kept, not truncated to the last"
         );
         assert_eq!(form.get("name").unwrap(), "Taylor");
     }
 
+    /// Regression: repeated values were comma-joined and later comma-split,
+    /// so an option value containing a comma came back as two values.
     #[test]
-    fn collapse_duplicates_skips_empty_values_in_join() {
-        // Browsers never send empty values for `<select multiple>`, but empty
-        // placeholder options on single selects may submit one. Don't leave a
-        // leading comma that would later be parsed as an empty value.
+    fn collapse_duplicates_keeps_commas_inside_values() {
+        let pairs = vec![
+            ("sizes".into(), "10,5 cm".into()),
+            ("sizes".into(), "12 cm".into()),
+        ];
+        let form = collapse_duplicates(pairs);
+        assert_eq!(form.get("sizes").unwrap(), r#"["10,5 cm","12 cm"]"#);
+    }
+
+    #[test]
+    fn collapse_duplicates_skips_empty_values() {
+        // An empty placeholder submitted beside one real value leaves that
+        // value alone rather than a one-element list.
         let pairs = vec![
             ("tags".into(), String::new()),
             ("tags".into(), "red".into()),
         ];
         let form = collapse_duplicates(pairs);
         assert_eq!(form.get("tags").unwrap(), "red");
+
+        let pairs = vec![
+            ("tags".into(), String::new()),
+            ("tags".into(), String::new()),
+        ];
+        let form = collapse_duplicates(pairs);
+        assert_eq!(form.get("tags").unwrap(), "");
     }
 
     #[test]

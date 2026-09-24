@@ -4,10 +4,11 @@ use anyhow::Result;
 use std::path::Path;
 
 use crate::{
-    commands::{Project, UserAction, open_project},
+    commands::{Project, UserAction, cli_infra, open_project},
     config::CrapConfig,
     core::Registry,
     db::DbPool,
+    service::{AppInfra, auth::AccountAction},
 };
 
 use super::{
@@ -16,8 +17,8 @@ use super::{
     info::user_info,
     list::user_list,
     modify::{
-        UserChangePasswordParams, UserDeleteParams, user_change_password, user_delete, user_lock,
-        user_reset_totp, user_unlock, user_unverify, user_verify,
+        UserChangePasswordParams, UserDeleteParams, user_account_action, user_change_password,
+        user_delete, user_reset_totp,
     },
 };
 
@@ -47,13 +48,13 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
         } => user_create(UserCreateParams {
             pool: &pool,
             registry: &registry,
+            config: &cfg,
+            config_dir,
             collection: &collection,
             email,
             password,
             password_stdin,
             fields,
-            password_policy: &cfg.auth.password_policy,
-            locale: &cfg.locale,
         }),
         UserAction::List { collection } => user_list(&pool, &registry, &collection, &cfg.locale),
         UserAction::Delete {
@@ -77,33 +78,56 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
             id,
             password,
             password_stdin,
-        } => user_change_password(UserChangePasswordParams {
-            pool: &pool,
-            registry: &registry,
-            collection: &collection,
-            email,
-            id,
-            password,
-            password_stdin,
-            password_policy: &cfg.auth.password_policy,
-            locale: &cfg.locale,
-        }),
-        ref other => run_lookup_action(&pool, &registry, &cfg, other),
+        } => {
+            // Built — and a configured Redis reached — before the password
+            // prompt, so a change that couldn't reach `serve`'s live streams
+            // fails first.
+            let infra = cli_infra(config_dir, &registry, &cfg, &pool)?;
+
+            let lookup = UserLookup {
+                pool: &pool,
+                registry: &registry,
+                collection: &collection,
+                email,
+                id,
+                locale: &cfg.locale,
+            };
+
+            user_change_password(
+                &lookup,
+                &infra,
+                UserChangePasswordParams::new(password, password_stdin),
+            )
+        }
+        ref other => {
+            let Some(account) = account_action(other) else {
+                return run_lookup_action(&pool, &registry, &cfg, other);
+            };
+
+            // The account-state writes run on the CLI's infrastructure, so a
+            // lock or an unverify reaches `serve`'s live streams.
+            let infra = cli_infra(config_dir, &registry, &cfg, &pool)?;
+
+            run_account_action(&infra, &cfg, other, account)
+        }
     }
 }
 
-/// The subcommands that only need to find one user and act on it. Split from
-/// [`run`] so each half stays readable — they all build the same
-/// [`UserLookup`].
-#[cfg(not(tarpaulin_include))]
-fn run_lookup_action(
-    pool: &DbPool,
-    registry: &Registry,
-    cfg: &CrapConfig,
-    action: &UserAction,
-) -> Result<()> {
-    // Pull the shared lookup arguments out once, then dispatch on the action.
-    let (collection, email, id, confirm) = match action {
+/// The account-state action a subcommand performs, if it is one.
+fn account_action(action: &UserAction) -> Option<AccountAction> {
+    match action {
+        UserAction::Lock { .. } => Some(AccountAction::Lock),
+        UserAction::Unlock { .. } => Some(AccountAction::Unlock),
+        UserAction::Verify { .. } => Some(AccountAction::Verify),
+        UserAction::Unverify { .. } => Some(AccountAction::Unverify),
+        _ => None,
+    }
+}
+
+/// The lookup arguments every single-user subcommand carries — collection,
+/// email, id — plus the `--confirm` flag where there is one.
+fn lookup_args(action: &UserAction) -> (String, Option<String>, Option<String>, bool) {
+    match action {
         UserAction::Info {
             collection,
             email,
@@ -140,7 +164,41 @@ fn run_lookup_action(
         | UserAction::List { .. }
         | UserAction::Delete { .. }
         | UserAction::ChangePassword { .. } => unreachable!("handled in run()"),
+    }
+}
+
+/// Lock, unlock, verify or unverify one user on the CLI's infrastructure.
+#[cfg(not(tarpaulin_include))]
+fn run_account_action(
+    infra: &AppInfra,
+    cfg: &CrapConfig,
+    action: &UserAction,
+    account: AccountAction,
+) -> Result<()> {
+    let (collection, email, id, _) = lookup_args(action);
+
+    let lookup = UserLookup {
+        pool: &infra.pool,
+        registry: &infra.registry,
+        collection: &collection,
+        email,
+        id,
+        locale: &cfg.locale,
     };
+
+    user_account_action(&lookup, infra, account)
+}
+
+/// The read-or-reset subcommands that only need to find one user and act on
+/// it — `info` and `reset-totp`.
+#[cfg(not(tarpaulin_include))]
+fn run_lookup_action(
+    pool: &DbPool,
+    registry: &Registry,
+    cfg: &CrapConfig,
+    action: &UserAction,
+) -> Result<()> {
+    let (collection, email, id, confirm) = lookup_args(action);
 
     let lookup = UserLookup {
         pool,
@@ -153,10 +211,6 @@ fn run_lookup_action(
 
     match action {
         UserAction::Info { .. } => user_info(&lookup),
-        UserAction::Lock { .. } => user_lock(&lookup),
-        UserAction::Unlock { .. } => user_unlock(&lookup),
-        UserAction::Verify { .. } => user_verify(&lookup),
-        UserAction::Unverify { .. } => user_unverify(&lookup),
         UserAction::ResetTotp { .. } => user_reset_totp(&lookup, confirm),
         _ => unreachable!("handled in run()"),
     }

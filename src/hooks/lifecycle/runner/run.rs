@@ -1,14 +1,16 @@
 //! `HookRunner` core run methods: collection hooks, field hooks, system hooks.
 
 use anyhow::Result;
+use tracing::debug;
 
 use crate::{
     core::{Builder, Document, DocumentFields, FieldDefinition, HookRef, collection::Hooks},
-    db::DbConnection,
+    db::{DbConnection, DbPool},
     hooks::{
         HookContext, HookEvent, HookRunner,
         lifecycle::{
             LuaCrudInfra,
+            context::operation::INIT_OPERATION,
             execution::{
                 call_hook_ref, call_registered_hooks, get_hook_refs, has_field_hooks_for_event,
                 run_field_hooks_inner,
@@ -72,7 +74,7 @@ impl HookRunner {
         let lua = self.pool.acquire()?;
 
         for hook_ref in hook_refs {
-            tracing::debug!(
+            debug!(
                 "Running hook: {} for {}",
                 hook_ref.reference(),
                 context.collection
@@ -125,7 +127,7 @@ impl HookRunner {
         );
 
         for hook_ref in hook_refs {
-            tracing::debug!(
+            debug!(
                 "Running hook (tx): {} for {}",
                 hook_ref.reference(),
                 context.collection
@@ -139,34 +141,40 @@ impl HookRunner {
         Ok(context)
     }
 
-    /// Run arbitrary hook refs with an active database connection injected.
-    /// Used for system-level hooks like `on_init` that aren't tied to a collection.
+    /// Run system-level hook refs (`on_init`) in their own write transaction,
+    /// with CRUD access. Not tied to a collection.
+    ///
+    /// The hooks' Lua CRUD runs in the full transaction scope (see
+    /// `run_in_system_tx`): upload files of documents they hard-delete are
+    /// removed, the populate cache is cleared, and live events are published
+    /// through `infra` only after the commit. A failing hook rolls every
+    /// hook's writes back.
     ///
     /// # Errors
     ///
-    /// Returns an error if a Lua VM cannot be acquired or any hook itself fails.
-    pub fn run_system_hooks_with_conn(
+    /// Returns an error if a Lua VM cannot be acquired, any hook itself
+    /// fails, or the transaction can't be opened or committed.
+    pub fn run_system_hooks_in_tx(
         &self,
         refs: &[String],
-        conn: &dyn DbConnection,
+        pool: &DbPool,
+        infra: Option<LuaCrudInfra>,
     ) -> Result<()> {
         if refs.is_empty() {
             return Ok(());
         }
 
-        let lua = self.pool.acquire()?;
+        self.run_in_system_tx(pool, infra, "system hooks", |lua, _conn| {
+            for hook_ref in refs {
+                debug!("Running system hook: {}", hook_ref);
 
-        // Guard cleans up TxContext, UserContext, UiLocaleContext, and LuaCrudInfra on drop.
-        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
+                let ctx = HookContext::builder("", INIT_OPERATION).build();
+                // System/init hooks are plain module refs with no per-config options.
+                call_hook_ref(lua, &HookRef::new(hook_ref.as_str()), ctx)?;
+            }
 
-        for hook_ref in refs {
-            tracing::debug!("Running system hook: {}", hook_ref);
-            let ctx = HookContext::builder("", "init").build();
-            // System/init hooks are plain module refs with no per-config options.
-            call_hook_ref(&lua, &HookRef::new(hook_ref.as_str()), ctx)?;
-        }
-
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Run field-level hooks for a given event, mutating field values in-place.

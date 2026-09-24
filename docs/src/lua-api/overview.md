@@ -74,6 +74,46 @@ See [`crap.collections`](collections.md) and [`crap.globals`](globals.md)
 for the full per-slug factory surface; [`crap.any`](typing-factories.md)
 for the cross-collection helpers.
 
+## Null values
+
+Every value the runtime hands to Lua — hook, field-hook, access,
+validation, live-filter, route, job, strategy and MFA contexts, and the
+results of `crap.*` calls — represents a JSON `null` (and an absent
+optional value) **in an object field** as `nil`. A null field is simply
+missing from its table: `ctx.data.x == nil` and `if ctx.data.x then` treat
+it as unset.
+
+A null **array element** is the sentinel `crap.null` instead, so the array
+keeps its length: `[1, null, 3]` arrives as `{ 1, crap.null, 3 }`, and
+`#t` / `ipairs` see all three elements (a `nil` there would leave a hole
+that truncates the array). `crap.json.decode` follows the same rule.
+`crap.null` is **truthy** — test for it with `v == crap.null`.
+
+### Writing an explicit null
+
+Because assigning `nil` erases a key, a Lua table cannot say "set to
+null" with `nil`. Use `crap.null` wherever data handed back to the CMS
+must carry a null:
+
+```lua
+-- Clear a field from a hook, a job, or a Lua CRUD write:
+crap.collections.update("posts", id, { subtitle = crap.null })
+
+-- Keep a present-null key in a route response or job result:
+return { json = { next_cursor = crap.null } }
+```
+
+Every Lua→JSON conversion — hook return data, CRUD write data, route
+responses, job results, validation data, `crap.json.encode` — maps
+`crap.null` to JSON `null`; a `nil`-valued key is simply absent.
+
+A field the request itself set to null that a `before_change` hook does
+not replace is also kept as null when `ctx.data` is read back, so a hook
+never has to re-add a null it was never handed.
+
+Access rules get an extra safety net for NULL user fields — see
+[Filter Constraints](../access-control/filter-constraints.md#null-user-fields-fail-closed).
+
 ## Two ways to address a collection
 
 Every defined collection is reachable in two forms:

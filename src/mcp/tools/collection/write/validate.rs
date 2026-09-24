@@ -15,7 +15,7 @@ use crate::{
     db::LocaleContext,
     mcp::tools::{
         ToolExecCtx,
-        collection::helpers::{extract_data_from_args, reserved_data_keys},
+        collection::helpers::{extract_collection_data, reserved_data_keys},
     },
     service::op::{self, Principal, TargetRef, Validate, ValidateArgs},
 };
@@ -45,7 +45,7 @@ pub(in crate::mcp::tools) fn exec_validate(
         .and_then(|v| v.as_str())
         .map(std::string::ToString::to_string);
 
-    let data = extract_data_from_args(args, &reserved_data_keys(def, true), &def.fields)?;
+    let data = extract_collection_data(args, &reserved_data_keys(def, true), def)?;
 
     let op_args = ValidateArgs::builder(data)
         .locale_ctx(locale_ctx)

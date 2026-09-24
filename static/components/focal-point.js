@@ -2,10 +2,12 @@
  * Focal point picker — `<crap-focal-point>`.
  *
  * Composes a slotted `<img>` (the preview) with a crosshair marker
- * rendered above it inside the shadow root. Clicking the image moves
- * the marker and writes the normalised `[0, 1]` coordinates into the
- * slotted hidden inputs `focal_x` / `focal_y` so they submit with the
- * surrounding form.
+ * rendered above it inside the shadow root. Clicking the image — or,
+ * with the picker focused, pressing the arrow keys (Shift for a finer
+ * step) — moves the marker and writes the normalised `[0, 1]`
+ * coordinates into the slotted hidden inputs `focal_x` / `focal_y` so
+ * they submit with the surrounding form. Every move dispatches
+ * `crap:change`, so the unsaved-changes guard sees it.
  *
  * The img and inputs stay in light DOM (the form needs to see the
  * inputs; the img is the same node both with and without JS, so no
@@ -29,6 +31,7 @@
 import { css } from './_internal/css.js';
 import { h } from './_internal/h.js';
 import { t } from './_internal/i18n.js';
+import { EV_CHANGE } from './events.js';
 
 const sheet = css`
   :host {
@@ -41,6 +44,11 @@ const sheet = css`
     position: relative;
     display: inline-block;
     cursor: crosshair;
+  }
+
+  .focal-point:focus-visible {
+    outline: 2px solid var(--color-primary, #6366f1);
+    outline-offset: 2px;
   }
 
   ::slotted(img) {
@@ -73,6 +81,20 @@ const sheet = css`
 /** Default focal coordinate (centre). */
 const DEFAULT_FOCAL = 0.5;
 
+/** Arrow-key step, as a fraction of the image. */
+const KEY_STEP = 0.05;
+
+/** Arrow-key step with Shift held. */
+const FINE_KEY_STEP = 0.01;
+
+/** Arrow key → `[dx, dy]` direction. */
+const KEY_DIRECTIONS = /** @type {Record<string, [number, number]>} */ ({
+  ArrowLeft: [-1, 0],
+  ArrowRight: [1, 0],
+  ArrowUp: [0, -1],
+  ArrowDown: [0, 1],
+});
+
 /**
  * Clamp `n` to the closed `[0, 1]` interval.
  * @param {number} n
@@ -90,12 +112,26 @@ class CrapFocalPoint extends HTMLElement {
     const root = this.attachShadow({ mode: 'open' });
     root.adoptedStyleSheets = [sheet];
 
+    /** @type {number} */
+    this._x = DEFAULT_FOCAL;
+    /** @type {number} */
+    this._y = DEFAULT_FOCAL;
+
     /** @type {HTMLDivElement} */
     this._marker = h('div', { class: 'marker' });
-    root.append(
-      h('div', { class: 'focal-point' }, h('slot'), this._marker),
-      h('p', { class: 'hint', text: t('focal_point_hint') }),
+    /** @type {HTMLDivElement} */
+    this._picker = h(
+      'div',
+      {
+        class: 'focal-point',
+        tabindex: '0',
+        role: 'group',
+        'aria-label': t('focal_point_hint'),
+      },
+      h('slot'),
+      this._marker,
     );
+    root.append(this._picker, h('p', { class: 'hint', text: t('focal_point_hint') }));
   }
 
   connectedCallback() {
@@ -104,29 +140,63 @@ class CrapFocalPoint extends HTMLElement {
 
     const img = /** @type {HTMLImageElement|null} */ (this.querySelector('img'));
     if (!img) return;
+
+    this._render(this._initialFocal('focalX'), this._initialFocal('focalY'));
+
+    img.addEventListener('click', (e) => {
+      const rect = img.getBoundingClientRect();
+      this._move((e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height);
+    });
+    this._picker.addEventListener('keydown', (e) => this._onKeydown(e));
+  }
+
+  /**
+   * Arrow keys nudge the focal point; Shift makes the step finer.
+   *
+   * @param {KeyboardEvent} e
+   */
+  _onKeydown(e) {
+    const direction = KEY_DIRECTIONS[e.key];
+    if (!direction) return;
+
+    e.preventDefault();
+    const step = e.shiftKey ? FINE_KEY_STEP : KEY_STEP;
+    this._move(this._x + direction[0] * step, this._y + direction[1] * step);
+  }
+
+  /**
+   * Move the focal point to `(x, y)` (clamped) as a user edit: render it and
+   * announce the change to the surrounding form.
+   *
+   * @param {number} x
+   * @param {number} y
+   */
+  _move(x, y) {
+    this._render(clamp01(x), clamp01(y));
+    this.dispatchEvent(new Event(EV_CHANGE, { bubbles: true }));
+  }
+
+  /**
+   * Place the marker at `(x, y)` and write the coordinates into the hidden
+   * inputs.
+   *
+   * @param {number} x
+   * @param {number} y
+   */
+  _render(x, y) {
+    this._x = x;
+    this._y = y;
+    this._marker.style.left = `${x * 100}%`;
+    this._marker.style.top = `${y * 100}%`;
+
     const inputX = /** @type {HTMLInputElement|null} */ (
       this.querySelector('input[name="focal_x"]')
     );
     const inputY = /** @type {HTMLInputElement|null} */ (
       this.querySelector('input[name="focal_y"]')
     );
-
-    const setMarker = (/** @type {number} */ x, /** @type {number} */ y) => {
-      this._marker.style.left = `${x * 100}%`;
-      this._marker.style.top = `${y * 100}%`;
-      if (inputX) inputX.value = x.toFixed(4);
-      if (inputY) inputY.value = y.toFixed(4);
-    };
-
-    setMarker(this._initialFocal('focalX'), this._initialFocal('focalY'));
-
-    img.addEventListener('click', (e) => {
-      const rect = img.getBoundingClientRect();
-      setMarker(
-        clamp01((e.clientX - rect.left) / rect.width),
-        clamp01((e.clientY - rect.top) / rect.height),
-      );
-    });
+    if (inputX) inputX.value = x.toFixed(4);
+    if (inputY) inputY.value = y.toFixed(4);
   }
 
   /**

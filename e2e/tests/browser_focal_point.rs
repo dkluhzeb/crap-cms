@@ -155,3 +155,82 @@ async fn focal_point_click_updates_inputs() {
 
     server_handle.abort();
 }
+
+// ── focal_point_arrow_keys_move_it_and_announce_the_change ───────────────
+
+/// Regression: the focal point was click-only (unreachable by keyboard) and
+/// a move fired no event, so the unsaved-changes guard never saw it.
+#[tokio::test(flavor = "multi_thread")]
+async fn focal_point_arrow_keys_move_it_and_announce_the_change() {
+    let (base_url, server_handle, app) =
+        browser::spawn_server(vec![make_media_def(), make_users_def()], vec![]).await;
+    let user_id = create_test_user(&app, "bfocalkey@test.com", "pass123");
+    let _ = make_auth_cookie(&app, &user_id, "bfocalkey@test.com");
+
+    let (browser, _browser_handle) = browser::launch_browser().await;
+    let page = browser.new_page("about:blank").await.unwrap();
+
+    browser::browser_login(&page, &base_url, "bfocalkey@test.com", "pass123").await;
+
+    page.goto(format!("{base_url}/admin/collections/media"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+
+    page.evaluate(
+        "() => { \
+            window.__focalChanges = 0; \
+            document.addEventListener('crap:change', () => { window.__focalChanges += 1; }); \
+            document.body.innerHTML += `\
+                <crap-focal-point data-focal-x=\"0.5\" data-focal-y=\"0.5\">\
+                    <img src=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\" />\
+                    <input type=\"hidden\" name=\"focal_x\" value=\"0.5000\" />\
+                    <input type=\"hidden\" name=\"focal_y\" value=\"0.5000\" />\
+                </crap-focal-point>`; \
+        }",
+    )
+    .await
+    .unwrap();
+    browser::wait_for_element(&page, "crap-focal-point img").await;
+
+    let tabbable: String = page
+        .evaluate(
+            "() => document.querySelector('crap-focal-point').shadowRoot \
+                .querySelector('.focal-point').getAttribute('tabindex')",
+        )
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert_eq!(tabbable, "0", "the picker is reachable with Tab");
+
+    page.evaluate(
+        "() => { \
+            const picker = document.querySelector('crap-focal-point').shadowRoot.querySelector('.focal-point'); \
+            picker.focus(); \
+            picker.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })); \
+            picker.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', shiftKey: true, bubbles: true })); \
+        }",
+    )
+    .await
+    .unwrap();
+
+    let state: String = page
+        .evaluate(
+            "() => document.querySelector('input[name=\"focal_x\"]').value + ',' \
+                + document.querySelector('input[name=\"focal_y\"]').value + ',' \
+                + window.__focalChanges",
+        )
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert_eq!(
+        state, "0.5500,0.4900,2",
+        "arrow keys move the point (Shift finer) and each move announces a change"
+    );
+
+    server_handle.abort();
+}

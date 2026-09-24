@@ -26,19 +26,37 @@ pub(in crate::db::query::filter) enum ResolvedFilter {
         join_table: String,
         parent_table: String,
         condition: SubqueryCondition,
-        /// When the join table has a `_locale` column and the query is
-        /// scoped to a single locale, this holds the locale string to
-        /// constrain the subquery with `_locale = ?`. `None` means no
-        /// locale filtering (junction table has no `_locale` column, or
-        /// `LocaleMode::All` is active).
-        locale_constraint: Option<String>,
+        /// The locale the join table's rows are matched in when they carry a
+        /// `_locale` column — the locale hydration reads them in, with its
+        /// fallback. `None` when the field is not localized or localization
+        /// is off.
+        rows_locale: Option<RowsLocale>,
     },
+}
+
+/// The locale a localized join field's rows are filtered in: `locale`, or
+/// `fallback` for a document holding no row in `locale` — the rows the read
+/// shows for that document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::db::query::filter) struct RowsLocale {
+    pub(in crate::db::query::filter) locale: String,
+    pub(in crate::db::query::filter) fallback: Option<String>,
+}
+
+impl RowsLocale {
+    pub(in crate::db::query::filter) fn new(locale: &str, fallback: Option<&str>) -> Self {
+        Self {
+            locale: locale.to_string(),
+            fallback: fallback.map(str::to_string),
+        }
+    }
 }
 
 /// How to access the filtered value within a subquery.
 #[derive(Debug)]
 pub(in crate::db::query::filter) enum SubqueryCondition {
-    /// Direct column on an array join table (an array sub-field).
+    /// Direct column on an array or blocks join table (an array sub-field, or
+    /// either row's own `id`).
     ///
     /// `field_type` drives operand casting; `None` means fall back to Text.
     /// `list` is set for a sub-field holding a list per row — a scalar has-many
@@ -55,12 +73,13 @@ pub(in crate::db::query::filter) enum SubqueryCondition {
     RelatedId,
     /// `_block_type` column on the join table. Always text.
     BlockType,
-    /// `json_extract` on the `data` column, possibly with `json_each` joins
-    /// for nested blocks/arrays.
+    /// `json_extract` on a row's JSON — a block row's `data`, an array row's
+    /// group / nested array / nested blocks column — possibly with `json_each`
+    /// joins for nested blocks/arrays.
     Json {
         /// `json_each` joins: `(source_expr, alias)`.
         each_joins: Vec<(String, String)>,
-        /// Final expression, e.g. `json_extract(data, '$.body')`.
+        /// Final expression, e.g. `json_extract(posts_content.data, '$.body')`.
         extract_expr: String,
         /// Leaf field type for operand coercion. `None` falls back to Text.
         field_type: Option<FieldType>,
@@ -70,10 +89,10 @@ pub(in crate::db::query::filter) enum SubqueryCondition {
     },
 }
 
-/// Result of walking a block filter path: the `json_each` joins needed,
-/// the final extract expression, the leaf field type for binding, and the
-/// list the leaf holds, if any.
-pub(super) type BlockWalkResult = (
+/// Result of walking a filter path through a row's JSON: the `json_each`
+/// joins needed, the final extract expression, the leaf field type for
+/// binding, and the list the leaf holds, if any.
+pub(super) type JsonWalkResult = (
     Vec<(String, String)>,
     String,
     Option<FieldType>,

@@ -13,6 +13,10 @@
  * The component sets the slotted input's right-side padding via
  * `::slotted(input)` so the toggle button doesn't overlap the text.
  *
+ * The button is an ARIA toggle button: its label stays "Show password" and
+ * `aria-pressed` alone reports whether the value is revealed. Swapping the
+ * label as well would announce a contradictory "Hide password, pressed".
+ *
  * @module password-toggle
  * @category form-field
  * @stability stable
@@ -20,6 +24,7 @@
 
 import { css } from './_internal/css.js';
 import { h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
 
 const ICON_HIDDEN = 'visibility';
 const ICON_VISIBLE = 'visibility_off';
@@ -85,7 +90,8 @@ class CrapPasswordToggle extends HTMLElement {
       {
         type: 'button',
         class: 'toggle',
-        'aria-label': 'Toggle password visibility',
+        'aria-label': t('password_show'),
+        'aria-pressed': 'false',
         onClick: () => this._toggle(),
       },
       this._icon,
@@ -100,6 +106,7 @@ class CrapPasswordToggle extends HTMLElement {
     const reveal = input.type === 'password';
     input.type = reveal ? 'text' : 'password';
     this._icon.textContent = reveal ? ICON_VISIBLE : ICON_HIDDEN;
+    this._button.setAttribute('aria-pressed', String(reveal));
   }
 }
 

@@ -59,17 +59,20 @@ pub(super) fn check_identifiers(
     }
 
     // Join tables (array / blocks / relationship / upload), prefixed by any
-    // enclosing group path — `{table_base}_{group}__{field}`.
+    // enclosing group path — `{table_base}_{group}__{field}`. The `parent_id`
+    // index of an array / blocks row table needs no check: its name is
+    // shortened to fit whatever the table's length.
     walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
-        if matches!(
+        if !matches!(
             field.field_type,
             FieldType::Relationship | FieldType::Upload | FieldType::Array | FieldType::Blocks
         ) {
-            let full = prefixed_name(prefix, &field.name);
-            let table = join_table(table_base, &full);
-            check_ident("join table", &table, "collection + group + field name")?;
+            return Ok(());
         }
-        Ok(())
+
+        let table = join_table(table_base, &prefixed_name(prefix, &field.name));
+
+        check_ident("join table", &table, "collection + group + field name")
     })?;
 
     // Version-table index names (created when versions are enabled). The longest
@@ -265,5 +268,20 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("join table"), "got: {err}");
+    }
+
+    /// Regression: a row table whose `parent_id` index name (a prefix plus the
+    /// table name) passed 63 bytes refused to boot although the table name
+    /// fit. The index name is shortened instead, so the definition passes.
+    #[test]
+    fn a_row_table_with_a_long_index_name_passes() {
+        let name = "f".repeat(50);
+        let array = vec![
+            FieldDefinition::builder(&name, FieldType::Array)
+                .fields(vec![FieldDefinition::builder("v", FieldType::Text).build()])
+                .build(),
+        ];
+
+        assert!(check_identifiers("posts", &array, &cfg()).is_ok());
     }
 }

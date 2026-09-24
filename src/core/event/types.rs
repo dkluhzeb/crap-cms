@@ -41,6 +41,20 @@ pub enum EventOperation {
 }
 
 impl EventOperation {
+    /// Every operation, in declaration order.
+    pub const ALL: [Self; 6] = [
+        Self::Create,
+        Self::Update,
+        Self::Delete,
+        Self::Undelete,
+        Self::Unpublish,
+        Self::Restore,
+    ];
+
+    /// The operations a global's event can carry: a global is never created,
+    /// deleted or trashed.
+    pub const GLOBAL: [Self; 3] = [Self::Update, Self::Unpublish, Self::Restore];
+
     /// Canonical lowercase wire/Lua spelling — the single mapping shared by
     /// the SSE payload, subscriber op filters, and the Lua hook contexts.
     #[must_use]
@@ -219,6 +233,29 @@ mod tests {
 
     use super::*;
     use crate::db::{Filter, FilterOp};
+
+    /// `ALL` lists every variant exactly once, and `GLOBAL` is a subset of it.
+    /// The exhaustive match stops compiling when a variant is added, so the
+    /// position table — and with it `ALL` — has to be revisited.
+    #[test]
+    fn all_lists_every_operation_once() {
+        let position = |op: &EventOperation| match op {
+            EventOperation::Create => 0,
+            EventOperation::Update => 1,
+            EventOperation::Delete => 2,
+            EventOperation::Undelete => 3,
+            EventOperation::Unpublish => 4,
+            EventOperation::Restore => 5,
+        };
+
+        for (i, op) in EventOperation::ALL.iter().enumerate() {
+            assert_eq!(position(op), i, "{op:?} is out of place in ALL");
+        }
+
+        for op in &EventOperation::GLOBAL {
+            assert!(EventOperation::ALL.contains(op), "{op:?}");
+        }
+    }
 
     #[test]
     fn view_meta_from_fields_reads_status_and_trashed() {

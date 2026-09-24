@@ -3,5 +3,5 @@
 --- Used to prove that batched list-read stripping evaluates each document with
 --- its OWN `context.document` even though one Lua VM is shared across the batch.
 return crap.any.access(function(context)
-	return context.document ~= nil and context.document.public == true
+  return context.document ~= nil and context.document.public == true
 end)

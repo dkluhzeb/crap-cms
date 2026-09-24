@@ -648,6 +648,92 @@ async fn find_validates_filter_fields() {
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
 }
 
+/// Filters naming an unknown field, a sub-path into a field that has none,
+/// and a sub-field an array's rows do not have.
+const BAD_WHERES: [&str; 3] = [
+    r#"{"nonexistent_field": "value"}"#,
+    r#"{"title.sub": "value"}"#,
+    r#"{"items.nope": "value"}"#,
+];
+
+/// `posts` with an `items` array whose rows hold a `name`.
+fn make_posts_with_items_def() -> CollectionDefinition {
+    let mut def = make_posts_def();
+    def.fields.push(
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("name", FieldType::Text).build(),
+            ])
+            .build(),
+    );
+    def
+}
+
+/// Regression: a bad filter field or path was only pre-checked by `Find`;
+/// `Count`, `UpdateMany` and `DeleteMany` answered `INTERNAL` (which clients
+/// retry on), and a bad sub-path did so on `Find` too. Every operation that
+/// filters now answers `INVALID_ARGUMENT`.
+#[tokio::test]
+async fn every_filtering_rpc_rejects_a_bad_filter_path_as_invalid_argument() {
+    let ts = setup_service(vec![make_posts_with_items_def()], vec![]);
+
+    for where_json in BAD_WHERES {
+        let r#where = Some(where_json.to_string());
+
+        let find = ts
+            .service
+            .find(Request::new(content::FindRequest {
+                collection: "posts".to_string(),
+                r#where: r#where.clone(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap_err();
+        let count = ts
+            .service
+            .count(Request::new(content::CountRequest {
+                collection: "posts".to_string(),
+                r#where: r#where.clone(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap_err();
+        let update_many = ts
+            .service
+            .update_many(Request::new(content::UpdateManyRequest {
+                collection: "posts".to_string(),
+                r#where: r#where.clone(),
+                data: Some(make_struct(&[("title", "Changed")])),
+                ..Default::default()
+            }))
+            .await
+            .unwrap_err();
+        let delete_many = ts
+            .service
+            .delete_many(Request::new(content::DeleteManyRequest {
+                collection: "posts".to_string(),
+                r#where: r#where.clone(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap_err();
+
+        for (rpc, status) in [
+            ("Find", find),
+            ("Count", count),
+            ("UpdateMany", update_many),
+            ("DeleteMany", delete_many),
+        ] {
+            assert_eq!(
+                status.code(),
+                tonic::Code::InvalidArgument,
+                "{rpc} {where_json}: {}",
+                status.message()
+            );
+        }
+    }
+}
+
 // ── Globals Tests ──────────────────────────────────────────────────────────
 
 #[tokio::test]

@@ -38,6 +38,13 @@ Authorization: Bearer <jwt>
 | `_file` | file | The file to upload (**required**) |
 | Any other field | text | Custom fields defined on the collection (e.g., `alt`, `caption`) |
 
+A `has_many` field (select, radio, text, number, relationship, upload) takes
+its values as a JSON array (`tags=["a","b"]`) or as the field repeated once per
+value (`tags=a`, `tags=b`). For a select, radio, text or number field a single
+plain value is one element — `sizes=10,5 cm` is the one value `10,5 cm`, never
+split on its comma. A relationship or upload field also accepts a
+comma-separated id list as one value (`gallery=id1,id2`).
+
 ### Response
 
 ```
@@ -174,6 +181,7 @@ All error responses follow the same format:
 | Status | Cause |
 |--------|-------|
 | `400` | Bad request (no file, invalid MIME type, file too large, validation error) |
+| `413` | The request body exceeds the size limit (the target collection's `max_file_size`, else the global `[upload] max_file_size`, plus 1 MiB for the other form fields) — refused before the file is fully read |
 | `401` | Invalid or expired token, locked account, unverified email |
 | `403` | Access control denied |
 | `404` | Collection or document not found |

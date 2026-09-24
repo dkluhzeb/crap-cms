@@ -280,6 +280,70 @@ async fn pg_pattern_filter_on_numeric_column_executes() {
         .unwrap();
 }
 
+/// A bare-day operand on a date covers its whole UTC day on Postgres too: the
+/// stored instants compare as text under the database's collation, so the
+/// day's first and last minutes match and the next midnight does not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pg_bare_day_date_filter_covers_the_day() {
+    let Some(pool) = pg_test_pool() else {
+        eprintln!("skipping: TEST_DATABASE_URL not set");
+        return;
+    };
+
+    let conn = pool.get().expect("get PG connection");
+    let table = unique_slug("dayfilter");
+    conn.execute(
+        &format!("CREATE TABLE \"{table}\" (id TEXT, due TEXT)"),
+        &[],
+    )
+    .unwrap();
+    conn.execute(
+        &format!(
+            "INSERT INTO \"{table}\" (id, due) VALUES \
+             ('before', '2026-01-14T23:59:59.999Z'), ('early', '2026-01-15T00:30:00.000Z'), \
+             ('late', '2026-01-15T23:59:00.000Z'), ('next', '2026-01-16T00:00:00.000Z'), \
+             ('none', NULL)"
+        ),
+        &[],
+    )
+    .unwrap();
+
+    let ids = |op: FilterOp| {
+        let mut params = Vec::new();
+        let condition = build_op_condition(
+            &conn,
+            "due",
+            "due",
+            &op,
+            Some(&FieldType::Date),
+            &mut params,
+        )
+        .unwrap();
+        let rows = conn
+            .query_all(
+                &format!("SELECT id FROM \"{table}\" WHERE {condition} ORDER BY id"),
+                &params,
+            )
+            .unwrap();
+
+        rows.iter()
+            .filter_map(|r| r.opt_text_at(0))
+            .collect::<Vec<String>>()
+    };
+
+    let day = || "2026-01-15".to_string();
+    assert_eq!(ids(FilterOp::Equals(day())), ["early", "late"]);
+    assert_eq!(ids(FilterOp::NotEquals(day())), ["before", "next"]);
+    assert_eq!(ids(FilterOp::GreaterThan(day())), ["next"]);
+    assert_eq!(
+        ids(FilterOp::LessThanOrEqual(day())),
+        ["before", "early", "late"]
+    );
+
+    conn.execute(&format!("DROP TABLE \"{table}\""), &[])
+        .unwrap();
+}
+
 /// Regression (root cause of the keyset dup/drop bug): Postgres defaults to
 /// NULLs-LAST on ASC, the opposite of `SQLite` (NULLs-first) — and the keyset
 /// clause assumes `SQLite`'s placement. The sort builder now emits an explicit

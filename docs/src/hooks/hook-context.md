@@ -7,18 +7,18 @@ Collection-level hooks receive a context table and must return a (potentially mo
 ```lua
 {
     collection = "posts",       -- Collection slug
-    operation = "create",       -- "create", "update", "delete", "find", "find_by_id", "get", or "init"
+    operation = "create",       -- see "Operations" below
     id = "abc123",              -- Affected document id; nil only in create's before-hooks (no row yet)
-    data = {                    -- Document data (mutable in before-write hooks)
-        title = "Hello World",
+    data = {                    -- Document data (mutable in before-write hooks) — on an
+        title = "Hello World",  -- update's before-hooks, ONLY the fields the request sends
         slug = "hello-world",
         status = "draft",
-        id = "abc123",          -- Present on update/delete, absent on create
-        created_at = "...",     -- Present on read/update
+        id = "abc123",          -- See "System Fields in Data" for when it is present
+        created_at = "...",     -- after_read only
         updated_at = "...",
     },
     locale = "en",              -- Content locale this op targets (nil only when localization is disabled)
-    draft = true,               -- Whether this is a draft save (versioned collections only)
+    draft = true,               -- Draft save? Set on every write hook; nil on delete and read hooks
     hook_depth = 0,             -- Current recursion depth (0 = top-level, 1+ = from Lua CRUD in hooks)
     context = {                 -- Per-operation shared table (one write lifecycle — see "Context" below)
         -- Hooks can read and write arbitrary keys here to share data
@@ -36,6 +36,59 @@ Collection-level hooks receive a context table and must return a (potentially mo
     },
 }
 ```
+
+## Operations
+
+`ctx.operation` names what the hook runs for:
+
+| Hooks | `operation` |
+|-------|-------------|
+| `before_validate`, `before_change`, `after_change` (collection) | `"create"`, `"update"` (an unpublish is an update), or `"undelete"` (a document restored from the trash) |
+| `before_delete`, `after_delete` | `"delete"` (soft or hard — see `data.soft_delete`) |
+| `before_read`, `after_read` (collection) | `"find"` or `"find_by_id"` |
+| global write / read hooks | `"update"` (an unpublish is an update) / `"get"` |
+| `after_read` shaping a live event, `before_broadcast` | the event's operation: `"create"`, `"update"`, `"delete"`, `"undelete"`, `"unpublish"` or `"restore"` (a global: `"update"`, `"unpublish"`, `"restore"`) |
+| `on_init` | `"init"` |
+
+## Update Hooks See the Request, Not the Document
+
+On an **update**, the before-hooks' (`before_validate`, `before_change`)
+`ctx.data` holds **only the fields the request sends** — a partial update of
+`title` arrives as `{ title = "..." }`, without the document's other fields and
+without `id`. A missing key means "not changed", not "empty". Hooks that derive
+a value from another field, or must know the stored state, read the stored
+document with `crap.collections.find_by_id(ctx.collection, ctx.id)` (see
+[Reading the Previous Document](#reading-the-previous-document)) instead of
+assuming `ctx.data` is complete:
+
+```lua
+-- Stamp published_at the first time a document is published.
+function M.before_change(ctx)
+    local writes_fields = ctx.operation == "create" or ctx.operation == "update"
+    if not writes_fields or ctx.draft or ctx.data.published_at ~= nil then
+        return ctx
+    end
+
+    if ctx.operation == "update" then
+        -- The patch has no published_at: that says nothing about the document.
+        local stored = crap.collections.find_by_id(ctx.collection, ctx.id, {
+            select = { "published_at" },
+            override_access = true,
+        })
+        if stored and stored.published_at ~= nil then
+            return ctx
+        end
+    end
+
+    ctx.data.published_at = crap.util.date_now()
+    return ctx
+end
+```
+
+Anything written into `ctx.data` is written to the document, so a before-hook
+must not fill in fields the request left out unless it means to change them.
+The same holds for access functions: an update's `ctx.data` is the incoming
+patch, never proof of what the stored document holds.
 
 ## Per-Config Options (`ctx.options`)
 
@@ -155,23 +208,24 @@ Hooks must return the context table (or a new table with `data`). If a hook retu
 
 | Field | Present When | Description |
 |-------|-------------|-------------|
-| `id` | update, delete, read | Document ID |
-| `created_at` | read, update | ISO 8601 timestamp |
-| `updated_at` | read, update | ISO 8601 timestamp |
-| `user` | write hooks, after_read (nil if unauthenticated) | Authenticated user document |
-| `ui_locale` | write hooks, before_read, after_read (nil if not set) | The acting user's admin-UI locale — the admin session's on admin requests, the user's stored preference on API surfaces |
+| `id` | `after_change`, `before_delete` / `after_delete`, `after_read` | Document ID. Not in the before-write hooks' `data` — use `ctx.id` (set on update; `nil` on create, where no id is assigned yet) |
+| `created_at` | `after_read` | ISO 8601 timestamp |
+| `updated_at` | `after_read` | ISO 8601 timestamp |
+| `soft_delete` | `before_delete` / `after_delete` on a soft-delete collection | `true`: the document moves to the trash instead of being removed |
 
-On `create`, `id` is not yet assigned (it's generated by the database write).
+`user` and `ui_locale` are keys of the context itself (`ctx.user`,
+`ctx.ui_locale`), not of `data` — see [User](#user) and [UI Locale](#ui-locale).
 
 ## Draft Field
 
-For versioned collections with `drafts = true`, the context includes a `draft` field:
+Every write hook (`before_validate`, `before_change`, `after_change`) carries a
+`draft` field:
 
 | Value | Meaning |
 |-------|---------|
-| `true` | This is a draft save (required field validation is skipped) |
-| `false` | This is a publish save (full validation applied) |
-| `nil` | Collection does not have versioning enabled |
+| `true` | A draft save on a collection with `versions.drafts` (required field validation is skipped), or an unpublish |
+| `false` | Any other write — a publish save, or any write to a collection without drafts |
+| `nil` | Delete and read hooks, which save nothing |
 
 You can use this in hooks to customize behavior based on publish state:
 
@@ -181,8 +235,9 @@ function M.before_change(ctx)
         -- Draft save: skip expensive operations
         return ctx
     end
-    -- Publishing: run full processing
-    ctx.data.published_at = os.date("!%Y-%m-%d %H:%M:%S")
+    -- Publishing: run full processing (on an update, ctx.data is only the
+    -- fields the request sends — see "Update Hooks See the Request")
+    ctx.data.last_published_by = ctx.user and ctx.user.email
     return ctx
 end
 ```

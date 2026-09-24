@@ -52,6 +52,7 @@
 //! `mod.rs` stays a thin declarations + re-exports file per CLAUDE.md.
 
 mod auth_middleware;
+mod body_limit;
 pub(crate) mod context;
 mod csp_nonce;
 mod csrf;
@@ -70,6 +71,7 @@ pub(crate) mod test_state;
 pub mod test_support;
 pub mod translations;
 
+pub(crate) use body_limit::{global_body_limit, upload_body_limit};
 pub use csp_nonce::{CSP_NONCE, CspNonce, current_nonce_or_empty};
 pub use state::AdminState;
 pub use translations::Translations;
@@ -79,4 +81,6 @@ pub use translations::Translations;
 // `crate::admin::Foo` instead of reaching into `admin::handlers::Foo`.
 // Stays `pub(crate)` because both consumers live in this crate; a future
 // workspace split would promote to `pub`.
-pub(crate) use handlers::{FormData, parse_multipart_form, strip_locale_locked_form_fields};
+pub(crate) use handlers::{
+    FormData, FormParseError, parse_multipart_form, strip_locale_locked_form_fields,
+};

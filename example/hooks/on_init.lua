@@ -6,11 +6,6 @@ return function()
   local locales = crap.locale.get_all()
 
   crap.log.info(
-    string.format(
-      "Crap Studio: %d collections, %d locales (%s)",
-      #collections,
-      #locales,
-      table.concat(locales, ", ")
-    )
+    string.format("Crap Studio: %d collections, %d locales (%s)", #collections, #locales, table.concat(locales, ", "))
   )
 end

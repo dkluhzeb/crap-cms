@@ -94,7 +94,8 @@ Valid anywhere a write transaction is active: write lifecycle hooks
 per-op transaction a bare CRUD call opens in a job, route, or effect — a
 hook fired by `crap.collections.posts.create(...)` from a job handler
 registers against that call's own transaction and its effects run after
-that call commits. Registering without an active transaction (a job body
+that call commits. `on_init` hooks and Lua data migrations also run in a
+write transaction (see below), so they can register effects too. Registering without an active transaction (a job body
 outside any CRUD call, `init.lua`) raises a descriptive error.
 
 ## Calling CRUD Outside Hooks
@@ -145,6 +146,12 @@ return M
 ```
 
 If an `on_init` hook fails, the server aborts startup.
+
+The startup transaction carries the same scope as every other Lua write: the
+hooks' live events are published, the cache is cleared, and the files of upload
+documents they hard-delete are removed only after it commits. A failed startup
+leaves every file in place. Lua data migrations (`crap-cms migrate up|down`)
+run the same way, one transaction per migration.
 
 ## Access Control Functions
 

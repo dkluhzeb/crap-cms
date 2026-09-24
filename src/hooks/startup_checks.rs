@@ -6,6 +6,8 @@
 //! - `routes` — custom routes registered via `crap.routes.register`.
 //! - `auth_methods` — per-collection `auth.methods` shape.
 //! - `default_sort` — admin default-sort fields.
+//! - `relation_targets` — relationship/upload/join fields name a registered
+//!   (for uploads: upload-enabled) target collection.
 //! - This file — locale/field-name collisions, table-name collisions, job
 //!   cron schedules, `required_locales`, and the advisory warnings
 //!   (public lifecycle views, MCP reserved-argument shadowing).
@@ -17,12 +19,14 @@ mod auth_methods;
 mod default_sort;
 mod hook_refs;
 mod pages;
+mod relation_targets;
 mod routes;
 
 pub use auth_methods::validate_auth_methods;
 pub use default_sort::validate_admin_default_sorts;
 pub use hook_refs::{validate_admin_access_ref, validate_hook_references};
 pub use pages::validate_pages;
+pub use relation_targets::validate_relation_targets;
 pub use routes::validate_routes;
 
 use std::collections::{HashMap, HashSet};

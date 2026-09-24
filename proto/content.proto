@@ -561,14 +561,22 @@ message FindRequest {
   //   less_than_or_equal
   //   in                  — value must be an array: {"status": {"in": ["a","b"]}}
   //   not_in              — value must be an array
-  //   exists              — field is not NULL
-  //   not_exists          — field is NULL
+  //   exists              — field is not NULL (only `true` is accepted)
+  //   not_exists          — field is NULL (only `true` is accepted)
+  //
+  // Has-many fields (a has_many text/number/select/radio list, a has-many
+  // relationship or upload's ".id", a has-many relationship inside an array or
+  // blocks row) match element by element: equals, like, contains, in, the
+  // comparisons and exists match when SOME element does; not_equals, not_in and
+  // not_exists when NO element does. An empty or unset list holds no elements.
   //
   // OR groups:
   //   {"or": [{"status": "active"}, {"status": "pending"}]}
   //
   // Multiple top-level keys are ANDed together.
-  // Dot notation for nested fields: "group.field" or "block.field".
+  // Dot notation for nested fields: "group.field", "array.field",
+  // "blocks.field", "blocks._block_type", "relationship.id".
+  // An unknown field or path is an INVALID_ARGUMENT error naming it.
   //
   // Examples:
   //   {"status": "published"}

@@ -262,8 +262,6 @@ pub async fn run(
         .invalidation_transport(invalidation_transport.clone())
         .build()?;
 
-    run_on_init_hooks(&cfg, &db_pool, &hook_runner)?;
-
     let storage = create_storage_with_lease(config_dir, &cfg.upload, hook_runner.lua_lease())?;
     let email_provider = create_email_provider_with_lease(&cfg.email, hook_runner.lua_lease())?;
 
@@ -289,6 +287,10 @@ pub async fn run(
         config: &cfg,
         config_dir,
     })?;
+
+    // Run on the assembled infrastructure, so the hooks' writes clear the
+    // cache and publish their events like every other write.
+    run_on_init_hooks(&cfg, &infra)?;
 
     // Job handlers read through this process's own cache, so a worker clears
     // it on the same cadence as the servers.
