@@ -22,7 +22,7 @@ use crate::{
             shared::paths,
         },
     },
-    core::{auth::Claims, collection::Surface},
+    core::{auth::Claims, collection::Surface, rate_limit::AttemptBudget},
     db::query::MfaCode,
     service::{
         self, AppInfra, ServiceError,
@@ -106,7 +106,7 @@ pub async fn verify_mfa_action(
         return response;
     };
 
-    let ip = client_ip(&headers, &addr, &state.config.server);
+    let client = client_ip(&headers, &addr, &state.config.server);
     let user_id = pending_claims.sub.to_string();
 
     // Throttle MFA code guessing. The 6-digit code lives in a 10^6 space behind
@@ -115,11 +115,10 @@ pub async fn verify_mfa_action(
     // per-user AND per-IP MFA limiters and bail if either is now over threshold.
     // These limiters are independent of the login limiter (which is cleared on
     // the successful password *before* the challenge is issued), so an attacker
-    // who knows the password cannot reset the MFA budget by re-logging-in. Both
-    // are evaluated (not short-circuited) so each records the attempt.
-    let user_blocked = state.mfa_limiter.check_and_block(&user_id);
-    let ip_blocked = state.ip_mfa_limiter.check_and_block(&ip);
-    if user_blocked || ip_blocked {
+    // who knows the password cannot reset the MFA budget by re-logging-in. The
+    // IP budget records first (see `AttemptBudget`).
+    let budget = AttemptBudget::new(&state.ip_mfa_limiter, &state.mfa_limiter);
+    if budget.check_and_block(&client, &user_id) {
         return render_mfa(&state, &pending_claims, Some("error_mfa_too_many_attempts")).await;
     }
 
@@ -169,8 +168,7 @@ pub async fn verify_mfa_action(
     // (this user just proved the second factor) but only REFUND the shared
     // per-IP one, mirroring the password login and the gRPC twin: a success
     // must not wipe other users' failed codes from the same IP.
-    state.mfa_limiter.clear(&user_id);
-    state.ip_mfa_limiter.refund(&ip);
+    budget.settle_success(&client, &user_id);
 
     build_mfa_session_response(&state, &pending_claims).await
 }

@@ -7,19 +7,17 @@
 use std::{
     convert::Infallible,
     future::Future,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
 
 use axum::{
     Extension,
-    extract::State,
-    http::StatusCode,
+    extract::{ConnectInfo, State},
+    http::{Extensions, HeaderMap, StatusCode},
     response::sse::{Event, KeepAlive, Sse},
 };
 use tokio::{sync::mpsc, time::timeout};
@@ -34,7 +32,7 @@ use crate::{
         handlers::events::sse_payload::{SseAccess, build_allowed_slugs, event_to_sse},
     },
     core::{
-        AuthUser, Document, EventReceiver, MutationEvent, Registry,
+        AuthUser, ClientIp, Document, EventReceiver, LiveSlot, LiveSlots, MutationEvent, Registry,
         event::{InvalidationReceiver, MAX_DRAIN, RecvError, drain_and_coalesce},
     },
     hooks::HookRunner,
@@ -45,24 +43,17 @@ use crate::{
 /// queuing large numbers of events.
 const SUBSCRIBER_CHANNEL_CAPACITY: usize = 16;
 
-/// RAII guard that decrements the SSE connection counter on drop.
-struct SseConnectionGuard {
-    counter: Arc<AtomicUsize>,
-}
-
-impl Drop for SseConnectionGuard {
-    fn drop(&mut self) {
-        self.counter.fetch_sub(1, Ordering::Relaxed);
-    }
-}
+/// Stand-in peer for a request without connection info (an in-process call):
+/// every such request shares one slot key.
+const UNKNOWN_PEER: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 
 /// Stream wrapper that ends when a `CancellationToken` fires.
-/// Holds an optional SSE connection guard that decrements the counter on drop.
+/// Holds the stream's live-update slot, freed when the stream is dropped.
 struct CancellableStream {
     inner: Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>,
     shutdown: Pin<Box<WaitForCancellationFutureOwned>>,
     done: bool,
-    _guard: Option<SseConnectionGuard>,
+    _slot: LiveSlot,
 }
 
 impl Stream for CancellableStream {
@@ -79,24 +70,6 @@ impl Stream for CancellableStream {
         }
 
         self.inner.as_mut().poll_next(cx)
-    }
-}
-
-/// Atomically try to acquire an SSE connection slot.
-fn try_acquire_sse_slot(counter: &AtomicUsize, max: usize) -> bool {
-    loop {
-        let current = counter.load(Ordering::Relaxed);
-
-        if max > 0 && current >= max {
-            return false;
-        }
-
-        if counter
-            .compare_exchange_weak(current, current + 1, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-        {
-            return true;
-        }
     }
 }
 
@@ -254,23 +227,42 @@ fn spawn_pump(
     });
 }
 
+/// Take the SSE slot for this subscriber: keyed by the signed-in user, or by
+/// the client address when the admin runs without authentication.
+fn acquire_slot(
+    state: &AdminState,
+    auth_user: Option<&AuthUser>,
+    headers: &HeaderMap,
+    extensions: &Extensions,
+) -> Result<LiveSlot, StatusCode> {
+    let peer = extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map_or(UNKNOWN_PEER, |info| info.0.ip());
+    let client = ClientIp::resolve(headers, peer, &state.config.server);
+    let user_id = auth_user.map(|user| user.claims.sub.to_string());
+    let key = LiveSlots::client_key(user_id.as_deref(), &client);
+
+    state.sse_slots.try_acquire(&key).map_err(|refusal| {
+        warn!(?refusal, "SSE stream refused");
+        StatusCode::SERVICE_UNAVAILABLE
+    })
+}
+
 /// SSE handler — streams mutation events to authenticated admin users.
 #[cfg_attr(not(tarpaulin_include), allow(dead_code))]
 #[cfg(not(tarpaulin_include))]
 pub async fn sse_handler(
     State(state): State<AdminState>,
     auth_user: Option<Extension<AuthUser>>,
+    headers: HeaderMap,
+    extensions: Extensions,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, StatusCode> {
-    let max = state.max_sse_connections;
-
-    if !try_acquire_sse_slot(&state.sse_connections, max) {
-        warn!("SSE connection limit reached ({}/{}), rejecting", max, max);
-        return Err(StatusCode::SERVICE_UNAVAILABLE);
-    }
-
-    let guard = SseConnectionGuard {
-        counter: state.sse_connections.clone(),
-    };
+    let slot = acquire_slot(
+        &state,
+        auth_user.as_ref().map(|ext| &ext.0),
+        &headers,
+        &extensions,
+    )?;
 
     let event_transport = state.infra.event_transport.clone();
     let shutdown = state.shutdown.clone();
@@ -315,7 +307,7 @@ pub async fn sse_handler(
         inner: stream,
         shutdown: Box::pin(shutdown.cancelled_owned()),
         done: false,
-        _guard: Some(guard),
+        _slot: slot,
     };
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30))))
@@ -349,36 +341,5 @@ mod tests {
         assert!(handle_invalidation(Some("u1"), Ok("u1".to_string())).is_err());
         assert!(handle_invalidation(Some("u1"), Ok("u2".to_string())).is_ok());
         assert!(handle_invalidation(None, Ok("u1".to_string())).is_ok());
-    }
-
-    #[test]
-    fn sse_slot_acquire_within_limit() {
-        let counter = AtomicUsize::new(0);
-        assert!(try_acquire_sse_slot(&counter, 10));
-        assert_eq!(counter.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn sse_slot_acquire_at_limit() {
-        let counter = AtomicUsize::new(5);
-        assert!(!try_acquire_sse_slot(&counter, 5));
-        assert_eq!(counter.load(Ordering::Relaxed), 5);
-    }
-
-    #[test]
-    fn sse_slot_acquire_no_limit() {
-        let counter = AtomicUsize::new(1000);
-        assert!(try_acquire_sse_slot(&counter, 0));
-        assert_eq!(counter.load(Ordering::Relaxed), 1001);
-    }
-
-    #[test]
-    fn sse_slot_fills_to_limit() {
-        let counter = AtomicUsize::new(0);
-        for _ in 0..3 {
-            assert!(try_acquire_sse_slot(&counter, 3));
-        }
-        assert!(!try_acquire_sse_slot(&counter, 3));
-        assert_eq!(counter.load(Ordering::Relaxed), 3);
     }
 }

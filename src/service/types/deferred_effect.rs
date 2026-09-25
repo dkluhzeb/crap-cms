@@ -45,14 +45,28 @@ pub struct DeferredEffect {
     pub outcome: EffectOutcome,
     pub hook_ref: String,
     pub payload: JsonValue,
+    /// Run whatever the transaction's outcome. Set on a compensation
+    /// (`on_rollback`) registered inside a step of the transaction that failed
+    /// and was rolled back to its savepoint: that step's writes are undone
+    /// even when the transaction itself commits.
+    pub unconditional: bool,
+}
+
+impl DeferredEffect {
+    /// Whether this effect runs once its transaction resolved to `outcome`.
+    #[must_use]
+    pub fn runs_on(&self, outcome: EffectOutcome) -> bool {
+        self.unconditional || self.outcome == outcome
+    }
 }
 
 /// Shared per-transaction queue of deferred effects.
 /// Cloning is cheap (Rc + `RefCell`); same-thread-only like [`super::pending_event::EventQueue`].
 pub type DeferredQueue = Rc<RefCell<Vec<DeferredEffect>>>;
 
-/// Drain the queue and run the effects bound to `outcome`; effects bound to
-/// the other outcome are dropped (their transaction resolved the other way).
+/// Drain the queue and run the effects bound to `outcome` (and the
+/// unconditional ones); effects bound to the other outcome are dropped (their
+/// transaction resolved the other way).
 ///
 /// Runs post-transaction: effect errors are logged and skipped (fail-open —
 /// the transaction outcome is already final and cannot be revisited).
@@ -62,10 +76,7 @@ pub(crate) fn flush_deferred_effects(
     outcome: EffectOutcome,
 ) {
     let effects: Vec<DeferredEffect> = queue.borrow_mut().drain(..).collect();
-    let effects: Vec<DeferredEffect> = effects
-        .into_iter()
-        .filter(|e| e.outcome == outcome)
-        .collect();
+    let effects: Vec<DeferredEffect> = effects.into_iter().filter(|e| e.runs_on(outcome)).collect();
 
     if effects.is_empty() {
         return;

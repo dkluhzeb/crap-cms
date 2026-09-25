@@ -64,7 +64,7 @@ impl Operation for UpdateMany {
         // every surface (MCP previously did neither).
         let mut filters = args.filters;
         normalize_filter_fields(&mut filters, &def.fields);
-        validate_user_filters(&filters).map_err(|e| ServiceError::HookError(e.to_string()))?;
+        validate_user_filters(&filters)?;
 
         let locale_ctx = write_locale_ctx(args.locale_ctx)?;
 

@@ -3,13 +3,19 @@
 
 use anyhow::Result;
 use serde_json::{Map, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::core::{
     BLOCK_TYPE_KEY, BlockDefinition, CollectionDefinition, Document, FieldChildren,
     FieldDefinition, FieldType, field::flatten_array_sub_fields, field_children,
 };
-use crate::db::query::populate::{PopulateCtx, PopulateOpts, document_to_json, parse_poly_ref};
+use crate::db::query::populate::{
+    PopulateCtx, document_to_json,
+    helpers::{TargetViews, resolve_target_views},
+    parse_poly_ref,
+};
+
+use super::{dispatch::resolve_single_target, join::populate_join_docs};
 
 /// Walk top-level container fields (Group, Blocks, Array) in a document and
 /// populate any relationship/upload sub-fields within them.
@@ -223,11 +229,12 @@ fn populate_array_items_in_map(
     Ok(())
 }
 
-/// Populate a `Join` (reverse-lookup) field within a JSON map. The join is
+/// Populate a `Join` (reverse-lookup) field within a JSON map — a join in a
+/// group (joins are refused inside array/blocks rows at load). The join is
 /// anchored to the *document's* id (`pctx.root_id`), not anything in the
-/// container — a join nested inside a group/array/blocks/tab reverse-looks-up
-/// the same rows it would at the top level. Gating (target read/draft access,
-/// per-row visibility) is the shared join path's.
+/// container, so it lists the same rows it would at the top level. Gating
+/// (target read/draft access, per-row visibility, the limit) is the shared
+/// join path's.
 fn populate_join_in_map(
     pctx: &PopulateCtx<'_>,
     map: &mut Map<String, Value>,
@@ -242,31 +249,11 @@ fn populate_join_in_map(
         return Ok(());
     };
 
-    let Some(target_def) = pctx.registry.get_collection(&jc.collection).cloned() else {
+    let Some(target_def) = pctx.registry.get_collection(&jc.collection) else {
         return Ok(());
     };
 
-    let opts = PopulateOpts {
-        depth: pctx.effective_depth,
-        select: None,
-        locale_ctx: pctx.locale_ctx,
-        published_only: pctx.published_only,
-        join_access: pctx.join_access,
-        user: pctx.user,
-    };
-
-    let populated = super::join::populate_join_docs(
-        &super::join::JoinDocsCtx {
-            conn: pctx.conn,
-            registry: pctx.registry,
-            cache: pctx.cache,
-        },
-        pctx.root_id,
-        jc,
-        &target_def,
-        visited,
-        &opts,
-    )?;
+    let populated = populate_join_docs(pctx, pctx.root_id, jc, target_def, visited)?;
 
     map.insert(field.name.clone(), Value::Array(populated));
 
@@ -326,10 +313,6 @@ fn populate_rel_in_map(
     }
     Ok(())
 }
-
-use super::dispatch::resolve_single_target;
-use crate::db::query::populate::helpers::{TargetViews, resolve_target_views};
-use std::collections::HashMap;
 
 /// Populate a non-polymorphic has-one field within a JSON map.
 fn populate_has_one_in_map(

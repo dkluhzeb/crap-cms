@@ -19,9 +19,9 @@ use crate::{
     typegen::{
         Language,
         helpers::{
-            COLLECTION_TAG_KEY, DRAFT_STATUS_VALUES, SubTypeKind, collect_sub_type_fields,
-            declares_collection_tag, is_optional, rel_has_many, sorted_collection_slugs,
-            sorted_global_slugs, to_pascal_case,
+            COLLECTION_TAG_KEY, DRAFT_STATUS_VALUES, SubTypeKind, clears_with_null,
+            collect_sub_type_fields, has_localized_columns, is_optional, localizes, rel_has_many,
+            sorted_collection_slugs, sorted_global_slugs, to_pascal_case,
         },
     },
 };
@@ -173,6 +173,7 @@ fn row_id_field() -> Field<'static> {
         name: Cow::Borrowed("id"),
         ty: FieldTy::Str,
         optional: true,
+        nullable: false,
     }
 }
 
@@ -206,11 +207,12 @@ fn collection_document<'a>(col: &'a CollectionDefinition, shapes: Shapes<'a>) ->
         fields: resolve_fields(shapes.read, &root),
         input: collection_input(col, shapes.write, &root),
         system: system_fields(col.has_drafts(), col.soft_delete),
-        collection_tag: collection_tag(&col.slug, shapes.read),
+        collection_tag: Some(collection_tag(&col.slug)),
         name: root,
         slug: &col.slug,
         timestamps: col.timestamps,
         is_global: false,
+        drafts: col.has_drafts(),
         localized: false,
         select_options: select_field_options(shapes.read),
     }
@@ -230,6 +232,7 @@ fn global_document<'a>(global: &'a GlobalDefinition, shapes: Shapes<'a>) -> Docu
         slug: &global.slug,
         timestamps: true,
         is_global: true,
+        drafts: global.has_drafts(),
         localized: false,
         select_options: Vec::new(),
     }
@@ -260,21 +263,19 @@ fn password_field() -> Field<'static> {
         name: Cow::Borrowed("password"),
         ty: FieldTy::Str,
         optional: true,
+        nullable: false,
     }
 }
 
-/// The `collection` key a populated copy of a document carries — its slug —
-/// unless one of its own fields has that name.
-fn collection_tag(slug: &str, read: &[FieldDefinition]) -> Option<Field<'static>> {
-    if !declares_collection_tag(read) {
-        return None;
-    }
-
-    Some(Field {
+/// The `collection` key a populated copy of a document carries — its slug.
+/// `collection` is a reserved field name, so no field of the document claims it.
+fn collection_tag(slug: &str) -> Field<'static> {
+    Field {
         name: Cow::Borrowed(COLLECTION_TAG_KEY),
         ty: FieldTy::Literal(vec![slug.to_string()]),
         optional: true,
-    })
+        nullable: false,
+    }
 }
 
 /// The stored keys a read document carries besides its fields.
@@ -286,6 +287,7 @@ fn system_fields(drafts: bool, soft_delete: bool) -> Vec<Field<'static>> {
             name: Cow::Borrowed("_status"),
             ty: FieldTy::Literal(DRAFT_STATUS_VALUES.into_iter().map(String::from).collect()),
             optional: true,
+            nullable: false,
         });
     }
 
@@ -294,6 +296,7 @@ fn system_fields(drafts: bool, soft_delete: bool) -> Vec<Field<'static>> {
             name: Cow::Borrowed("_deleted_at"),
             ty: FieldTy::Str,
             optional: true,
+            nullable: false,
         });
     }
 
@@ -333,7 +336,7 @@ impl Shape {
             return false;
         };
 
-        field.has_parent_column() && (inherited || field.localized)
+        localizes(field, inherited)
     }
 
     /// `ty` as this shape types `field`.
@@ -378,20 +381,6 @@ fn localized_if(ty: FieldTy, localized: bool) -> FieldTy {
     } else {
         ty
     }
-}
-
-/// Whether `fields` hold a per-locale column, looking through layout wrappers
-/// and groups. Array and blocks rows are never per-locale columns.
-fn has_localized_columns(fields: &[FieldDefinition], inherited: bool) -> bool {
-    fields.iter().any(|f| match field_children(f) {
-        FieldChildren::Wrapper(sub) => has_localized_columns(sub, inherited),
-        FieldChildren::Tabs(tabs) => tabs
-            .iter()
-            .any(|tab| has_localized_columns(&tab.fields, inherited)),
-        FieldChildren::Group(sub) => has_localized_columns(sub, inherited || f.localized),
-        FieldChildren::Leaf => f.has_parent_column() && (inherited || f.localized),
-        FieldChildren::Array(_) | FieldChildren::Blocks(_) => false,
-    })
 }
 
 /// The localized sub-types (`<GroupType>Localized`) of every group holding
@@ -471,6 +460,7 @@ fn emit_localized<'a>(
         collection_tag: doc.collection_tag.clone(),
         timestamps: doc.timestamps,
         is_global: doc.is_global,
+        drafts: doc.drafts,
         select_options: Vec::new(),
         localized: true,
     });
@@ -514,11 +504,13 @@ fn push_resolved<'a>(
     }
 
     let localized = shape.localizes(field);
+    let optional = shape.optional(field);
 
     out.push(Field {
         name: Cow::Borrowed(&field.name),
         ty: shape.shape_ty(field, resolve_ty(field, parent_pascal), localized),
-        optional: shape.optional(field),
+        optional,
+        nullable: shape.is_input() && optional && clears_with_null(field),
     });
 
     for column in field.companion_columns(&field.name) {
@@ -526,6 +518,7 @@ fn push_resolved<'a>(
             name: Cow::Owned(column),
             ty: localized_if(FieldTy::Str, localized),
             optional: true,
+            nullable: shape.is_input(),
         });
     }
 }

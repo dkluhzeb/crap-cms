@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::common::production_code;
+use crate::common::{is_test_module_file, production_code};
 
 fn files_with_ext(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -42,14 +42,16 @@ fn concat_sources(dir: &Path, ext: &str) -> String {
 }
 
 /// Every `.rs` file under `dir`, reduced to live production code — test
-/// modules and comments removed — so a renderer that only a unit test calls,
-/// or that a doc comment merely names, still reads as unwired.
+/// modules and comments removed, including a test module kept in a file of
+/// its own — so a renderer that only a unit test calls, or that a doc comment
+/// merely names, still reads as unwired.
 fn concat_production_rust(dir: &Path) -> String {
     let mut files = Vec::new();
     files_with_ext(dir, "rs", &mut files);
 
     files
         .iter()
+        .filter(|f| !is_test_module_file(f))
         .filter_map(|f| fs::read_to_string(f).ok())
         .map(|src| production_code(&src))
         .collect()
@@ -189,6 +191,24 @@ fn render_scan_ignores_test_modules_and_comments() {
         vec!["render_x".to_string()],
         "a call from a whole-file test module must not count as wiring"
     );
+}
+
+/// Positive control for out-of-line test modules: a file its parent declares
+/// with `#[cfg(test)] mod tests;` — and a file nested inside such a module —
+/// is test code, while the parent and a plainly declared sibling are not.
+#[test]
+fn test_module_files_are_told_from_production_files() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let is_test = |rel: &str| is_test_module_file(&root.join(rel));
+
+    assert!(is_test("src/typegen/lua/collection_classes/tests.rs"));
+    assert!(is_test("src/service/upload/tests/mod.rs"));
+    assert!(is_test("src/service/upload/tests/support.rs"));
+
+    assert!(!is_test("src/typegen/lua/collection_classes.rs"));
+    assert!(!is_test("src/typegen/lua/field.rs"));
+    assert!(!is_test("src/service/upload.rs"));
+    assert!(!is_test("src/lib.rs"));
 }
 
 /// Every custom element defined under `static/components/` must be

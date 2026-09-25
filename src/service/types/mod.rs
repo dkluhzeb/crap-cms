@@ -25,7 +25,7 @@ pub(crate) use deferred_effect::flush_deferred_effects;
 pub use deferred_effect::{DeferredEffect, DeferredQueue, EffectOutcome};
 pub use email_context::EmailContext;
 pub(crate) use email_context::{ResendTarget, ResetTarget};
-pub(crate) use event_row::EventRow;
+pub(crate) use event_row::{EventRow, RowBefore};
 pub use find_by_id_input::FindByIdInput;
 pub use find_documents_input::FindDocumentsInput;
 pub use get_global_input::GetGlobalInput;

@@ -395,13 +395,7 @@ pub fn resolve_queue_actor(
                 session_cookie_token: c.session_cookie.as_deref(),
                 headers: &c.headers,
             };
-            let deps = EvaluateDeps {
-                registry: &infra.registry,
-                token_provider: infra.token_provider.as_ref(),
-                hook_runner: &infra.hook_runner,
-                conn: &conn,
-                locale_config: &infra.locale_config,
-            };
+            let deps = EvaluateDeps::new(infra, &conn);
 
             match evaluate(&request, &deps) {
                 Resolution::Authenticated(auth) => Ok((Some(queued_actor(&auth)), false)),
@@ -479,13 +473,7 @@ fn resolve_principal(
                 session_cookie_token: c.session_cookie.as_deref(),
                 headers: &c.headers,
             };
-            let deps = EvaluateDeps {
-                registry: &infra.registry,
-                token_provider: infra.token_provider.as_ref(),
-                hook_runner: &infra.hook_runner,
-                conn,
-                locale_config: &infra.locale_config,
-            };
+            let deps = EvaluateDeps::new(infra, conn);
 
             match evaluate(&request, &deps) {
                 // The evaluator resolves the user's stored UI-locale

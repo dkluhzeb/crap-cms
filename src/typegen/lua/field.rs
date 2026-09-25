@@ -8,7 +8,10 @@ use std::slice::from_ref;
 use crate::{
     core::{FieldDefinition, FieldType, flatten_array_sub_fields},
     typegen::{
-        helpers::{is_optional, rel_has_many, to_pascal_case, w},
+        helpers::{
+            clears_with_null, has_localized_columns, is_optional, localizes, rel_has_many,
+            to_pascal_case, w,
+        },
         idents::{escape_str, lua_field_key},
     },
 };
@@ -29,25 +32,63 @@ pub(super) enum LuaShape {
     /// document. Every field is optional (a draft may lack required values,
     /// and field read access and `select` leave keys out).
     Read,
+    /// What a `locale = "all"` read returns: [`LuaShape::Read`] with every
+    /// localized column a `{ [locale] = value }` table and a group holding
+    /// one its localized class. `inherited` is whether an enclosing group is
+    /// localized.
+    Localized { inherited: bool },
 }
 
 impl LuaShape {
     fn is_read(self) -> bool {
-        matches!(self, LuaShape::Read)
+        matches!(self, LuaShape::Read | LuaShape::Localized { .. })
+    }
+
+    /// Whether `field` reads as a per-locale table in this shape.
+    fn localizes(self, field: &FieldDefinition) -> bool {
+        let LuaShape::Localized { inherited } = self else {
+            return false;
+        };
+
+        localizes(field, inherited)
+    }
+
+    /// The shape of `group`'s own fields: a localized group localizes every
+    /// column below it.
+    pub(super) fn inside(self, group: &FieldDefinition) -> Self {
+        match self {
+            LuaShape::Localized { inherited } => LuaShape::Localized {
+                inherited: inherited || group.localized,
+            },
+            other => other,
+        }
     }
 
     fn all_optional(self) -> bool {
         !matches!(self, LuaShape::Input)
     }
 
+    /// Whether an optional field of this shape takes `crap.null`: every write
+    /// shape does — an absent key keeps the stored value, `crap.null` clears
+    /// it. A read never returns one.
+    fn clears_with_null(self) -> bool {
+        !self.is_read()
+    }
+
     /// The class namespaces an array row and a group of this shape are
-    /// declared under.
+    /// declared under. A partial write keeps the whole-row class — a row is
+    /// written whole — but takes a group's partial class: a group's
+    /// sub-fields are the owner's own columns, each kept when not sent.
     pub(super) fn sub_type_namespaces(self) -> (&'static str, &'static str) {
         if self.is_read() {
-            ("doc_row", "doc_group")
-        } else {
-            ("array_row", "group")
+            return ("doc_row", "doc_group");
         }
+
+        if self == LuaShape::Partial {
+            return ("array_row", PARTIAL_GROUP_NAMESPACE);
+        }
+
+        ("array_row", "group")
     }
 }
 
@@ -78,22 +119,51 @@ pub(super) fn write_field(
         w!(out, "--- Polymorphic relationship — targets: {}", targets);
     }
 
-    let lua_type = field_to_lua_type(field, parent_pascal, shape);
-    let opt = if shape.all_optional() || is_optional(field) {
-        "?"
-    } else {
-        ""
-    };
+    let optional = shape.all_optional() || is_optional(field);
+    let opt = if optional { "?" } else { "" };
+    let lua_type = per_locale(
+        field_to_lua_type(field, parent_pascal, shape),
+        shape.localizes(field),
+    );
+    let null = null_suffix(shape, optional && clears_with_null(field));
+
     w!(
         out,
-        "---@field {}{opt} {lua_type}",
+        "---@field {}{opt} {lua_type}{null}",
         lua_field_key(&field.name)
     );
 
     // Each companion (a date's `{name}_tz` zone, a code field's `{name}_lang`
     // language pick) travels as an optional string key beside the value.
+    let companion_null = null_suffix(shape, true);
+    let companion_ty = per_locale("string".to_string(), shape.localizes(field));
     for column in field.companion_columns(&field.name) {
-        w!(out, "---@field {}? string", lua_field_key(&column));
+        w!(
+            out,
+            "---@field {}? {companion_ty}{companion_null}",
+            lua_field_key(&column)
+        );
+    }
+}
+
+/// `ty`, or — for a column a `locale = "all"` read returns per locale — the
+/// `{ [locale] = ty }` table holding it.
+fn per_locale(ty: String, localized: bool) -> String {
+    if localized {
+        format!("table<string, {ty}>")
+    } else {
+        ty
+    }
+}
+
+/// `|crap.Null` for an optional key of a write shape — the explicit null that
+/// clears a stored value — else nothing. A required key of a create stays
+/// non-null: it cannot be cleared.
+fn null_suffix(shape: LuaShape, optional: bool) -> &'static str {
+    if optional && shape.clears_with_null() {
+        "|crap.Null"
+    } else {
+        ""
     }
 }
 
@@ -206,10 +276,32 @@ fn sub_type_ref(field: &FieldDefinition, parent_pascal: &str, shape: LuaShape) -
     let sub = format!("{parent_pascal}{}", to_pascal_case(&field.name));
 
     if is_array {
-        format!("crap.{row}.{sub}[]")
-    } else {
-        format!("crap.{group}.{sub}")
+        return format!("crap.{row}.{sub}[]");
     }
+
+    if holds_localized_columns(field, shape) {
+        return format!("crap.{LOCALIZED_GROUP_NAMESPACE}.{sub}");
+    }
+
+    format!("crap.{group}.{sub}")
+}
+
+/// The namespace of a group's partial-write class (`crap.partial.*`,
+/// `crap.data.*`): every sub-field optional.
+pub(super) const PARTIAL_GROUP_NAMESPACE: &str = "group_partial";
+
+/// The namespace of a group's `locale = "all"` read class — declared only for
+/// a group holding a localized column.
+pub(super) const LOCALIZED_GROUP_NAMESPACE: &str = "doc_group_localized";
+
+/// Whether `group` is read with its localized class in `shape`: a
+/// `locale = "all"` read of a group holding a per-locale column.
+pub(super) fn holds_localized_columns(group: &FieldDefinition, shape: LuaShape) -> bool {
+    let LuaShape::Localized { inherited } = shape else {
+        return false;
+    };
+
+    has_localized_columns(&group.fields, inherited || group.localized)
 }
 
 #[cfg(test)]
@@ -502,8 +594,10 @@ mod tests {
         );
     }
 
-    /// A read class references the read-shape sub-type classes; the input and
-    /// partial shapes the input ones.
+    /// A read class references the read-shape sub-type classes; the input
+    /// shape the input ones. A partial write keeps the whole-row class (a row
+    /// is sent whole) but takes a group's partial class (its sub-fields are
+    /// the owner's own columns).
     #[test]
     fn sub_type_references_follow_the_shape() {
         let items = FieldDefinition::builder("items", FieldType::Array)
@@ -521,6 +615,10 @@ mod tests {
         );
         assert_eq!(
             field_to_lua_type(&seo, "Test", LuaShape::Partial),
+            "crap.group_partial.TestSeo"
+        );
+        assert_eq!(
+            field_to_lua_type(&seo, "Test", LuaShape::Input),
             "crap.group.TestSeo"
         );
     }
@@ -532,9 +630,9 @@ mod tests {
     #[test]
     fn non_identifier_field_names_are_quoted_keys() {
         for (name, line) in [
-            ("2fa", "---@field [\"2fa\"]? string\n"),
-            ("end", "---@field [\"end\"]? string\n"),
-            ("private", "---@field [\"private\"]? string\n"),
+            ("2fa", "---@field [\"2fa\"]? string|crap.Null\n"),
+            ("end", "---@field [\"end\"]? string|crap.Null\n"),
+            ("private", "---@field [\"private\"]? string|crap.Null\n"),
         ] {
             let mut out = String::new();
             write_field(&mut out, &text_field(name, false), "Test", LuaShape::Input);
@@ -556,7 +654,10 @@ mod tests {
         let mut out = String::new();
         write_field(&mut out, &starts, "Test", LuaShape::Input);
 
-        assert!(out.contains("---@field [\"2day_tz\"]? string"), "{out}");
+        assert!(
+            out.contains("---@field [\"2day_tz\"]? string|crap.Null"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -565,12 +666,61 @@ mod tests {
 
         for (shape, line) in [
             (LuaShape::Input, "---@field title string\n"),
-            (LuaShape::Partial, "---@field title? string\n"),
+            (LuaShape::Partial, "---@field title? string|crap.Null\n"),
             (LuaShape::Read, "---@field title? string\n"),
         ] {
             let mut out = String::new();
             write_field(&mut out, &title, "Test", shape);
             assert_eq!(out, line);
+        }
+    }
+
+    /// Regression: the write classes rejected `crap.null`, the only way to
+    /// clear a stored value, so clearing an optional field needed a cast. An
+    /// optional write key and its companions take it; a required create key
+    /// and every read key do not.
+    #[test]
+    fn optional_write_keys_accept_crap_null() {
+        let published = FieldDefinition::builder("published_at", FieldType::Date)
+            .timezone(true)
+            .build();
+
+        let mut out = String::new();
+        write_field(&mut out, &published, "Test", LuaShape::Input);
+        assert_eq!(
+            out,
+            "---@field published_at? string|crap.Null\n---@field published_at_tz? string|crap.Null\n"
+        );
+
+        let mut out = String::new();
+        write_field(&mut out, &published, "Test", LuaShape::Read);
+        assert!(!out.contains("crap.Null"), "{out}");
+
+        let mut out = String::new();
+        write_field(
+            &mut out,
+            &text_field("title", true),
+            "Test",
+            LuaShape::Input,
+        );
+        assert_eq!(out, "---@field title string\n");
+    }
+
+    /// Regression: a group write key took `crap.null`, though a null group
+    /// clears nothing — it has no column of its own; its sub-fields are the
+    /// values, and they take `crap.null` themselves.
+    #[test]
+    fn a_group_write_key_takes_no_null() {
+        let seo = FieldDefinition::builder("seo", FieldType::Group)
+            .fields(vec![text_field("title", false)])
+            .build();
+
+        for shape in [LuaShape::Input, LuaShape::Partial] {
+            let mut out = String::new();
+            write_field(&mut out, &seo, "Posts", shape);
+
+            assert!(out.starts_with("---@field seo? crap."), "{out}");
+            assert!(!out.contains("crap.Null"), "{out}");
         }
     }
 }

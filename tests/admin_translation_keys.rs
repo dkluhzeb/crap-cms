@@ -29,7 +29,7 @@ use regex::Regex;
 
 mod common;
 
-use common::production_code;
+use common::{is_test_module_file, production_code};
 
 /// The shipped locales, by file name.
 const LOCALES: [&str; 2] = ["en", "de"];
@@ -144,6 +144,10 @@ fn rust_key_uses() -> Vec<KeyUse> {
     let mut uses = Vec::new();
 
     for path in paths {
+        if is_test_module_file(&path) {
+            continue;
+        }
+
         let src = production_code(&fs::read_to_string(&path).expect("source readable"));
         let location = relative(&path);
 

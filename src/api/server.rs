@@ -1,23 +1,27 @@
 //! gRPC server startup and parameters.
 
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Error, Result};
-use tokio::spawn;
+use tokio::{net::TcpListener, spawn};
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 use tonic_health::server::health_reporter;
+use tower::util::option_layer;
 
 use crate::{
     api::{
         content::{FILE_DESCRIPTOR_SET, content_api_server::ContentApiServer},
         handlers::{ContentService, ContentServiceDeps},
+        listener::capped_incoming,
         rate_limit::GrpcRateLimitLayer,
     },
-    config::CrapConfig,
+    config::{CrapConfig, ServerConfig},
     core::{
-        SERVER_DRAIN_SECS, SharedPasswordProvider, SharedRateLimitBackend, drain_with_deadline,
+        ConnectionCap, SERVER_DRAIN_SECS, SharedPasswordProvider, SharedRateLimitBackend,
+        drain_with_deadline,
         rate_limit::{GrpcRateLimiter, LoginRateLimiter},
+        resolve_max_connections,
     },
     service::AppInfra,
 };
@@ -192,6 +196,21 @@ impl GrpcStartParamsBuilder {
     }
 }
 
+/// The tonic transport configured from `[server]`: a cap on concurrent
+/// streams per connection, HTTP/2 keep-alive pings that drop dead peers, and
+/// the optional per-RPC timeout (which applies to `Subscribe` streams too).
+fn transport_builder(server: &ServerConfig) -> Server {
+    let builder = Server::builder()
+        .max_concurrent_streams(server.grpc_max_concurrent_streams)
+        .http2_keepalive_interval(Some(Duration::from_secs(server.grpc_keepalive_interval)));
+
+    let Some(timeout_secs) = server.grpc_timeout else {
+        return builder;
+    };
+
+    builder.timeout(Duration::from_secs(timeout_secs))
+}
+
 /// Start the gRPC server. Reflection is disabled by default and can be
 /// enabled via `config.server.grpc_reflection`.
 ///
@@ -201,17 +220,17 @@ impl GrpcStartParamsBuilder {
 /// bind, or the server hits an unrecoverable runtime error.
 #[cfg(not(tarpaulin_include))]
 pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationToken) -> Result<()> {
-    let addr = addr.parse()?;
+    let addr: SocketAddr = addr.parse()?;
 
     let grpc_rate_requests = params.config.server.grpc_rate_limit_requests;
     let grpc_rate_window = params.config.server.grpc_rate_limit_window;
     let grpc_reflection = params.config.server.grpc_reflection;
-    let grpc_timeout = params.config.server.grpc_timeout;
     // 32-bit overflow path falls back to gRPC's default (4 MiB) rather than
     // usize::MAX — an effectively-unbounded message size would be a DoS vector.
     let grpc_max_msg =
         usize::try_from(params.config.server.grpc_max_message_size).unwrap_or(4 * 1024 * 1024);
     let cors_layer = params.config.cors.build_layer();
+    let server_config = Arc::new(params.config.server.clone());
 
     // All process-stable infrastructure comes pre-assembled in `params.infra`;
     // only the per-surface bits are threaded in alongside it.
@@ -235,7 +254,7 @@ pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationTo
         grpc_rate_requests,
         grpc_rate_window,
     ));
-    let rate_limit_layer = GrpcRateLimitLayer::new(grpc_limiter);
+    let rate_limit_layer = GrpcRateLimitLayer::new(grpc_limiter, Arc::clone(&server_config));
 
     let content_svc = ContentApiServer::new(content_service)
         .max_decoding_message_size(grpc_max_msg)
@@ -272,21 +291,28 @@ pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationTo
         None
     };
 
-    let mut builder = Server::builder()
-        .layer(tower::util::option_layer(cors_layer))
+    let mut builder = transport_builder(&server_config)
+        .layer(option_layer(cors_layer))
         .layer(rate_limit_layer);
 
-    // Apply gRPC timeout if configured (applies to all RPCs including Subscribe)
-    if let Some(timeout_secs) = grpc_timeout {
-        builder = builder.timeout(Duration::from_secs(timeout_secs));
-    }
+    // Connections are accepted under the `[server] max_connections` cap
+    // (derived from the open-file limit when unset) and must open with the
+    // HTTP/2 preface within `header_read_timeout`.
+    let incoming = capped_incoming(
+        TcpListener::bind(addr).await?,
+        ConnectionCap::new(resolve_max_connections(
+            server_config.max_connections,
+            "gRPC listener",
+        )),
+        Duration::from_secs(server_config.header_read_timeout),
+    );
 
     let serve = async move {
         builder
             .add_service(health_service)
             .add_optional_service(reflection_service)
             .add_service(content_svc)
-            .serve_with_shutdown(addr, shutdown_signal)
+            .serve_with_incoming_shutdown(incoming, shutdown_signal)
             .await
             .map_err(Error::from)
     };

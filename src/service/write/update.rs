@@ -247,10 +247,10 @@ pub(crate) fn update_document_gated(
     // CRUD is accounted for.
     let before_files = document_file_keys(ctx, def, id, input.locale_ctx)?;
 
-    // The status the row has going in, read as late as the files are: a
-    // publish of a draft moves it out of the draft view, which the live event
-    // announces.
-    let status_before = ctx.status_before_write(id, snapshot_only)?;
+    // The row as it goes in, read as late as the files are: a publish of a
+    // draft moves it out of the draft view — content and all — which the live
+    // event announces, and a draft save leaves it where it is.
+    let row_before = ctx.update_row_before(id, snapshot_only, input.locale_ctx)?;
 
     // A draft save reports its snapshot, read for the write's locale with its own
     // rows. A published write reports the stored row, its join fields (arrays,
@@ -325,7 +325,7 @@ pub(crate) fn update_document_gated(
     // the live event is built from it, with the status view it moved from.
     let row = ctx
         .write_event_row(&doc, input.locale_ctx, snapshot_only)?
-        .map(|row| row.status_moved_from(status_before));
+        .map(|row| row.before_write(row_before, snapshot_only));
 
     // Strip read-denied fields from the returned document, after the hooks have
     // seen the full doc.

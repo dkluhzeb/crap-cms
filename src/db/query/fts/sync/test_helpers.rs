@@ -2,10 +2,11 @@
 
 use tempfile::TempDir;
 
-use crate::config::{CrapConfig, LocaleConfig};
-use crate::core::CollectionDefinition;
-use crate::core::{FieldDefinition, FieldType};
-use crate::db::{BoxedConnection, DbConnection, DbValue, pool};
+use crate::{
+    config::{CrapConfig, LocaleConfig, QueryConfig},
+    core::{CollectionDefinition, FieldDefinition, FieldType},
+    db::{BoxedConnection, DbConnection, DbValue, pool, query::fts::search::SearchWords},
+};
 
 pub(super) fn text_field(name: &str) -> FieldDefinition {
     FieldDefinition::builder(name, FieldType::Text).build()
@@ -61,26 +62,26 @@ pub(super) fn insert_post(conn: &dyn DbConnection, id: &str, title: &str, body: 
     ).unwrap();
 }
 
-/// Test-only FTS index-membership probe: sanitized MATCH over the slug's FTS
-/// table, returning matching ids. Replaces the removed ranked `fts_search`
-/// for "is doc X in the index" assertions — no relevance ordering implied.
+/// Test-only FTS index-membership probe: the whole-index query for `query`
+/// over the slug's FTS table, returning matching ids. Replaces the removed
+/// ranked `fts_search` for "is doc X in the index" assertions — no relevance
+/// ordering implied.
 pub(crate) fn fts_match_ids(
-    conn: &dyn crate::db::DbConnection,
+    conn: &dyn DbConnection,
     slug: &str,
     query: &str,
     limit: i64,
 ) -> anyhow::Result<Vec<String>> {
-    let sanitized = crate::db::query::fts::search::sanitize_fts_query(conn, query);
-    if sanitized.is_empty() {
+    let Some(words) = SearchWords::parse(query, &QueryConfig::default())? else {
         return Ok(Vec::new());
-    }
+    };
 
     let table = format!("_fts_{slug}");
     let rows = conn.query_all(
         &format!("SELECT id FROM {table} WHERE {table} MATCH ?1 LIMIT ?2"),
         &[
-            crate::db::DbValue::Text(sanitized),
-            crate::db::DbValue::Integer(limit),
+            DbValue::Text(words.backend_query(conn)),
+            DbValue::Integer(limit),
         ],
     )?;
 

@@ -195,12 +195,16 @@ impl InvalidationTransport for RedisInvalidationTransport {
 /// - document data over [`MAX_EVENT_DATA_BYTES`] is dropped, so a subscriber
 ///   still learns that the document changed — exactly what a metadata-mode
 ///   event carries — instead of the cluster fanning out an unbounded payload;
-/// - a snapshot over [`MAX_EVENT_SNAPSHOT_BYTES`] is dropped, so the event
-///   reaches only subscribers without a row constraint (a constrained view
-///   cannot judge it and drops it — fail-closed).
+/// - snapshots over [`MAX_EVENT_SNAPSHOT_BYTES`] — the row's, plus the row as
+///   it was in the view a move left, which counts toward the same cap — are
+///   both dropped, so the event reaches only subscribers without a row
+///   constraint (a constrained view cannot judge it and drops it, removal
+///   included — fail-closed).
 fn encode_event(event: &MutationEvent) -> Result<String> {
     let data_bytes = json_len(&event.data)?;
-    let gate_bytes = event.gate.as_ref().map(json_len).transpose()?.unwrap_or(0);
+    let prior_gate = event.view.as_ref().and_then(|v| v.prior_gate.as_ref());
+    let gate_bytes = event.gate.as_ref().map(json_len).transpose()?.unwrap_or(0)
+        + prior_gate.map(json_len).transpose()?.unwrap_or(0);
 
     let drop_data = data_bytes > MAX_EVENT_DATA_BYTES;
     let drop_gate = gate_bytes > MAX_EVENT_SNAPSHOT_BYTES;
@@ -224,6 +228,10 @@ fn encode_event(event: &MutationEvent) -> Result<String> {
             MAX_EVENT_SNAPSHOT_BYTES,
         );
         bounded.gate = None;
+
+        if let Some(view) = bounded.view.as_mut() {
+            view.prior_gate = None;
+        }
     }
 
     encode_payload(&bounded)
@@ -467,10 +475,57 @@ mod tests {
 
     use crate::core::event::sequence::stamp_event;
     use crate::core::event::{EventOperation, EventTarget};
-    use crate::core::{Document, DocumentId, EventGateSnapshot, EventViewMeta, Slug};
+    use crate::core::{
+        Document, DocumentId, EventGateSnapshot, EventViewMeta, EventViewPlacement, Slug,
+    };
     use crate::db::{Filter, FilterClause, FilterOp};
 
     use super::*;
+
+    /// `event` as an unpublish-with-content-change that left the published
+    /// view holding what `left` captured.
+    fn moved_out_as(mut event: MutationEvent, left: Option<EventGateSnapshot>) -> MutationEvent {
+        let draft = EventViewPlacement {
+            status: Some("draft".into()),
+            trashed: false,
+        };
+
+        event.view = Some(
+            EventViewMeta::at(draft)
+                .moved_from(Some(EventViewPlacement::published()))
+                .left_as(left),
+        );
+
+        event
+    }
+
+    /// The row as it was in the view a move left crosses nodes with the
+    /// event, so the removal is judged the same everywhere.
+    #[test]
+    fn the_left_view_snapshot_survives_the_wire() {
+        let event = event_with_payload_and_snapshot(16, 16);
+        let left = event.gate.clone();
+        let event = moved_out_as(event, left.clone());
+
+        let decoded = encode_decode(&event);
+
+        assert_eq!(decoded.view.and_then(|v| v.prior_gate), left);
+    }
+
+    /// The left view's snapshot counts toward the snapshot cap, and over it
+    /// both snapshots go — a constrained subscriber then receives neither the
+    /// event nor its removal (fail-closed).
+    #[test]
+    fn an_oversized_left_view_snapshot_goes_with_the_gate() {
+        let event = event_with_payload_and_snapshot(16, MAX_EVENT_SNAPSHOT_BYTES / 2);
+        let left = event.gate.clone();
+        let event = moved_out_as(event, left);
+
+        let decoded = encode_decode(&event);
+
+        assert!(decoded.gate.is_none());
+        assert!(decoded.view.expect("view").prior_gate.is_none());
+    }
 
     #[test]
     fn mutation_event_json_wire_format_is_stable() {

@@ -2,23 +2,24 @@
 
 use anyhow::{Context as _, Result};
 
-use crate::db::query::fts::fields::get_fts_columns;
 use crate::db::query::fts::index::{ColumnText, FtsIndex};
+use crate::db::query::fts::layout::{FtsColumn, fts_columns, pg_vectors};
 use crate::db::query::fts::search::{fts_table_name, table_exists};
 use crate::db::query::fts::sync::fts_delete;
 use crate::db::query::helpers::{placeholder_list, quote_ident};
 use crate::db::{DbConnection, DbRow, DbValue};
 
-use super::helpers::pg_tsvector;
+use super::helpers::{column_texts, pg_tsvector, pg_vector_texts};
 
 /// Insert or update document `id` in `index`.
 ///
 /// Reads the indexed columns straight from the document's row — the same
-/// column set the startup rebuild indexes (`get_fts_columns`, so both
-/// backends index exactly the searchable fields, per locale). Callers only
-/// pass the id: the index never depends on the shape of an in-memory
-/// `Document`, which a locale-aware re-read aliases (`title__en AS title`)
-/// and which would otherwise index every column as empty.
+/// columns, through the same read expressions, the startup rebuild indexes
+/// (`fts_columns`, so both backends index exactly the searchable fields, per
+/// locale and through the locale fallback). Callers only pass the id: the
+/// index never depends on the shape of an in-memory `Document`, which a
+/// locale-aware re-read aliases (`title__en AS title`) and which would
+/// otherwise index every column as empty.
 ///
 /// No-op if the FTS table doesn't exist; a vanished row drops its index
 /// entry.
@@ -33,44 +34,59 @@ pub fn fts_upsert(conn: &dyn DbConnection, index: &FtsIndex<'_>, id: &str) -> Re
         return Ok(());
     }
 
-    let fts_cols = get_fts_columns(index.def, index.locale_config)?;
-    if fts_cols.is_empty() {
+    let columns = fts_columns(index.def, index.locale_config)?;
+    if columns.is_empty() {
         return Ok(());
     }
 
-    let Some(row) = read_indexed_row(conn, index.slug, id, &fts_cols)? else {
+    let Some(row) = read_indexed_row(conn, index.slug, id, &columns)? else {
         return fts_delete(conn, index.slug, id);
     };
 
-    let column_text = ColumnText::new(index);
-    let columns: Vec<(&str, String)> = fts_cols
-        .iter()
-        .enumerate()
-        .map(|(i, col)| {
-            (
-                col.as_str(),
-                column_text.text(col, row.text_at(i).unwrap_or("")),
-            )
-        })
-        .collect();
+    let texts = column_texts(&columns, &ColumnText::new(index), |i| row.text_at(i));
+    let written = written_columns(conn, index, columns, texts)?;
 
     if conn.is_postgres() {
-        upsert_postgres(conn, &fts_table, id, &columns)
+        upsert_postgres(conn, &fts_table, id, written)
     } else {
-        upsert_sqlite(conn, &fts_table, id, columns)
+        upsert_sqlite(conn, &fts_table, id, written)
     }
 }
 
-/// Select the indexed columns of one row, in `fts_cols` order, NULLs as `''`.
+/// Each column the upsert writes, paired with its text: the tsvectors (each
+/// over its member columns' `texts`) on Postgres, the indexed `columns`
+/// themselves on `SQLite`.
+fn written_columns(
+    conn: &dyn DbConnection,
+    index: &FtsIndex<'_>,
+    columns: Vec<FtsColumn>,
+    texts: Vec<String>,
+) -> Result<Vec<(String, String)>> {
+    if !conn.is_postgres() {
+        return Ok(columns.into_iter().map(|c| c.name).zip(texts).collect());
+    }
+
+    let vectors = pg_vectors(&columns, index.locale_config)?;
+    let vector_texts: Vec<String> = pg_vector_texts(&vectors, &texts).collect();
+
+    Ok(vectors
+        .into_iter()
+        .map(|v| v.name)
+        .zip(vector_texts)
+        .collect())
+}
+
+/// Select the indexed columns of one row through their read expressions, in
+/// `columns` order, NULLs as `''`.
 fn read_indexed_row(
     conn: &dyn DbConnection,
     slug: &str,
     id: &str,
-    fts_cols: &[String],
+    columns: &[FtsColumn],
 ) -> Result<Option<DbRow>> {
-    let select: Vec<String> = fts_cols
+    let select: Vec<String> = columns
         .iter()
-        .map(|c| format!("COALESCE({}, '')", quote_ident(c)))
+        .map(|c| format!("COALESCE({}, '')", c.read_expr))
         .collect();
     let sql = format!(
         "SELECT {} FROM \"{slug}\" WHERE id = {}",
@@ -82,41 +98,47 @@ fn read_indexed_row(
         .with_context(|| format!("FTS row read from {slug}"))
 }
 
-/// Upsert into Postgres FTS (single tsvector column, ON CONFLICT).
+/// Upsert into Postgres FTS: each `(tsvector column, text)` of `vectors`
+/// built with `to_tsvector`, ON CONFLICT replacing every one.
 fn upsert_postgres(
     conn: &dyn DbConnection,
     fts_table: &str,
     id: &str,
-    columns: &[(&str, String)],
+    vectors: Vec<(String, String)>,
 ) -> Result<()> {
-    let combined = columns
+    let names: Vec<String> = vectors.iter().map(|(name, _)| quote_ident(name)).collect();
+    let values: Vec<String> = (0..vectors.len())
+        .map(|i| pg_tsvector(&conn.placeholder(i + 2)))
+        .collect();
+    let updates: Vec<String> = names
         .iter()
-        .map(|(_, text)| text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+        .map(|name| format!("{name} = EXCLUDED.{name}"))
+        .collect();
+
     let sql = format!(
-        "INSERT INTO {fts_table}(id, tsv) VALUES ({p1}, {}) \
-         ON CONFLICT (id) DO UPDATE SET tsv = EXCLUDED.tsv",
-        pg_tsvector(&p2)
+        "INSERT INTO {fts_table}(id, {}) VALUES ({}, {}) ON CONFLICT (id) DO UPDATE SET {}",
+        names.join(", "),
+        conn.placeholder(1),
+        values.join(", "),
+        updates.join(", ")
     );
 
-    conn.execute(
-        &sql,
-        &[DbValue::Text(id.to_string()), DbValue::Text(combined)],
-    )
-    .with_context(|| format!("FTS upsert in {fts_table}"))?;
+    let mut params = vec![DbValue::Text(id.to_string())];
+    params.extend(vectors.into_iter().map(|(_, text)| DbValue::Text(text)));
+
+    conn.execute(&sql, &params)
+        .with_context(|| format!("FTS upsert in {fts_table}"))?;
 
     Ok(())
 }
 
-/// Upsert into `SQLite` FTS5 (delete + insert, no ON CONFLICT support).
+/// Upsert into `SQLite` FTS5 (delete + insert, no ON CONFLICT support):
 /// `columns` pairs each indexed column with its text.
 fn upsert_sqlite(
     conn: &dyn DbConnection,
     fts_table: &str,
     id: &str,
-    columns: Vec<(&str, String)>,
+    columns: Vec<(String, String)>,
 ) -> Result<()> {
     conn.execute(
         &format!(
@@ -130,7 +152,7 @@ fn upsert_sqlite(
 
     let quoted_cols = columns
         .iter()
-        .map(|(col, _)| quote_ident(col))
+        .map(|(column, _)| quote_ident(column))
         .collect::<Vec<_>>()
         .join(", ");
 

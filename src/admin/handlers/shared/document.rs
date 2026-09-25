@@ -1,14 +1,14 @@
 //! Document helpers — value flattening, labels, validation translation, ref counts.
 
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 use serde_json::{Map, Value};
 
 use crate::{
-    admin::Translations,
+    admin::{Translations, handlers::shared::ErrorLabels},
     core::{
-        DocumentFields, FieldAdmin, FieldDefinition, FieldType, ValidationError, field, find_field,
-        prefixed_name,
+        DocumentFields, FieldAdmin, FieldDefinition, FieldError, FieldType, ValidationError, field,
+        find_field, prefixed_name,
     },
     db::DbPool,
     hooks::HookRunner,
@@ -18,6 +18,15 @@ use crate::{
 /// Auto-generate a label from a field name (e.g. "`my_field`" -> "My Field").
 pub fn auto_label_from_name(name: &str) -> String {
     field::to_title_case(name)
+}
+
+/// The display label for a field: its admin label resolved in the active
+/// label locale, else the name title-cased.
+pub fn field_label(field: &FieldDefinition) -> String {
+    match &field.admin.label {
+        Some(label) => label.resolve_current().to_string(),
+        None => auto_label_from_name(&field.name),
+    }
 }
 
 /// Compute a custom row label for an array or blocks row.
@@ -118,22 +127,50 @@ pub(crate) fn value_to_form_string(v: &Value) -> String {
     }
 }
 
+/// The error's interpolation params with its `field` name replaced by the
+/// field's display label chain in `locale` — kept as-is when the error path
+/// does not resolve to a schema field.
+fn labelled_params<'a>(
+    e: &'a FieldError,
+    labels: &ErrorLabels<'_>,
+    locale: &str,
+) -> Cow<'a, HashMap<String, String>> {
+    if !e.params.contains_key("field") {
+        return Cow::Borrowed(&e.params);
+    }
+
+    let Some(chain) = labels.label_chain(&e.field, locale) else {
+        return Cow::Borrowed(&e.params);
+    };
+
+    let mut params = e.params.clone();
+    params.insert("field".to_string(), chain);
+
+    Cow::Owned(params)
+}
+
 /// Translate validation errors using the translation system.
-/// If a `FieldError` has a `key`, resolve it through `Translations::get_interpolated`;
-/// otherwise use the raw English `message` (custom Lua validator messages).
+///
+/// A `FieldError` with a `key` resolves through
+/// `Translations::get_interpolated`, naming the field by its (localized)
+/// label chain from `labels` rather than its schema name; one without a key
+/// keeps its raw `message` (custom Lua validator messages).
 pub fn translate_validation_errors(
     ve: &ValidationError,
+    labels: &ErrorLabels<'_>,
     translations: &Translations,
     locale: &str,
 ) -> HashMap<String, String> {
     ve.errors
         .iter()
         .map(|e| {
-            let msg = if let Some(ref key) = e.key {
-                translations.get_interpolated(locale, key, &e.params)
-            } else {
-                e.message.clone()
+            let msg = match &e.key {
+                Some(key) => {
+                    translations.get_interpolated(locale, key, &labelled_params(e, labels, locale))
+                }
+                None => e.message.clone(),
             };
+
             (e.field.clone(), msg)
         })
         .collect()
@@ -151,9 +188,11 @@ pub fn lookup_ref_count(pool: &DbPool, slug: &str, id: &str) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use serde_json::json;
 
-    use crate::core::{FieldAdmin, FieldDefinition, FieldType, validate::FieldError};
+    use crate::core::LocalizedString;
 
     use super::*;
 
@@ -375,40 +414,124 @@ mod tests {
     }
 
     fn test_translations() -> Translations {
-        Translations::load(std::path::Path::new("/nonexistent"))
+        Translations::load(Path::new("/nonexistent"))
+    }
+
+    /// A `title` field labelled `Title`/`Titel` and a `seo` group holding one.
+    fn labelled_schema() -> Vec<FieldDefinition> {
+        let title_label = LocalizedString::Localized(HashMap::from([
+            ("en".to_string(), "Title".to_string()),
+            ("de".to_string(), "Titel".to_string()),
+        ]));
+        let title = FieldDefinition::builder("title", FieldType::Text)
+            .admin(FieldAdmin::builder().label(title_label).build())
+            .build();
+        let seo = FieldDefinition::builder("seo", FieldType::Group)
+            .fields(vec![title.clone()])
+            .build();
+
+        vec![title, seo]
+    }
+
+    /// A `validation.required` error as the built-in checks raise it: keyed by
+    /// its data path, naming the field by its schema name.
+    fn required_error(path: &str, name: &str) -> ValidationError {
+        ValidationError::new(vec![
+            FieldError::with_key(path, format!("{name} is required"), "validation.required")
+                .with_param("field", name),
+        ])
     }
 
     #[test]
-    fn translate_with_key_uses_translation() {
-        let translations = test_translations();
+    fn field_label_uses_admin_label() {
+        let f = FieldDefinition::builder("my_field", FieldType::Text)
+            .admin(
+                FieldAdmin::builder()
+                    .label(LocalizedString::Plain("Custom Label".into()))
+                    .build(),
+            )
+            .build();
+        assert_eq!(field_label(&f), "Custom Label");
+    }
 
+    #[test]
+    fn field_label_falls_back_to_name() {
+        let f = FieldDefinition::builder("my_field", FieldType::Text).build();
+        assert_eq!(field_label(&f), "My Field");
+    }
+
+    #[test]
+    fn translate_with_key_names_the_field_by_its_label() {
+        let fields = labelled_schema();
+        let labels = ErrorLabels::new(&fields, None);
+
+        let map = translate_validation_errors(
+            &required_error("title", "title"),
+            &labels,
+            &test_translations(),
+            "en",
+        );
+        assert_eq!(map.get("title").unwrap(), "Title is required");
+    }
+
+    /// Regression: the German message interpolated the raw schema name
+    /// ("title ist erforderlich") under a field labelled "Titel".
+    #[test]
+    fn translate_german_locale_uses_the_german_label() {
+        let fields = labelled_schema();
+        let labels = ErrorLabels::new(&fields, None);
+
+        let map = translate_validation_errors(
+            &required_error("title", "title"),
+            &labels,
+            &test_translations(),
+            "de",
+        );
+        assert_eq!(map.get("title").unwrap(), "Titel ist erforderlich");
+    }
+
+    /// Regression: a grouped field's completeness error named the flat column
+    /// (`seo__title ist in der Sprache 'de' erforderlich`).
+    #[test]
+    fn translate_grouped_field_uses_the_label_chain() {
+        let fields = labelled_schema();
+        let labels = ErrorLabels::new(&fields, None);
         let ve = ValidationError::new(vec![
-            FieldError::with_key("title", "title is required", "validation.required")
-                .with_param("field", "Title"),
+            FieldError::with_key(
+                "seo__title",
+                "seo__title is required",
+                "validation.required_locale",
+            )
+            .with_param("field", "seo__title")
+            .with_param("locale", "de"),
         ]);
 
-        let map = translate_validation_errors(&ve, &translations, "en");
-        assert_eq!(map.get("title").unwrap(), "Title is required");
+        let map = translate_validation_errors(&ve, &labels, &test_translations(), "de");
+        let msg = map.get("seo__title").unwrap();
+        assert!(msg.starts_with("Seo › Titel "), "got: {msg}");
+    }
+
+    #[test]
+    fn translate_keeps_the_raw_name_for_an_unresolvable_path() {
+        let fields = labelled_schema();
+        let labels = ErrorLabels::new(&fields, None);
+
+        let map = translate_validation_errors(
+            &required_error("unknown", "unknown"),
+            &labels,
+            &test_translations(),
+            "en",
+        );
+        assert_eq!(map.get("unknown").unwrap(), "unknown is required");
     }
 
     #[test]
     fn translate_without_key_uses_raw_message() {
-        let translations = test_translations();
+        let fields = labelled_schema();
+        let labels = ErrorLabels::new(&fields, None);
         let ve = ValidationError::new(vec![FieldError::new("title", "custom lua error")]);
-        let map = translate_validation_errors(&ve, &translations, "en");
+
+        let map = translate_validation_errors(&ve, &labels, &test_translations(), "en");
         assert_eq!(map.get("title").unwrap(), "custom lua error");
-    }
-
-    #[test]
-    fn translate_german_locale() {
-        let translations = test_translations();
-
-        let ve = ValidationError::new(vec![
-            FieldError::with_key("title", "title is required", "validation.required")
-                .with_param("field", "Titel"),
-        ]);
-
-        let map = translate_validation_errors(&ve, &translations, "de");
-        assert_eq!(map.get("title").unwrap(), "Titel ist erforderlich");
     }
 }

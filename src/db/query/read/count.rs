@@ -66,12 +66,16 @@ pub fn count_with_search(
         sql.push_str(&where_clause);
     }
 
-    // FTS5 full-text search filter
-    if let Some((clause, sanitized)) =
-        search.and_then(|term| fts::fts_where_clause(conn, slug, term, params.len() + 1))
-    {
-        append_sql_condition(&mut sql, &mut has_where, &clause);
-        params.push(DbValue::Text(sanitized));
+    // Full-text search filter, in the requested locale's text.
+    if let Some(term) = search {
+        let search = fts::FtsSearch::builder(slug, def, term)
+            .locale_ctx(locale_ctx)
+            .build();
+
+        if let Some((clause, query)) = fts::fts_where_clause(conn, &search, params.len() + 1)? {
+            append_sql_condition(&mut sql, &mut has_where, &clause);
+            params.push(DbValue::Text(query));
+        }
     }
 
     append_soft_delete_filter(def, include_deleted, &mut sql, &mut has_where);

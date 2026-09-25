@@ -67,13 +67,7 @@ pub(crate) fn evaluate_admin_request(
             session_cookie_token: session_cookie,
             headers: &header_map,
         },
-        &EvaluateDeps {
-            registry: &state.infra.registry,
-            token_provider: state.infra.token_provider.as_ref(),
-            hook_runner: &state.infra.hook_runner,
-            conn: &conn,
-            locale_config: &state.infra.locale_config,
-        },
+        &EvaluateDeps::new(&state.infra, &conn),
     ))
 }
 

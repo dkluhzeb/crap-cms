@@ -13,10 +13,12 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState, Translations,
-        handlers::shared::{translate_validation_errors, value_to_form_string},
+        handlers::shared::{
+            ErrorLabels, translate_validation_errors, ui_locale_of, value_to_form_string,
+        },
     },
     core::{AuthUser, DocumentFields, ValidationError},
-    service::op,
+    service::{ServiceError, op},
 };
 
 /// JSON request body for validation endpoints.
@@ -31,10 +33,11 @@ pub struct ValidateRequest {
 /// Build a JSON response from a `ValidationError`, translating field errors via i18n.
 pub fn validation_error_response(
     ve: &ValidationError,
+    labels: &ErrorLabels<'_>,
     translations: &Translations,
     locale: &str,
 ) -> Response {
-    let error_map = translate_validation_errors(ve, translations, locale);
+    let error_map = translate_validation_errors(ve, labels, translations, locale);
 
     Json(json!({
         "valid": false,
@@ -70,22 +73,24 @@ pub fn validation_error_response_simple(msg: &str) -> Response {
 
 /// Handle a shared-op dry-run outcome, returning the appropriate JSON
 /// response. Validation failures are translated via i18n (the op keeps the
-/// typed [`ValidationError`] for exactly this).
+/// typed [`ValidationError`] for exactly this), naming each field by its label
+/// as `labels` resolves it.
 pub fn handle_validation_outcome(
     result: Result<op::ValidateOutput, op::CoreError>,
     auth_user: Option<&Extension<AuthUser>>,
     state: &AdminState,
+    labels: &ErrorLabels<'_>,
 ) -> Response {
     match result {
         Ok(None) => validation_ok_response(),
         Ok(Some(ve)) => {
-            let locale = auth_user.map_or("en", |Extension(au)| au.ui_locale.as_str());
+            let locale = ui_locale_of(auth_user);
 
-            validation_error_response(&ve, &state.translations, locale)
+            validation_error_response(&ve, labels, &state.translations, locale)
         }
         // The shared body gates the dry-run by the target op's access rule —
         // the same check this endpoint used to duplicate at the codec.
-        Err(op::CoreError::Service(crate::service::ServiceError::AccessDenied(_))) => {
+        Err(op::CoreError::Service(ServiceError::AccessDenied(_))) => {
             validation_error_response_simple("Access denied")
         }
         Err(e) => {

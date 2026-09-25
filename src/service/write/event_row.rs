@@ -9,10 +9,11 @@
 use anyhow::anyhow;
 
 use crate::{
-    core::Document,
+    config::LocaleConfig,
+    core::{Document, EventViewPlacement},
     db::{LocaleContext, query},
     service::{
-        Def, EventRow, ServiceContext, ServiceError,
+        Def, EventRow, RowBefore, ServiceContext, ServiceError,
         persist::{DraftDocumentArgs, draft_document},
     },
 };
@@ -51,25 +52,77 @@ impl ServiceContext<'_> {
         Ok(Some(EventRow::new(&row)))
     }
 
-    /// The stored `_status` of collection row `id` before this write changes
-    /// it, for the write's live event to announce a move between the status
-    /// views (see [`EventRow::status_moved_from`]) — a publish moves a draft
-    /// out of the draft view. `None` when there is nothing to announce: this
-    /// operation publishes no event, the collection has no drafts, or the
-    /// write saves a draft version (`draft`), which leaves the stored row
-    /// where it is. Read under the write's row lock, before it persists.
-    pub(crate) fn status_before_write(&self, id: &str, draft: bool) -> Result<Option<String>> {
-        let Def::Collection(def) = &self.def else {
-            return Ok(None);
-        };
-
-        if draft || !def.has_drafts() || !self.publishes_events() {
+    /// The row as stored before this write changes it (see [`RowBefore`]),
+    /// read in the default locale the event is judged in, under the write's
+    /// row lock, before it persists — for a write whose event announces a
+    /// move that changes the row's content too (a version restore): the view
+    /// the row left is judged against what it held there. `None` when this
+    /// operation publishes no event; `locale_config` falls back to the
+    /// context's.
+    pub(crate) fn row_before_write(
+        &self,
+        id: &str,
+        locale_config: Option<&LocaleConfig>,
+    ) -> Result<Option<RowBefore>> {
+        if !self.publishes_events() {
             return Ok(None);
         }
 
-        let conn = self.resolve_conn()?;
+        let default = locale_config
+            .or(self.locale_config)
+            .and_then(LocaleContext::default_for);
+        let row = self.stored_row(id, default.as_ref())?;
 
-        Ok(query::get_document_status(conn.as_ref(), self.slug, id)?)
+        Ok(Some(RowBefore::of(&row)))
+    }
+
+    /// The row as an update finds it, when its event needs it (see
+    /// [`EventRow::before_write`]): a published update of a collection with
+    /// drafts can move the row between the status views — a publish of a
+    /// draft leaves the draft view, content and all — and a draft save
+    /// (`draft`) describes a pending draft while the stored row stays where
+    /// it is. `None` otherwise: without drafts an update never moves a row.
+    ///
+    /// Only the row's placement is read unless the update publishes a draft:
+    /// a draft save leaves the stored row where it is, and a published update
+    /// of a row outside the draft view keeps it in its view, so no view is
+    /// judged against the content the row held. A publish of a draft is — and
+    /// a row constraint can name any stored field, so then the whole row is
+    /// read.
+    pub(crate) fn update_row_before(
+        &self,
+        id: &str,
+        draft: bool,
+        write_locale: Option<&LocaleContext>,
+    ) -> Result<Option<RowBefore>> {
+        let has_drafts = match &self.def {
+            Def::Collection(def) => def.has_drafts(),
+            Def::Global(def) => draft && def.has_drafts(),
+            Def::None => false,
+        };
+
+        if !has_drafts || !self.publishes_events() {
+            return Ok(None);
+        }
+
+        let placement = self.stored_placement(id)?;
+
+        if draft || !placement.is_draft() {
+            return Ok(Some(RowBefore::placed(placement)));
+        }
+
+        self.row_before_write(id, write_locale.map(|lc| &lc.config))
+    }
+
+    /// Where the target's stored row sits across the content views, reading
+    /// only its `_status` (and, for a collection with a trash, `_deleted_at`).
+    fn stored_placement(&self, id: &str) -> Result<EventViewPlacement> {
+        let conn = self.resolve_conn()?;
+        let trash = matches!(&self.def, Def::Collection(def) if def.soft_delete);
+
+        query::find_view_placement(conn.as_ref(), &self.version_table(), id, trash)?.ok_or_else(
+            || ServiceError::Internal(anyhow!("Document {id} vanished from {}", self.slug)),
+        )
     }
 
     /// The target's stored row in `locale_ctx` as a published write reports
@@ -125,10 +178,10 @@ mod tests {
     use crate::{
         config::LocaleConfig,
         core::{
-            CollectionDefinition, FieldDefinition, FieldType, SharedEventTransport, VersionsConfig,
-            event::InProcessEventBus,
+            CollectionDefinition, EventViewMeta, FieldDefinition, FieldType, SharedEventTransport,
+            VersionsConfig, event::InProcessEventBus,
         },
-        db::{DbConnection, InMemoryConn, LocaleMode},
+        db::{DbConnection, InMemoryConn, LocaleMode, query::test_helpers::CountingConn},
     };
 
     fn locales() -> LocaleConfig {
@@ -234,44 +287,116 @@ mod tests {
         def
     }
 
-    /// A write that may publish a draft reads the status the row has going
-    /// in; a draft save, a collection without drafts, or a write that
-    /// publishes no event reads nothing.
+    /// The status view the row an update finds sits in, as its event
+    /// records it: a published write moves from it, a draft save leaves it.
+    fn recorded(before: Option<RowBefore>, draft: bool) -> EventViewMeta {
+        let mut now = Document::new("p1".to_string());
+        now.fields.insert("_status".into(), json!("published"));
+
+        EventRow::new(&now).before_write(before, draft).view()
+    }
+
+    /// An update of a collection with drafts reads the row it finds — a
+    /// published write to record the move it makes, a draft save to record
+    /// where the stored row stays; a collection without drafts, or a write
+    /// that publishes no event, reads nothing.
     #[test]
-    fn status_before_write_reads_only_what_an_event_can_announce() {
+    fn update_row_before_reads_only_what_an_event_can_announce() {
         let conn = seeded();
         conn.execute("UPDATE posts SET _status = 'draft' WHERE id = 'p1'", &[])
             .unwrap();
+        let config = locales();
 
         let drafted = drafted_posts();
         let publishing = ServiceContext::collection("posts", &drafted)
             .conn(&conn)
+            .locale_config(Some(&config))
             .event_transport(Some(transport()))
             .build();
 
-        assert_eq!(
-            publishing
-                .status_before_write("p1", false)
-                .unwrap()
-                .as_deref(),
-            Some("draft")
-        );
-        assert_eq!(publishing.status_before_write("p1", true).unwrap(), None);
+        let published = publishing.update_row_before("p1", false, None).unwrap();
+        let view = recorded(published, false);
+        assert_eq!(view.prior.and_then(|p| p.status).as_deref(), Some("draft"));
+
+        let draft_save = publishing.update_row_before("p1", true, None).unwrap();
+        assert!(draft_save.is_some(), "a draft save records the stored row");
 
         let plain = posts();
         let without_drafts = ServiceContext::collection("posts", &plain)
             .conn(&conn)
+            .locale_config(Some(&config))
             .event_transport(Some(transport()))
             .build();
-        assert_eq!(
-            without_drafts.status_before_write("p1", false).unwrap(),
-            None
+        assert!(
+            without_drafts
+                .update_row_before("p1", false, None)
+                .unwrap()
+                .is_none()
         );
 
         let silent = ServiceContext::collection("posts", &drafted)
             .conn(&conn)
+            .locale_config(Some(&config))
             .build();
-        assert_eq!(silent.status_before_write("p1", false).unwrap(), None);
+        assert!(
+            silent
+                .update_row_before("p1", false, None)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// An update context over `conn` for the drafted `posts`, with events on.
+    fn drafted_ctx<'a>(
+        conn: &'a CountingConn<'a>,
+        def: &'a CollectionDefinition,
+        config: &'a LocaleConfig,
+    ) -> ServiceContext<'a> {
+        ServiceContext::collection("posts", def)
+            .conn(conn)
+            .locale_config(Some(config))
+            .event_transport(Some(transport()))
+            .build()
+    }
+
+    /// Regression: every update of a collection with drafts read the whole
+    /// stored row — every column, every array, block and relationship row —
+    /// though only a publish of a draft judges a view against the content the
+    /// row held. A draft save and a published update of a published row now
+    /// read the row's placement alone.
+    #[test]
+    fn only_a_publish_of_a_draft_reads_the_whole_row() {
+        let seeded = seeded();
+        let def = drafted_posts();
+        let config = locales();
+
+        seeded
+            .execute(
+                "UPDATE posts SET _status = 'published' WHERE id = 'p1'",
+                &[],
+            )
+            .unwrap();
+
+        let conn = CountingConn::new(&seeded);
+        let ctx = drafted_ctx(&conn, &def, &config);
+        ctx.update_row_before("p1", false, None).unwrap().unwrap();
+        ctx.update_row_before("p1", true, None).unwrap().unwrap();
+        assert_eq!(conn.reads(), 2, "one placement read per update");
+
+        seeded
+            .execute("UPDATE posts SET _status = 'draft' WHERE id = 'p1'", &[])
+            .unwrap();
+
+        let conn = CountingConn::new(&seeded);
+        let ctx = drafted_ctx(&conn, &def, &config);
+        let before = ctx.update_row_before("p1", false, None).unwrap();
+        assert!(conn.reads() > 1, "a publish of a draft reads the row");
+
+        let view = recorded(before, false);
+        assert!(
+            view.prior_gate.is_some(),
+            "the draft view is judged against what the row held there"
+        );
     }
 
     /// Nothing is read for a write that publishes no event.

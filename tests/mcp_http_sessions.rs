@@ -33,9 +33,9 @@ use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
 use crap_cms::config::CrapConfig;
-use crap_cms::core::Registry;
 use crap_cms::core::collection::CollectionDefinition;
 use crap_cms::core::field::{FieldDefinition, FieldType};
+use crap_cms::core::{LiveSlots, Registry};
 use crap_cms::db::{migrate, pool};
 use crap_cms::hooks::lifecycle::HookRunner;
 
@@ -124,8 +124,7 @@ fn setup() -> TestApp {
         ip_mfa_limiter: Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(20, 300)),
         has_auth: false,
         translations,
-        sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        max_sse_connections: 0,
+        sse_slots: LiveSlots::new(0, 0),
         shutdown: tokio_util::sync::CancellationToken::new(),
         password_provider: Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
@@ -268,4 +267,58 @@ async fn delete_terminates_the_session() {
         .unwrap();
     assert_ne!(resp.status(), StatusCode::NO_CONTENT);
     assert_ne!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// A POST to /mcp with `authorization` from `peer`.
+fn keyed_request(authorization: &str, peer: [u8; 4]) -> Request<Body> {
+    let mut request = Request::builder()
+        .uri("/mcp")
+        .method("POST")
+        .header("authorization", authorization)
+        .header("content-type", "application/json")
+        .body(Body::from(INITIALIZE))
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from((peer, 0))));
+    request
+}
+
+/// Regression: the endpoint compared any number of guessed keys from one
+/// address. A client whose failures reach the per-IP budget is refused with
+/// 429 — even with the right key — while other addresses are unaffected.
+#[tokio::test]
+async fn failed_api_keys_lock_the_client_out() {
+    let app = setup();
+    let right = format!("Bearer {API_KEY}");
+
+    for _ in 0..20 {
+        let resp = app
+            .router
+            .clone()
+            .oneshot(keyed_request("Bearer wrong", [10, 0, 0, 1]))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "a JSON-RPC auth error");
+    }
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(keyed_request(&right, [10, 0, 0, 1]))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(keyed_request(&right, [10, 0, 0, 2]))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "another client is unaffected"
+    );
 }

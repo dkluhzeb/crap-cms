@@ -20,8 +20,8 @@ use crate::{
         CollectionDefinition, Document, DocumentFields, FieldError, ReqContext, SharedStorage,
         ValidationError,
         upload::{
-            CleanupGuard, CollectionUpload, InspectedUpload, QueuedConversion, UploadedFile,
-            inject_upload_metadata, inspect_upload, process_upload,
+            CleanupGuard, CollectionUpload, ImageProcessingBusy, InspectedUpload, QueuedConversion,
+            UploadedFile, inject_upload_metadata, inspect_upload, process_upload,
         },
     },
     db::LocaleContext,
@@ -181,6 +181,17 @@ fn file_error(e: &Error) -> ServiceError {
     )]))
 }
 
+/// A failure storing the file: [`ImageProcessingBusy`] is transient — the same
+/// upload succeeds once the image-processing burst drains, so it answers a
+/// retryable status — and anything else is a `_file` validation error.
+fn store_error(e: Error) -> ServiceError {
+    if e.is::<ImageProcessingBusy>() {
+        return ServiceError::Transient(e);
+    }
+
+    file_error(&e)
+}
+
 /// Validate `file` for the collection and derive the columns it will be stored
 /// with. Nothing is stored.
 ///
@@ -220,7 +231,8 @@ fn probe_form(
 ///
 /// # Errors
 ///
-/// A file that cannot be stored or decoded is a `_file` validation error.
+/// A file that cannot be stored or decoded is a `_file` validation error; a
+/// full image-processing queue is transient.
 fn store_file(
     ctx: &ServiceContext,
     storage: &SharedStorage,
@@ -230,7 +242,7 @@ fn store_file(
     let upload = upload_config(ctx.collection_def()?)?;
 
     let (processed, guard) =
-        process_upload(inspected, upload, storage, ctx.slug).map_err(|e| file_error(&e))?;
+        process_upload(inspected, upload, storage, ctx.slug).map_err(store_error)?;
 
     inject_upload_metadata(form.raw_mut(), &processed, upload);
 

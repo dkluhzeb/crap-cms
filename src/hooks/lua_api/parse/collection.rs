@@ -8,7 +8,7 @@ use crate::{
         CollectionDefinition, FieldAdmin, FieldDefinition, FieldType, LocalizedString,
         collection::{AdminConfig, Auth, COLLECTION_OPERATIONS},
     },
-    db::query,
+    db::{query, query::fts::validate_searchable_fields},
 };
 
 use super::{
@@ -262,6 +262,10 @@ pub fn parse_collection_definition(
     def.soft_delete_retention = soft_delete_retention;
     def.required_locales = parse_required_locales(config)?;
 
+    // Checked once the field list is final (auth and upload inject fields
+    // an entry may name), so a typo or an unsearchable field fails the load.
+    validate_searchable_fields(&def)?;
+
     warn_access_keys_without_features(
         "Collection",
         slug,
@@ -292,6 +296,14 @@ mod tests {
         lsf.set(2, "body").unwrap();
         admin_tbl.set("list_searchable_fields", lsf).unwrap();
         config.set("admin", admin_tbl).unwrap();
+
+        // Searchable entries must name text-bearing fields of the row.
+        let fields: Table = lua
+            .load(r#"return { { name = "title", type = "text" }, { name = "body", type = "textarea" } }"#)
+            .eval()
+            .unwrap();
+        config.set("fields", fields).unwrap();
+
         let def = parse_collection_definition(&lua, "posts", &config).unwrap();
         assert_eq!(def.admin.use_as_title.as_deref(), Some("title"));
         assert_eq!(def.admin.list_searchable_fields, vec!["title", "body"]);

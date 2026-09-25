@@ -6,6 +6,7 @@ use anyhow::{Context as _, Result};
 use serde::Serialize;
 
 use crate::cli;
+use crate::core::FieldType;
 use crate::scaffold::guards::refuse_file_overwrite;
 use crate::scaffold::paths;
 use crate::scaffold::render::render;
@@ -29,6 +30,8 @@ struct CollectionTemplateContext<'a> {
     no_timestamps: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     title_field: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    searchable_field: Option<&'a str>,
     fields_lua: String,
 }
 
@@ -65,7 +68,7 @@ pub fn make_collection(
     Ok(())
 }
 
-/// Pick the first scalar field for `use_as_title` / `list_searchable_fields`.
+/// Pick the first scalar field for `use_as_title`.
 fn title_field<'a>(fields: &'a [FieldStub], opts: &CollectionOptions) -> Option<&'a str> {
     if opts.auth {
         return Some("email");
@@ -81,6 +84,23 @@ fn title_field<'a>(fields: &'a [FieldStub], opts: &CollectionOptions) -> Option<
                 && f.field_type != "blocks"
                 && f.field_type != "tabs"
         })
+        .map(|f| f.name.as_str())
+}
+
+/// Pick the first searchable field for `list_searchable_fields` — a field whose
+/// type holds text (see [`FieldType::is_searchable`]); a collection's load
+/// refuses any other entry.
+fn searchable_field<'a>(fields: &'a [FieldStub], opts: &CollectionOptions) -> Option<&'a str> {
+    if opts.auth {
+        return Some("email");
+    }
+    if opts.upload {
+        return Some("filename");
+    }
+
+    fields
+        .iter()
+        .find(|f| FieldType::parse(&f.field_type).is_some_and(|ft| ft.is_searchable()))
         .map(|f| f.name.as_str())
 }
 
@@ -121,6 +141,7 @@ fn render_collection_lua(
             versions: opts.versions,
             no_timestamps: opts.no_timestamps,
             title_field: title_field(fields, opts),
+            searchable_field: searchable_field(fields, opts),
             fields_lua,
         },
     )
@@ -471,6 +492,38 @@ mod tests {
 
         let content = fs::read_to_string(tmp.path().join("collections/things.lua")).unwrap();
         assert!(!content.contains("use_as_title"));
+        assert!(!content.contains("list_searchable_fields"));
+    }
+
+    /// A number field can title a collection but not be searched: the load
+    /// refuses a non-text `list_searchable_fields` entry, so the scaffold picks
+    /// the first text-bearing field (or none).
+    #[test]
+    fn searchable_field_skips_non_text_fields() {
+        let fields = parse_fields_shorthand("price:number,name:text").unwrap();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_collection(
+            tmp.path(),
+            "items",
+            Some(&fields),
+            &CollectionOptions::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("collections/items.lua")).unwrap();
+        assert!(content.contains("use_as_title = \"price\""));
+        assert!(content.contains("list_searchable_fields = { \"name\" }"));
+
+        let fields = parse_fields_shorthand("price:number").unwrap();
+        make_collection(
+            tmp.path(),
+            "prices",
+            Some(&fields),
+            &CollectionOptions::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("collections/prices.lua")).unwrap();
         assert!(!content.contains("list_searchable_fields"));
     }
 

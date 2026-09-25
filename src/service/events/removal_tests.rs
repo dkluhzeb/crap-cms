@@ -9,7 +9,7 @@ use crate::{
     config::CrapConfig,
     core::{
         EventGateSnapshot, EventViewPlacement, FieldDefinition, FieldType, VersionsConfig,
-        event::EventViewMeta,
+        event::{EventViewMeta, coalesce_events},
     },
     db::{Filter, FilterOp},
 };
@@ -410,4 +410,183 @@ fn undeleting_is_a_delete_for_trash_only_subscribers() {
     let published =
         deliver_to(LiveMode::Metadata, &event, views(true, false, false)).expect("delivered");
     assert_eq!(published.operation, EventOperation::Undelete);
+}
+
+// ── A move that also changed the content ────────────────────────────────────
+
+fn title_is(title: &str) -> Vec<FilterClause> {
+    vec![FilterClause::Single(Filter {
+        field: "title".to_string(),
+        op: FilterOp::Equals(title.to_string()),
+    })]
+}
+
+/// An update that moved `posts/d1` out of the published view (into draft)
+/// and changed its title from `was` to "Moved", carrying the row as it was.
+fn moved_with_new_content(was: &str) -> MutationEvent {
+    let mut event = moved_event(
+        EventTarget::Collection,
+        EventOperation::Update,
+        placed("draft", false),
+        placed("published", false),
+    );
+
+    let mut before = Document::new("d1");
+    before.fields.insert("title".to_string(), json!(was));
+    before
+        .fields
+        .insert("_status".to_string(), json!("published"));
+
+    event.view = event
+        .view
+        .map(|view| view.left_as(Some(EventGateSnapshot::of(&before))));
+
+    event
+}
+
+/// Regression: the view a move left was judged against the row as it is
+/// now. A published-only subscriber whose constraint matched the old content
+/// but not the new one never learned the row left its view.
+#[test]
+fn the_left_view_is_judged_against_the_content_the_row_had_there() {
+    let event = moved_with_new_content("Old");
+
+    let delivery = deliver_to(LiveMode::Metadata, &event, published_only(title_is("Old")))
+        .expect("the subscriber saw the old row: the removal is delivered");
+
+    assert_eq!(delivery.operation, EventOperation::Delete);
+}
+
+/// Regression, other direction: a subscriber whose constraint matches only
+/// the new content never saw the row in the view it left, so it must not
+/// learn its id through a removal.
+#[test]
+fn a_subscriber_that_never_saw_the_old_row_learns_nothing() {
+    let event = moved_with_new_content("Old");
+
+    assert_eq!(
+        deliver_to(
+            LiveMode::Metadata,
+            &event,
+            published_only(title_is("Moved"))
+        ),
+        None
+    );
+}
+
+/// An event without the left view's content (a status-only move, or one from
+/// a node that predates it) is judged against its own snapshot, as before.
+#[test]
+fn a_status_only_move_is_judged_against_the_rows_own_snapshot() {
+    let event = unpublish_event(EventTarget::Collection, true);
+    assert!(
+        event
+            .view
+            .as_ref()
+            .is_some_and(|view| view.prior_gate.is_none())
+    );
+
+    assert!(
+        deliver_to(
+            LiveMode::Metadata,
+            &event,
+            published_only(title_is("Moved"))
+        )
+        .is_some()
+    );
+}
+
+// ── Bursts mixing draft saves with moves ────────────────────────────────────
+
+/// A draft save of `target`'s published document: the event describes the
+/// pending draft, the stored row stays published.
+fn draft_save(target: EventTarget) -> MutationEvent {
+    let mut event = moved_event(
+        target,
+        EventOperation::Update,
+        placed("draft", false),
+        placed("draft", false),
+    );
+    event.view = event
+        .view
+        .map(|view| view.stored_at(Some(placed("published", false))));
+
+    event
+}
+
+/// An update of `target`'s published document that leaves it published.
+fn published_update(target: EventTarget) -> MutationEvent {
+    moved_event(
+        target,
+        EventOperation::Update,
+        placed("published", false),
+        placed("published", false),
+    )
+}
+
+/// The operations a subscriber with `views` receives for a coalesced burst.
+fn delivered(burst: Vec<MutationEvent>, views: &EventViewGate) -> Vec<EventOperation> {
+    coalesce_events(burst)
+        .iter()
+        .filter_map(|event| deliver_to(LiveMode::Metadata, event, views.clone()))
+        .map(|delivery| delivery.operation)
+        .collect()
+}
+
+/// Regression: an update of a published document followed by a draft save
+/// coalesced to the draft save, read as a move out of the published view —
+/// a published-only subscriber was sent a `delete` (a global's: an empty
+/// update) for a document that was still published. It now receives the
+/// update, and a draft subscriber both events.
+#[test]
+fn a_draft_save_in_a_burst_is_never_a_removal() {
+    for target in [EventTarget::Collection, EventTarget::Global] {
+        let burst = || vec![published_update(target.clone()), draft_save(target.clone())];
+
+        assert_eq!(
+            delivered(burst(), &published_only(Vec::new())),
+            vec![EventOperation::Update],
+            "{target:?}"
+        );
+        assert_eq!(
+            delivered(burst(), &views(true, true, false)),
+            vec![EventOperation::Update, EventOperation::Update],
+            "{target:?}"
+        );
+    }
+}
+
+/// Regression: a draft save followed by an unpublish coalesced into an
+/// unpublish rebased onto the draft save's placement — no move — so a
+/// published-only subscriber never learned the document left its view.
+#[test]
+fn an_unpublish_after_a_draft_save_is_still_a_removal() {
+    let burst = vec![
+        draft_save(EventTarget::Collection),
+        unpublish_event(EventTarget::Collection, true),
+    ];
+    assert_eq!(
+        delivered(burst, &published_only(Vec::new())),
+        vec![EventOperation::Delete]
+    );
+
+    let burst = vec![
+        draft_save(EventTarget::Global),
+        unpublish_event(EventTarget::Global, true),
+    ];
+    assert_eq!(
+        delivered(burst, &published_only(Vec::new())),
+        vec![EventOperation::Update],
+        "a global's removal is the empty update"
+    );
+
+    let burst = vec![
+        draft_save(EventTarget::Collection),
+        unpublish_event(EventTarget::Collection, true),
+    ];
+    assert_eq!(
+        delivered(burst, &views(true, true, false)),
+        vec![EventOperation::Update, EventOperation::Unpublish],
+        "a draft subscriber receives both"
+    );
 }

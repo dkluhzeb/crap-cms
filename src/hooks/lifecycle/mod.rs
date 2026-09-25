@@ -33,7 +33,7 @@ pub(crate) use execution::{
     FieldHookMeta, apply_after_read_inner, resolve_hook_function, run_field_hooks_inner,
     run_hooks_inner,
 };
-pub(crate) use lazy_tx::{LazyTx, LazyTxContext, LazyTxGuard, commit_or_roll_back, roll_back};
+pub(crate) use lazy_tx::{LazyTx, LazyTxContext, LazyTxGuard};
 pub(crate) use types::{
     AfterReadScope, AfterReadScopeGuard, ExecutionDeadline, ExecutionDeadlineGuard, HookDepth,
     HookDepthGuard, LuaVmInfra, PoolContext, PoolMode, ReadOnlyScope, ReadOnlyScopeGuard,

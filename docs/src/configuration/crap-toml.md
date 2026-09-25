@@ -49,7 +49,7 @@ login_lockout_seconds = "5m"
 auto_purge = "30d"
 ```
 
-Fields that support this: `token_expiry`, `login_lockout_seconds`, `reset_token_expiry`, `forgot_password_window_seconds`, `max_age`, `poll_interval`, `cron_interval`, `heartbeat_interval`, `auto_purge`, `grpc_rate_limit_window`, `connection_timeout`, `smtp_timeout`, `busy_timeout`, `request_timeout`, `grpc_timeout`.
+Fields that support this: `token_expiry`, `login_lockout_seconds`, `reset_token_expiry`, `forgot_password_window_seconds`, `max_age`, `poll_interval`, `cron_interval`, `heartbeat_interval`, `auto_purge`, `grpc_rate_limit_window`, `connection_timeout`, `statement_timeout`, `smtp_timeout`, `busy_timeout`, `request_timeout`, `upload_timeout`, `grpc_timeout`, `header_read_timeout`, `grpc_keepalive_interval`.
 
 ## File Size Values
 
@@ -67,7 +67,7 @@ max_file_size = "100KB"
 max_file_size = "1GB"
 ```
 
-Fields that support this: `max_file_size` (global and per-collection), `max_memory`, `http_max_response_bytes`, `grpc_max_message_size`.
+Fields that support this: `max_file_size` (global and per-collection), `max_memory`, `http_max_response_bytes`, `grpc_max_message_size`, `auth_body_limit`.
 
 ## Configuration Validation
 
@@ -81,15 +81,16 @@ Unknown keys anywhere in the file are fatal (`deny_unknown_fields`), so a typo n
 |---------|------|
 | `[database]` | `pool_max_size`, `write_pool_max_size` and `connection_timeout` must be `> 0` |
 | `[server]` | `admin_port` and `grpc_port` must be `> 0` and distinct |
-| `[server]` | `request_timeout` / `grpc_timeout`, when set, must be `> 0` |
+| `[server]` | `grpc_timeout`, when set, must be `> 0` |
 | `[server]` | `grpc_rate_limit_window > 0` when `grpc_rate_limit_requests > 0` |
 | `[server]` | `bulk_max_documents >= 0` |
 | `[server]` | `public_url`, when set, must be non-blank and start with `http://` or `https://` |
 | `[server]` | `trust_proxy = true` requires a non-empty `trusted_proxies`; every entry must be an IP, a CIDR, or `"*"` |
+| `[server]` | `auth_body_limit`, `header_read_timeout`, `grpc_max_concurrent_streams` and `grpc_keepalive_interval` must be `> 0`; `max_connections`, when set, must be `> 0` |
 | `[cors]` | `allowed_origins`: `"*"` must be the only entry and cannot be combined with `allow_credentials = true`; every other origin needs a scheme and a host and no path; `allowed_methods` entries must be valid HTTP method tokens; `allowed_headers` / `exposed_headers` entries must be valid header names |
 | `[pagination]` | `default_limit > 0`, `max_limit > 0`, `default_limit <= max_limit` |
 | `[depth]` | `default_depth >= 0`, `max_depth >= 0`, `max_nesting_depth >= 1` |
-| `[hooks]` | `vm_pool_size > 0`, `max_vm_pool_size > 0`; every `io_roots` entry non-empty, without NUL bytes and not `/` — and, when the Lua VMs are built at startup, an existing directory outside `/proc`, `/sys`, `/dev` and the refused paths (`data/`, `backups/`, logs, database) |
+| `[hooks]` | `vm_pool_size > 0`, `max_vm_pool_size > 0`; every `io_roots` entry non-empty, without NUL bytes and not `/` — and, when the Lua VMs are built at startup, an existing directory outside `/proc`, `/sys`, `/dev` and the refused paths (`data/`, `backups/`, logs, database) that neither contains the config directory nor lies inside one of its code directories |
 | `[jobs]` | `poll_interval`, `cron_interval`, `heartbeat_interval` must be `> 0` |
 | `[auth]` | `token_expiry > 0` (every auth collection without its own `token_expiry` inherits it) |
 | `[auth]` | `password_policy.min_length <= password_policy.max_length` |
@@ -136,8 +137,14 @@ host = "0.0.0.0"        # Bind address
 # grpc_rate_limit_requests = 0   # Per-IP request limit (0 = disabled, recommended: 100)
 # grpc_rate_limit_window = 60    # Sliding window in seconds (or "1m")
 # grpc_max_message_size = "16MB" # Max gRPC message size (default 16MB)
-# request_timeout = "30s"        # Admin HTTP request timeout (none by default)
+# request_timeout = "60s"        # Admin HTTP request deadline (default 60s, 0 = none)
+# upload_timeout = 0             # Deadline of file-upload routes (default 0 = none)
 # grpc_timeout = "30s"           # gRPC request timeout (none by default)
+# auth_body_limit = "64KB"       # Body cap of the public login / reset / MFA / callback routes
+# max_connections = 4096         # Open connections per listener (default: derived from ulimit -n)
+# header_read_timeout = "30s"    # Time allowed to send request headers / the gRPC HTTP/2 preface
+# grpc_max_concurrent_streams = 200  # Concurrent RPC streams per gRPC connection
+# grpc_keepalive_interval = "60s"    # gRPC HTTP/2 keep-alive ping (dead peers dropped after 20s)
 # public_schema_introspection = true  # ListCollections/DescribeCollection without auth (default true)
 # bulk_max_documents = 0         # Cap per create_many/update_many/delete_many (0 = no limit)
 
@@ -147,6 +154,7 @@ pool_max_size = 64       # Max connections in the READ pool
 write_pool_max_size = 4  # Max connections in the WRITE pool (SQLite only)
 busy_timeout = "30s"     # SQLite busy timeout (integer ms or "30s", "1m")
 connection_timeout = 30  # Pool checkout timeout (seconds or "30s")
+statement_timeout = 30   # Max run time of one SQL statement (seconds or "30s"; 0 = off)
 cache_size = -16384      # Page cache in KB (negative = KB; default 16MB)
 mmap_size = 268435456    # Memory-mapped I/O in bytes (default 256MB, 0 = off)
 wal_autocheckpoint = 1000 # WAL auto-checkpoint threshold in pages
@@ -201,9 +209,16 @@ default_limit = 20      # Default limit for Find queries (when none is specified
 max_limit = 1000         # Hard cap on limit — requests above this are clamped
 # mode = "page"          # "page" (offset) or "cursor" (keyset)
 
+[query]
+max_filter_terms = 100   # Most filter conditions in one `where` (across every `or` group)
+max_filter_values = 1000 # Most `in` / `not_in` elements in one `where` (summed)
+max_search_length = 1000 # Longest `search` term, in characters
+max_search_terms = 32    # Most words in one `search` term
+
 [upload]
 storage = "local"        # Storage backend: "local" (default), "s3", or "custom"
 max_file_size = "50MB"   # Global max file size (accepts bytes or "50MB", "1GB", etc.)
+# max_concurrent_image_processing = 4  # Images decoded/resized at once (default: half the CPUs, min 1)
 
 # [upload.s3]            # S3-compatible storage (requires --features s3-storage)
 # bucket = "my-uploads"
@@ -236,7 +251,7 @@ max_instructions = 10000000  # Max Lua instructions per hook (0 = unlimited)
 max_memory = "50MB"          # Max Lua memory per VM (0 = unlimited)
 allow_private_networks = false  # Block HTTP requests to private/loopback IPs
 http_max_response_bytes = "10MB"  # Max HTTP response body size
-# io_roots = ["/srv/crap-media"]  # Extra dirs Lua `io` may reach (config dir always allowed)
+# io_roots = ["/srv/crap-media"]  # Dirs Lua `io` may write (and read); the config dir is read-only
 
 [live]
 enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
@@ -245,6 +260,7 @@ channel_capacity = 1024  # Broadcast channel buffer size
 # channel_prefix = "crap:"  # Redis pub/sub channel prefix; differentiate per deployment
 # max_sse_connections = 1000        # Max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # Max concurrent gRPC Subscribe streams (0 = unlimited)
+# max_connections_per_client = 10   # Max streams per user / anonymous address, per surface (0 = unlimited)
 # subscriber_send_timeout_ms = 1000 # Drop subscribers whose outbound send exceeds this (ms)
 
 [locale]
@@ -311,18 +327,24 @@ check_on_startup = true   # Print a one-line notice on `serve` startup when a ne
 | `admin_port` | integer | `3000` | Port for the Axum admin UI |
 | `grpc_port` | integer | `50051` | Port for the Tonic gRPC API |
 | `host` | string | `"0.0.0.0"` | Bind address for both servers. **The default `0.0.0.0` binds every network interface** — the expected default for a served CMS and container deployments, but it means the admin UI and gRPC API are reachable from anywhere the host is routable. Put crap-cms behind a firewall or reverse proxy, or set `host = "127.0.0.1"` to bind loopback only (e.g. when a proxy on the same host is the only intended client). |
-| `h2c` | boolean | `false` | Enable HTTP/2 cleartext (h2c). Allows reverse proxies (Caddy, nginx) to speak HTTP/2 to the backend without TLS. Browsers that don't support h2c fall back to HTTP/1.1 on the same port. |
-| `trust_proxy` | boolean | `false` | Trust the `X-Forwarded-For` header for client IP extraction on the **admin HTTP server**. **Enable when running behind a reverse proxy** (nginx, Caddy, etc.) so per-IP rate limiting uses the real client IP. **Requires `trusted_proxies` to be set as well** — `trust_proxy = true` without it is a fatal startup error (an XFF header is only honored when the TCP peer is inside a trusted CIDR). When false (default), the TCP socket address is used and XFF is ignored — preventing IP spoofing when exposed directly to the internet. Does not affect the gRPC server, which always uses the TCP peer address from Tonic's `remote_addr()`. |
-| `trusted_proxies` | string list | `[]` | CIDRs (e.g. `["10.0.0.0/8"]`) whose `X-Forwarded-For` headers are trusted when `trust_proxy = true`. `["*"]` trusts every peer (logs a startup warning). Malformed entries are fatal at startup. |
+| `h2c` | boolean | `false` | Enable HTTP/2 cleartext (h2c). Allows reverse proxies (Caddy, nginx) to speak HTTP/2 to the backend without TLS. Browsers that don't support h2c fall back to HTTP/1.1 on the same port. An HTTP/2 connection is pinged every 60 seconds and closed when the peer stops answering, but one that answers the pings stays open while idle — the HTTP/2 server has no idle timeout, so each such connection holds a `max_connections` slot until the client closes it. Put a proxy you control (the one the option is for) in front rather than exposing h2c to arbitrary clients. |
+| `trust_proxy` | boolean | `false` | Trust the `X-Forwarded-For` header for client IP extraction on the admin HTTP server, custom routes **and the gRPC API**. **Enable when running behind a reverse proxy** (nginx, Caddy, etc.) so per-IP rate limiting uses the real client IP. **Requires `trusted_proxies` to be set as well** — `trust_proxy = true` without it is a fatal startup error (an XFF header is only honored when the TCP peer is a listed proxy). When false (default), the TCP peer address is used and XFF is ignored — preventing IP spoofing when exposed directly to the internet. |
+| `trusted_proxies` | string list | `[]` | IPs or CIDRs of your reverse proxies (e.g. `["10.0.0.0/8"]`). XFF is honored only when the TCP peer is listed, and is then read **from the right**: listed proxy hops are skipped and the first address that is not a listed proxy is the client, so a client-supplied (leftmost) entry can never choose the address — this is correct for proxies that overwrite XFF (Caddy, Traefik) and for proxies that append to it (nginx `$proxy_add_x_forwarded_for`, HAProxy, AWS ALB). `["*"]` trusts every direct peer but marks no forwarded entry as a proxy, so the **rightmost** entry is taken (logs a startup warning); behind several proxies, list them all. Malformed entries are fatal at startup. Per-IP rate limits key IPv4 clients by address and IPv6 clients by their /64; hooks and logs see the full address. Only `X-Forwarded-For` is read — the RFC 7239 `Forwarded` header is ignored, so configure the proxy to set `X-Forwarded-For`. |
 | `compression` | string | `"off"` | Response compression. `"off"` = disabled (default), `"gzip"` = gzip only, `"br"` = brotli only, `"all"` = gzip + brotli. Most deployments use a reverse proxy (nginx/caddy) for compression, so this is opt-in. |
 | `grpc_reflection` | boolean | `false` | Enable gRPC server reflection. Allows clients (e.g., `grpcurl`, Postman) to discover services and methods without a `.proto` file. Disabled by default to hide the API surface from unauthenticated probing. |
 | `public_url` | string | — | Public-facing base URL (e.g., `"https://cms.example.com"`). Used for password reset emails and other generated links. If not set, defaults to `http://{host}:{admin_port}`. |
 | `grpc_rate_limit_requests` | integer | `0` | Maximum number of gRPC requests per IP within the sliding window. `0` = disabled (default). **Recommended to enable in production** (e.g., `100`). When enabled, requests exceeding the limit receive `ResourceExhausted` status. |
 | `grpc_rate_limit_window` | integer/string | `60` (`"1m"`) | Sliding window duration for rate limiting. Accepts seconds (integer) or human-readable (`"1m"`, `"30s"`). |
 | `grpc_max_message_size` | integer/string | `16777216` (`"16MB"`) | Maximum gRPC message size in bytes (applies to both send and receive). Tonic's built-in default is 4MB, which can be exceeded by large `Find` responses with deep population. Accepts bytes or file size string (`"16MB"`, `"32MB"`). |
-| `request_timeout` | integer/string | — (none) | Admin HTTP request timeout. When set, requests exceeding this duration return `408 Request Timeout`. SSE streams are exempt (handled by shutdown). Accepts seconds or human-readable (`"30s"`, `"5m"`). |
+| `request_timeout` | integer/string | `60` (`"60s"`) | How long an admin HTTP request may take to arrive and be answered: reading its body (a slow or stalled body included) and producing the response head. Exceeded → `408 Request Timeout`. Applies to every admin route — custom routes and MCP HTTP included — except the routes that take a file into an upload collection, which follow `upload_timeout`. A streamed response body (SSE, a file download) is never cut. `0` disables it. Accepts seconds or human-readable (`"30s"`, `"5m"`). |
+| `upload_timeout` | integer/string | `0` (none) | `request_timeout` for the routes that take a file into an upload collection: the admin create / update form and `/api/upload` create / update. `0` (default) = no deadline, so a large file on a slow link is never cut off; set it when anonymous clients may upload. Accepts seconds or human-readable (`"30m"`). |
 | `grpc_timeout` | integer/string | — (none) | gRPC request timeout. When set, RPCs exceeding this duration return `DEADLINE_EXCEEDED`. Applies to all RPCs including Subscribe streams. Accepts seconds or human-readable (`"30s"`, `"5m"`). |
 | `bulk_max_documents` | integer | `0` (no limit) | Maximum documents a single `create_many` / `update_many` / `delete_many` may affect before it is rejected. Bulk ops are **atomic** (one transaction), so a very large operation holds the database write-lock for its whole duration and accumulates per-document state in memory; set a positive cap to reject a runaway/over-broad bulk op before it locks the DB or exhausts memory. An over-limit op fails (gRPC `FAILED_PRECONDITION` / HTTP `409`) and changes nothing. `0` disables the limit. Enforced identically on every surface (gRPC, Lua, admin, MCP). |
+| `auth_body_limit` | integer/string | `65536` (`"64KB"`) | Maximum request body of the public, pre-authentication admin routes: login, logout, forgot / reset password, resend verification, email verification, MFA and the auth callbacks (including `form_post`). Independent of the upload limits, so an anonymous form POST never makes the server buffer an upload-sized body; larger bodies get `413 Payload Too Large`. Custom routes keep their own per-route `max_body`. Accepts bytes or a size string (`"64KB"`). |
+| `max_connections` | integer | derived | Maximum connections each listener (admin HTTP and gRPC, counted separately) holds open at once. At the cap the listener stops accepting until a connection closes — new clients wait in the kernel backlog instead of exhausting file descriptors. Unset (default), it is derived at startup from the process's open-file soft limit (`ulimit -n`) — which `serve` and `work` first raise to the hard limit (systemd `LimitNOFILE`), logging the old and new values —: the limit minus 256 descriptors kept for the database, logs and uploads, split between the two listeners, between 64 and 65536 (4096 on platforms without such a limit); the chosen value is logged. An explicit value that leaves too few descriptors logs a warning. |
+| `header_read_timeout` | integer/string | `30` (`"30s"`) | How long an admin HTTP client may take to send a request's headers — including a connection that sends nothing at all (and, with `h2c`, the HTTP/2 preface) — and a gRPC client to open with the HTTP/2 connection preface. Slower connections are closed, so slow or silent clients cannot hold connections open. Accepts seconds or human-readable (`"30s"`). |
+| `grpc_max_concurrent_streams` | integer | `200` | Maximum concurrent HTTP/2 streams (in-flight RPCs, including `Subscribe` streams) per gRPC connection. |
+| `grpc_keepalive_interval` | integer/string | `60` (`"60s"`) | Interval of the HTTP/2 keep-alive ping the gRPC server sends; a peer that does not answer within 20 seconds is disconnected, so dead clients do not hold connections. Accepts seconds or human-readable (`"60s"`). |
 | `public_schema_introspection` | boolean | `true` | Whether the gRPC schema-introspection RPCs (`ListCollections`, `DescribeCollection`) are readable without authentication. `true` (default) exposes the content model publicly, as in a headless CMS. Set to `false` to require an authenticated caller — the schema shape (collection and field names/types) is then hidden from anonymous clients. Never affects document data, which is always access-gated. |
 
 ### `[database]`
@@ -338,6 +360,7 @@ check_on_startup = true   # Print a one-line notice on `serve` startup when a ne
 | `mmap_size` | integer | `268435456` | SQLite memory-mapped I/O size in bytes. Default 256MB. Set to 0 to disable. |
 | `wal_autocheckpoint` | integer | `1000` | WAL auto-checkpoint threshold in pages. |
 | `busy_timeout` | duration | `30000` (`"30s"`) | SQLite busy timeout in milliseconds. Controls how long a connection waits for locks before returning SQLITE_BUSY. Accepts integer ms or human-readable string (`"30s"`, `"1m"`). |
+| `statement_timeout` | duration | `30` | Longest one SQL statement may run, in seconds, on both backends: a statement still running then is interrupted (SQLite) or cancelled on the server (Postgres) and fails with a "time limit" error — so a runaway query cannot hold its connection, or SQLite's single writer, indefinitely. A queued bulk job's statements are also bounded by the job's `timeout`. The schema sync at startup (and `db migrate fresh`), data migrations, backups, `db cleanup`, `export` and `import` are exempt. `0` turns it off. |
 | `connection_timeout` | duration | `30` | Pool checkout timeout in seconds, on both backends. How long a checkout waits for a free connection before returning an error; on Postgres it also bounds creating and recycling a connection. Should be >= `busy_timeout` so SQLite's WAL-writer retry loop resolves before the pool-level timeout fires. |
 | `stmt_cache_capacity` | integer | `128` | Per-connection prepared-statement LRU cache size (SQLite). When the number of distinct hot-path SQL strings exceeds it, statements are re-prepared on every call — under load that serializes on SQLite's internal allocator lock. Bump it if a workload adds enough new SQL variants to thrash the cache. |
 
@@ -397,7 +420,7 @@ nonce applies to `script-src` only).
 | `token_expiry` | integer/string | `7200` (`"2h"`) | Default session token lifetime, used by every auth collection that sets no `token_expiry` of its own. Accepts seconds (integer) or human-readable (`"2h"`, `"30m"`); must be > 0. |
 | `password_policy` | table | *(see below)* | Password strength requirements. See `[auth.password_policy]`. |
 | `max_login_attempts` | integer | `5` | Maximum failed login attempts per email before temporary lockout. |
-| `max_ip_login_attempts` | integer | `20` | Maximum failed login attempts per IP before temporary lockout. Higher than per-email to tolerate shared IPs (offices, NAT). Also used as the per-IP threshold for forgot-password requests. |
+| `max_ip_login_attempts` | integer | `20` | Maximum failed login attempts per IP before temporary lockout. Higher than per-email to tolerate shared IPs (offices, NAT). Also used as the per-IP threshold for forgot-password requests and for failed API keys on the MCP HTTP endpoint. |
 | `login_lockout_seconds` | integer/string | `300` (`"5m"`) | Duration of lockout after `max_login_attempts` or `max_ip_login_attempts` is reached. Accepts seconds or human-readable. |
 | `reset_token_expiry` | integer/string | `3600` (`"1h"`) | Password reset token expiry. The "Forgot password" email link expires after this duration. Accepts seconds or human-readable. |
 | `max_forgot_password_attempts` | integer | `3` | Maximum forgot-password requests per email address before rate limiting. Further requests silently return success without sending email. |
@@ -415,7 +438,7 @@ Password strength requirements applied to all password-setting paths (create, up
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `min_length` | integer | `8` | Minimum password length in Unicode characters (codepoints). Multi-byte characters (accented letters, CJK, emoji) each count as 1. Must be ≤ `max_length` or the server refuses to start. |
-| `max_length` | integer | `128` | Maximum password length in bytes. Prevents DoS via Argon2 on huge inputs. Uses byte count (not characters) to bound hashing cost. |
+| `max_length` | integer | `128` | Maximum password length in bytes when a password is set. Prevents DoS via Argon2 on huge inputs. Uses byte count (not characters) to bound hashing cost. Login refuses passwords above `max(max_length, 1024)` bytes before hashing, so lowering it never locks out existing passwords. |
 | `require_uppercase` | boolean | `false` | Require at least one uppercase letter (A-Z). |
 | `require_lowercase` | boolean | `false` | Require at least one lowercase letter (a-z). |
 | `require_digit` | boolean | `false` | Require at least one digit (0-9). |
@@ -447,12 +470,24 @@ Password strength requirements applied to all password-setting paths (create, up
 | `max_limit` | integer | `1000` | Hard cap on `limit`. Requests above this value are clamped to `max_limit`. |
 | `mode` | string | `"page"` | Pagination mode: `"page"` (offset-based with `page`/`total_pages`) or `"cursor"` (keyset-based with `start_cursor`/`end_cursor`). In cursor mode, pass `after_cursor` (forward) or `before_cursor` (backward) instead of `page`. |
 
+### `[query]`
+
+Size limits on every user-supplied query — admin list filters, gRPC, MCP and Lua CRUD alike. A query over a limit is rejected as an invalid query (`InvalidArgument` / 400) before any SQL runs. The row constraints access rules return are not counted. Every limit must be at least 1. See [Query size limits](../query-and-filters/overview.md#query-size-limits).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_filter_terms` | integer | `100` | Most filter conditions one `where` may hold, counted across every `or` group. |
+| `max_filter_values` | integer | `1000` | Most `in` / `not_in` list elements one `where` may hold, summed over every list. |
+| `max_search_length` | integer | `1000` | Longest `search` term, in characters. |
+| `max_search_terms` | integer | `32` | Most whitespace-separated words one `search` term may hold. |
+
 ### `[upload]`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `storage` | string | `"local"` | Storage backend: `"local"` (filesystem), `"s3"` (S3-compatible, requires `--features s3-storage`), or `"custom"` (Lua-delegated). |
 | `max_file_size` | integer/string | `52428800` (`"50MB"`) | Global maximum file size. Accepts bytes (integer) or human-readable (`"50MB"`, `"1GB"`). Per-collection `max_file_size` overrides this. Also sets the HTTP body limit of every route (with 1MB overhead for multipart encoding); only an upload collection's create/update routes and `/api/upload` raise it to that collection's own `max_file_size`. |
+| `max_concurrent_image_processing` | integer | *(half the CPUs, at least 1)* | How many images are decoded and processed (resized, converted to WebP/AVIF) at once, across uploads and queued conversions. Further image work waits for a free slot; an upload that waits longer than 60 seconds is answered with a retryable "busy" error (HTTP 503), a queued conversion is rescheduled without spending an attempt (for up to six hours after it was queued; see [Image processing → Concurrency](../uploads/image-processing.md#concurrency)). Must be at least 1. |
 | `s3` | table | *(see below)* | S3-compatible storage settings, used when `storage = "s3"`. See `[upload.s3]`. |
 
 ### `[upload.s3]`
@@ -505,7 +540,7 @@ When configured, email enables password reset ("Forgot password?" link on login)
 | `max_memory` | integer/string | `52428800` (50 MB) | Maximum Lua memory per VM in bytes (the startup VM included). Accepts integer or filesize string (`"50MB"`, `"100MB"`). `0` = unlimited. |
 | `allow_private_networks` | boolean | `false` | Allow `crap.http.request` to reach private/loopback/link-local IPs. |
 | `http_max_response_bytes` | integer/string | `10485760` (10 MB) | Maximum HTTP response body size. Accepts integer or filesize string (`"10MB"`, `"1GB"`). |
-| `io_roots` | string[] | `[]` | Directories beyond the config directory that Lua `io` file access (`io.open`, `io.lines`, `io.input`, `io.output`) may reach — e.g. where a Lua storage backend writes. Relative entries resolve against the config directory; each must exist, be a directory, and not lie inside a refused path (below) or `/proc`, `/sys`, `/dev` — startup fails otherwise. The config directory is always allowed; `crap.toml`, `data/`, `backups/`, the log directory and the database file are refused under every root, and `/proc`, `/sys`, `/dev` everywhere. See [Sandbox](../hooks/overview.md#sandbox). |
+| `io_roots` | string[] | `[]` | The directories Lua `io` file access (`io.open`, `io.lines`, `io.input`, `io.output`) may **write** to, and read — e.g. where a Lua storage backend writes. Lua may read, never write, under the config directory itself. Relative entries resolve against the config directory; each must exist, be a directory, not contain the config directory or lie inside one of its code directories (`collections/`, `globals/`, `hooks/`, `access/`, `jobs/`, `routes/`, `plugins/`, `templates/`, `static/`, `migrations/`, `types/`, `lua/`, `translations/`), and not lie inside a refused path (below) or `/proc`, `/sys`, `/dev` — startup fails otherwise. `require` never loads a module from one. `crap.toml`, `data/`, `backups/`, the log directory and the database file are refused under every root, and `/proc`, `/sys`, `/dev` everywhere. See [Sandbox](../hooks/overview.md#sandbox). |
 
 ### `[live]`
 
@@ -516,7 +551,8 @@ When configured, email enables password reset ("Forgot password?" link on login)
 | `channel_capacity` | integer | `1024` | Internal broadcast channel buffer size. Increase if subscribers lag. |
 | `channel_prefix` | string | `"crap:"` | Prefix of the Redis pub/sub channels (`{prefix}events`, `{prefix}invalidations`) when `transport = "redis"`. Two deployments sharing one Redis must differ — pub/sub ignores the selected database. Must not overlap the cache or rate-limit namespaces on the same Redis. |
 | `max_sse_connections` | integer | `1000` | Maximum concurrent SSE connections. When reached, new connections receive `503 Service Unavailable`. `0` = unlimited. |
-| `max_subscribe_connections` | integer | `1000` | Maximum concurrent gRPC Subscribe streams. When reached, new subscriptions receive `UNAVAILABLE` status. `0` = unlimited. |
+| `max_subscribe_connections` | integer | `1000` | Maximum concurrent gRPC Subscribe streams. When reached, new subscriptions receive `RESOURCE_EXHAUSTED` status. `0` = unlimited. |
+| `max_connections_per_client` | integer | `10` | Maximum live-update streams one client may hold open at once, per surface (SSE and gRPC Subscribe each). A client is the authenticated user (whatever address it connects from) or, for an anonymous subscriber, its address — an IPv6 client per /64, resolved through `trust_proxy`. Keeps one caller from taking every `max_sse_connections` / `max_subscribe_connections` slot; over the cap SSE answers `503`, Subscribe `RESOURCE_EXHAUSTED`. `0` = unlimited. |
 | `subscriber_send_timeout_ms` | integer | `1000` | Per-subscriber outbound send timeout (ms). If forwarding an event to a specific live-update client (SSE or gRPC) takes longer than this, that subscriber is dropped to protect other subscribers from head-of-line blocking. |
 
 See [Live Updates](../live-updates/overview.md) for full documentation.

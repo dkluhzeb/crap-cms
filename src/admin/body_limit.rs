@@ -5,7 +5,8 @@
 //! collection's admin create/update and the `/api/upload` routes — raise that
 //! to the target collection's own upload maximum ([`upload_body_limit`]), so a
 //! collection allowing large files never lifts the cap on the login form, the
-//! JSON endpoints, or MCP.
+//! JSON endpoints, or MCP. The public, pre-authentication routes go the other
+//! way: their small forms get `[server] auth_body_limit` ([`auth_body_limit`]).
 
 use axum::{
     extract::{DefaultBodyLimit, RawPathParams, Request, State},
@@ -25,6 +26,13 @@ const FALLBACK_LIMIT: usize = 50 * 1024 * 1024;
 /// The path parameter naming the target collection on upload routes.
 const SLUG_PARAM: &str = "slug";
 
+/// The collection an upload route targets: its `{slug}` path parameter.
+pub(crate) fn target_slug(params: &RawPathParams) -> Option<&str> {
+    params
+        .iter()
+        .find_map(|(name, value)| (name == SLUG_PARAM).then_some(value))
+}
+
 /// The body limit for a request carrying a file of at most `max_upload` bytes.
 fn body_limit_for(max_upload: u64) -> usize {
     usize::try_from(max_upload.saturating_add(FORM_HEADROOM)).unwrap_or(FALLBACK_LIMIT)
@@ -33,6 +41,13 @@ fn body_limit_for(max_upload: u64) -> usize {
 /// The body limit every route gets: the global upload maximum plus headroom.
 pub(crate) fn global_body_limit(state: &AdminState) -> usize {
     body_limit_for(state.config.upload.max_file_size)
+}
+
+/// The body limit of the public, pre-authentication routes (login, password
+/// reset, MFA, auth callbacks): `[server] auth_body_limit`, independent of any
+/// upload maximum.
+pub(crate) fn auth_body_limit(state: &AdminState) -> usize {
+    usize::try_from(state.config.server.auth_body_limit).unwrap_or(usize::MAX)
 }
 
 /// The body limit for a file upload into collection `slug`: its own upload
@@ -58,11 +73,7 @@ pub(crate) async fn upload_body_limit(
     request: Request,
     next: Next,
 ) -> Response {
-    let slug = params
-        .iter()
-        .find_map(|(name, value)| (name == SLUG_PARAM).then_some(value));
-
-    let limit = collection_body_limit(&state, slug);
+    let limit = collection_body_limit(&state, target_slug(&params));
 
     DefaultBodyLimit::max(limit)
         .layer(next)
@@ -91,6 +102,19 @@ mod tests {
 
         // Saturates instead of overflowing.
         assert!(body_limit_for(u64::MAX) >= FALLBACK_LIMIT);
+    }
+
+    /// Regression: the pre-auth routes inherited the upload-sized global limit,
+    /// so an anonymous login POST could make the server buffer tens of
+    /// megabytes. Their limit follows `auth_body_limit` alone.
+    #[test]
+    fn the_auth_limit_ignores_the_upload_maximum() {
+        let mut state = test_admin_state_with_registry(Registry::default());
+        state.config.upload.max_file_size = 500 * MIB;
+        state.config.server.auth_body_limit = 64 * 1024;
+
+        assert_eq!(auth_body_limit(&state), 64 * 1024);
+        assert!(global_body_limit(&state) > auth_body_limit(&state));
     }
 
     /// Regression: the largest collection maximum used to become the limit of

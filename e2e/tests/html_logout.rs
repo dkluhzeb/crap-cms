@@ -21,8 +21,8 @@ use crap_cms_e2e::helpers::*;
 // ── logout_clears_session_cookies ────────────────────────────────────────
 //
 // POST /admin/logout should issue Set-Cookie headers that clear the session
-// cookies and redirect to /admin/login. Verifies cookie names match what the
-// admin layer expects.
+// cookies and redirect to /admin/login with the logout notice. Verifies cookie
+// names match what the admin layer expects.
 
 #[tokio::test]
 async fn logout_clears_session_cookies() {
@@ -49,7 +49,7 @@ async fn logout_clears_session_cookies() {
         .expect("logout should redirect")
         .to_str()
         .unwrap();
-    assert_eq!(location, "/admin/login");
+    assert_eq!(location, "/admin/login?success=success_logout");
 
     // Every Set-Cookie issued should clear (Max-Age=0 or expired Expires).
     let mut saw_session_clear = false;

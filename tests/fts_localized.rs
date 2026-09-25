@@ -117,7 +117,10 @@ fn create(h: &Harness, locale: &str, data: DocumentFields) -> String {
 }
 
 fn search(h: &Harness, term: &str, trash: bool) -> Vec<String> {
-    let lctx = locale_ctx(h, "en");
+    search_in(h, &locale_ctx(h, "en"), term, trash)
+}
+
+fn search_in(h: &Harness, lctx: &LocaleContext, term: &str, trash: bool) -> Vec<String> {
     let conn = h.pool.get().unwrap();
     let hooks = RunnerReadHooks::new(&h.runner, &conn, None, None);
     let ctx = ServiceContext::collection("pages", &h.def)
@@ -127,7 +130,7 @@ fn search(h: &Harness, term: &str, trash: bool) -> Vec<String> {
         .build();
     let fq = FindQuery::builder().search(Some(term.to_string())).build();
     let input = FindDocumentsInput::builder(&fq)
-        .locale_ctx(Some(&lctx))
+        .locale_ctx(Some(lctx))
         .trash(trash)
         .build();
 
@@ -232,5 +235,58 @@ fn trash_view_search_finds_soft_deleted_rows() {
         search(&h, "Unicorn", true),
         vec![id],
         "found in the trash view"
+    );
+}
+
+/// A search matches the requested locale's text — through the fallback while
+/// that locale holds nothing — and the non-localized fields; an all-locales
+/// read matches every locale.
+#[test]
+fn search_matches_the_requested_locales_text() {
+    let h = setup();
+    let both = create(&h, "en", fields(&[("title", "Hello"), ("body", "shared")]));
+    let en_only = create(&h, "en", fields(&[("title", "Orphan"), ("body", "lonely")]));
+
+    let ctx = ServiceContext::collection("pages", &h.def)
+        .pool(&h.pool)
+        .runner(&h.runner)
+        .locale_config(Some(&h.locale))
+        .build();
+    update_document(
+        &ctx,
+        &both,
+        WriteInput::builder(fields(&[("title", "Hallo")]))
+            .locale_ctx(Some(&locale_ctx(&h, "de")))
+            .build(),
+    )
+    .expect("update de");
+
+    let de = || locale_ctx(&h, "de");
+    let en = || locale_ctx(&h, "en");
+    let all = LocaleContext {
+        mode: LocaleMode::All,
+        config: h.locale.clone(),
+    };
+
+    assert!(
+        search_in(&h, &de(), "Hello", false).is_empty(),
+        "en text, de search"
+    );
+    assert_eq!(search_in(&h, &de(), "Hallo", false), vec![both.clone()]);
+    assert!(
+        search_in(&h, &en(), "Hallo", false).is_empty(),
+        "de text, en search"
+    );
+    assert_eq!(search_in(&h, &en(), "Hello", false), vec![both.clone()]);
+    assert_eq!(search_in(&h, &all, "Hallo", false), vec![both.clone()]);
+    assert_eq!(
+        search_in(&h, &de(), "shared", false),
+        vec![both],
+        "non-localized"
+    );
+    assert_eq!(
+        search_in(&h, &de(), "Orphan", false),
+        vec![en_only],
+        "an untranslated title is found through its fallback"
     );
 }

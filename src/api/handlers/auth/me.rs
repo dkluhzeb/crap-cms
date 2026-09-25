@@ -42,11 +42,8 @@ fn me_blocking(input: &MeBlockingInput) -> Result<(Document, String), Status> {
     let auth_user = ContentService::resolve_auth_user(
         input.token.as_deref(),
         &input.headers,
-        &*input.infra.token_provider,
-        &input.infra.hook_runner,
-        &input.infra.registry,
+        &input.infra,
         &conn,
-        &input.infra.locale_config,
     )?
     .ok_or_else(|| Status::unauthenticated("Missing token"))?;
 

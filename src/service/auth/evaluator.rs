@@ -33,11 +33,11 @@ use tracing::{debug, warn};
 use crate::config::LocaleConfig;
 use crate::core::{
     AuthUser, Claims, CollectionDefinition, Document, Registry, Slug, StrategyEntry,
-    auth::{ClaimsBuilder, TokenProvider, TokenUse},
+    auth::{ClaimsBuilder, TokenUse},
     collection::{Auth, Surface},
 };
 use crate::db::{DbConnection, query};
-use crate::hooks::{HookRunner, lifecycle::AuthStrategyInput};
+use crate::hooks::lifecycle::AuthStrategyInput;
 use crate::service::{
     AppInfra, ServiceContext,
     auth::{
@@ -73,14 +73,19 @@ pub struct AuthRequest<'a> {
 /// isn't request-specific. Constructed once per spawn-blocking call
 /// in admin middleware / gRPC handlers; lets the evaluator stay a
 /// single 2-arg call site per the >4-arg rule in `CLAUDE.md`.
+///
+/// The registry, token provider, hook runner and locale config are read
+/// from `infra`; `conn` is the request's own connection.
 pub struct EvaluateDeps<'a> {
-    pub registry: &'a Registry,
-    pub token_provider: &'a dyn TokenProvider,
-    pub hook_runner: &'a HookRunner,
+    pub infra: &'a AppInfra,
     pub conn: &'a dyn DbConnection,
-    /// Needed to read the user row of a LOCALIZED auth collection (a bare
-    /// column list errors there).
-    pub locale_config: &'a LocaleConfig,
+}
+
+impl<'a> EvaluateDeps<'a> {
+    #[must_use]
+    pub fn new(infra: &'a AppInfra, conn: &'a dyn DbConnection) -> Self {
+        Self { infra, conn }
+    }
 }
 
 /// Outcome of evaluating a request against the registry's auth
@@ -289,7 +294,7 @@ pub fn evaluate(request: &AuthRequest<'_>, deps: &EvaluateDeps<'_>) -> Resolutio
     // for anonymous-read workloads where the token + cookie checks
     // both miss and we'd otherwise walk the registry on every
     // request to discover there is nothing to do.
-    if !deps.registry.has_any_strategy() {
+    if !deps.infra.registry.has_any_strategy() {
         return if credential_supplied {
             // Caller presented a credential but nothing accepted it.
             // Surface `Unaccepted` so the admin middleware clears
@@ -318,14 +323,14 @@ pub fn evaluate(request: &AuthRequest<'_>, deps: &EvaluateDeps<'_>) -> Resolutio
     // — they always ran first by virtue of `activation_matches`
     // returning true unconditionally), then header-discriminated
     // strategies indexed by each request header that has a match.
-    if let Some(entries) = deps.registry.always_strategies.get(&request.surface) {
+    if let Some(entries) = deps.infra.registry.always_strategies.get(&request.surface) {
         for entry in entries {
             if let Some(res) = try_strategy(entry, request, deps) {
                 return res;
             }
         }
     }
-    if !deps.registry.header_strategies.is_empty() {
+    if !deps.infra.registry.header_strategies.is_empty() {
         // Only iterate request headers when at least one
         // header-activated strategy exists in the registry. Each
         // header key is matched (lowercased) against the
@@ -333,7 +338,7 @@ pub fn evaluate(request: &AuthRequest<'_>, deps: &EvaluateDeps<'_>) -> Resolutio
         // miss.
         for header_name in request.headers.keys() {
             let key = (header_name.to_ascii_lowercase(), request.surface);
-            let Some(entries) = deps.registry.header_strategies.get(&key) else {
+            let Some(entries) = deps.infra.registry.header_strategies.get(&key) else {
                 continue;
             };
             for entry in entries {
@@ -365,7 +370,7 @@ fn try_strategy(
     request: &AuthRequest<'_>,
     deps: &EvaluateDeps<'_>,
 ) -> Option<Resolution> {
-    let def = deps.registry.get_collection(&entry.slug)?;
+    let def = deps.infra.registry.get_collection(&entry.slug)?;
     let auth = def.auth.as_ref()?;
     // Request-resolution path: identity comes from headers (SSO header, bearer,
     // etc.), so there are no submitted login credentials to expose.
@@ -381,25 +386,26 @@ fn try_strategy(
     // runs for every request the strategy authenticates, and would queue reads
     // behind writes. A hook that provisions its user still writes, in the
     // strategy's commit-on-success transaction.
-    let doc =
-        match deps
-            .hook_runner
-            .run_auth_strategy(&entry.authenticate, &strategy_input, deps.conn)
-        {
-            Ok(Some(doc)) => doc,
-            Ok(None) => return None,
-            Err(e) => {
-                warn!(
-                    collection = %entry.slug,
-                    strategy = %entry.name,
-                    error = ?e,
-                    "auth strategy returned error; continuing to next method"
-                );
-                return None;
-            }
-        };
+    let doc = match deps.infra.hook_runner.run_auth_strategy(
+        &entry.authenticate,
+        &strategy_input,
+        deps.conn,
+        deps.infra,
+    ) {
+        Ok(Some(doc)) => doc,
+        Ok(None) => return None,
+        Err(e) => {
+            warn!(
+                collection = %entry.slug,
+                strategy = %entry.name,
+                error = ?e,
+                "auth strategy returned error; continuing to next method"
+            );
+            return None;
+        }
+    };
 
-    let ctx = user_ctx(def, deps.conn, deps.locale_config);
+    let ctx = user_ctx(def, deps.conn, &deps.infra.locale_config);
     let (user, session_version) = admitted_strategy_user(&ctx, &doc, auth, &entry.name)?;
     let user = build_strategy_authuser(user, session_version, &entry.slug)?;
 
@@ -493,12 +499,12 @@ where
 {
     let surface = request.surface;
 
-    let Ok(claims) = deps.token_provider.validate_token(token) else {
+    let Ok(claims) = deps.infra.token_provider.validate_token(token) else {
         debug!(surface = ?surface, "token validation failed");
         return TokenOutcome::Invalid(AuthFailure::BadToken);
     };
 
-    let Some(def) = deps.registry.get_collection(&claims.collection) else {
+    let Some(def) = deps.infra.registry.get_collection(&claims.collection) else {
         debug!(
             collection = %claims.collection,
             "token references unknown auth collection"
@@ -513,7 +519,7 @@ where
         return TokenOutcome::NotAccepted;
     }
 
-    let ctx = user_ctx(def, deps.conn, deps.locale_config);
+    let ctx = user_ctx(def, deps.conn, &deps.infra.locale_config);
     let doc = match load_user(&ctx, &claims.sub) {
         Ok(Some(d)) => d,
         Ok(None) => {
@@ -554,7 +560,7 @@ fn lacks_required_second_factor(
         return false;
     }
 
-    second_factor_required(deps.hook_runner, deps.conn, gate, user)
+    second_factor_required(&deps.infra.hook_runner, deps.conn, gate, user)
 }
 
 /// Whether the account a token names may still use it: not locked, and on the

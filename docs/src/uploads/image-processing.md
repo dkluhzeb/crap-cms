@@ -152,6 +152,25 @@ gigabytes of RAM during resizing.
 Both limits are fixed and not configurable. File-size and MIME-type checks are independent
 and run alongside these checks.
 
+The decoder itself also runs under a fixed memory limit sized for an 8-bit RGBA image at
+the 100 MP cap (about 460 MB). An image whose decoded form needs more — a 16-bit or
+floating-point image near the pixel cap, say — is rejected before its pixels are read.
+
+## Concurrency
+
+Decoding an image, and resizing and converting it, costs up to hundreds of megabytes and
+seconds of CPU. So only a bounded number of images are processed at once, process-wide:
+uploads and queued format conversions share `[upload] max_concurrent_image_processing`
+slots (default: half the available CPUs, at least 1). Further image work waits for a free
+slot. An upload that waits more than 60 seconds is answered with a retryable "busy" error
+(HTTP 503 from the upload API; the admin form asks to try again) and nothing is stored. A
+queued conversion that waits that long goes back to the queue *without spending an
+attempt* and runs again after a backoff (15 seconds, growing with the job's age to at most
+5 minutes). That holds for six hours after the conversion was queued; past that a busy wait
+counts as a failed attempt like any other, so a conversion cannot wait forever. One that
+exhausted its attempts that way can be re-queued with `crap-cms images retry`. See
+[`[upload]`](../configuration/crap-toml.md#upload).
+
 ## Admin Thumbnail
 
 Set `admin_thumbnail` to the name of an image size to display it in admin list views:

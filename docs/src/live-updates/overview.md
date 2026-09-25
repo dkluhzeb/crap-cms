@@ -61,7 +61,13 @@ content views (see *Leaving a view* below): the surviving event remembers
 where the document was before the burst, so a subscriber that could see it
 there but not where it ended up still receives its removal — an unpublish
 followed by a draft save arrives as one event that a published-only
-subscriber receives as a `delete`. A
+subscriber receives as a `delete`. A draft save of a published document
+describes its pending draft while the document itself stays published, so it
+never stands for the document's position: it coalesces only with other draft
+saves of that document, never with the document's own events — an update
+followed by a draft save reaches a published-only subscriber as the update
+(never as a removal), and a draft save followed by an unpublish still
+announces the unpublish. A
 subscriber that keeps up sees every event unchanged; coalescing only ever
 touches events that were already queued behind it. Delivery granularity under load is deliberately
 non-contractual (see the frozen-contracts internals doc): you always
@@ -164,6 +170,15 @@ it is gone instead:
   global a non-draft read now returns (in `full` mode: no field content,
   `_status = "draft"`). A global is always there to read in its draft view,
   so publishing one announces no removal; globals have no trash.
+
+Whether the subscriber could see the document where it was is judged
+against the document **as it was there**: a publish that also changed the
+content, or a version restore, is judged in the view it left against the old
+content, not the new — so a subscriber whose constraint the old row satisfied
+is told of the removal even when the new content no longer matches, and one
+whose constraint only the new content satisfies (it never saw the row) learns
+nothing, not even its id. Coalesced bursts are judged against the content the
+burst started from.
 
 So a published-only subscriber is told when a document is unpublished or
 trashed; a draft-view subscriber without `trash` access when a draft is

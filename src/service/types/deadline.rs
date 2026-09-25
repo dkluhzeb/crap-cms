@@ -17,7 +17,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::service::ServiceError;
+use crate::{db::StatementDeadlineScope, service::ServiceError};
 
 /// An optional instant after which a batch operation must abort.
 #[derive(Debug, Clone, Copy, Default)]
@@ -63,6 +63,15 @@ impl OpDeadline {
     #[must_use]
     pub fn remaining(self) -> Option<Duration> {
         self.0.map(|d| d.saturating_duration_since(Instant::now()))
+    }
+
+    /// Bound every database statement this thread runs, while the returned
+    /// scope lives, by the deadline — so one runaway statement is interrupted
+    /// when the operation's time is up, instead of the batch noticing only
+    /// between documents (see [`crate::db::deadline`]).
+    #[must_use]
+    pub fn bound_statements(self) -> StatementDeadlineScope {
+        StatementDeadlineScope::bound_to(self.0)
     }
 
     /// The check the batch loops call between documents. `processed` is the

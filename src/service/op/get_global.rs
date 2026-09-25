@@ -17,10 +17,14 @@ pub struct GetGlobalArgs {
     /// Whether this read may see unpublished (draft) global content. Public
     /// surfaces default to `false`; the admin edit form opts in.
     pub include_drafts: bool,
+    /// Relationship population depth, already resolved against the `[depth]`
+    /// config by the surface (`0` — the default — returns ids).
+    pub depth: i32,
 }
 
 /// Read a global document with the full read lifecycle (view union,
-/// published-snapshot fallback for unpublished globals, field stripping).
+/// published-snapshot fallback for unpublished globals, relationship
+/// population, field stripping).
 pub enum GetGlobal {}
 
 impl Operation for GetGlobal {
@@ -34,7 +38,8 @@ impl Operation for GetGlobal {
         // the Lua and admin codecs) — the one source every op reads, instead
         // of a per-op Args twin that only two codecs remembered to fill.
         let input = GetGlobalInput::new(args.locale_ctx.as_ref(), ctx.ui_locale.as_deref())
-            .include_drafts(args.include_drafts);
+            .include_drafts(args.include_drafts)
+            .depth(args.depth);
 
         get_global_document(ctx, &input)
     }

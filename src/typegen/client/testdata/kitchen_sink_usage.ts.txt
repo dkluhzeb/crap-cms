@@ -1,0 +1,56 @@
+// Usage fixture for the TypeScript check of the kitchen-sink types: values a
+// client writes against the generated interfaces. Every line must type-check;
+// each `@ts-expect-error` line must fail.
+
+import type {
+  CollectionSlug,
+  PostsData,
+  PostsDocument,
+  PostsLocalizedDocument,
+  SettingsData,
+  Update,
+} from "./types.ts";
+
+// A create carries every required field; an optional one may be null.
+export const created: PostsData = {
+  title: "Hello",
+  status: "draft",
+  author: "u1",
+  tab_note: "note",
+  summary: null,
+  seo: { meta_title: "SEO" },
+  items: [{ label: "first", meta: { key: "k" } }],
+};
+
+// An update sends any subset — a group's sub-fields too; a row is whole and
+// keeps its id.
+export const updated: Update<PostsData> = {
+  summary: null,
+  seo: { meta_desc: "only this" },
+  items: [{ id: "r1", label: "kept" }],
+};
+
+export const settings: Update<SettingsData> = {};
+
+// @ts-expect-error a required field cannot be cleared
+export const clearedRequired: Update<PostsData> = { author: null };
+
+// @ts-expect-error a group has no value of its own to clear
+export const clearedGroup: Update<PostsData> = { seo: null };
+
+// @ts-expect-error an array row is written whole: its required label stays
+export const partialRow: Update<PostsData> = { items: [{ id: "r1" }] };
+
+// A read: every field optional, a reference an id or its document.
+export function authorId(doc: PostsDocument): string | undefined {
+  const author = doc.author;
+  if (author == null) return undefined;
+  return typeof author === "string" ? author : author.id;
+}
+
+// Every locale at once: a localized field is a per-locale map.
+export function germanSummary(doc: PostsLocalizedDocument): string | null | undefined {
+  return doc.summary?.de;
+}
+
+export const slug: CollectionSlug = "posts";

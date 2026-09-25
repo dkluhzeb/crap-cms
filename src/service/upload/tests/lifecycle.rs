@@ -3,13 +3,18 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use anyhow::anyhow;
+
 use super::support::*;
 use crate::service::upload::*;
 use crate::{
     config::LocaleConfig,
-    core::{FieldDefinition, FieldType, VersionsConfig, upload::FALLBACK_MAX_ATTEMPTS},
+    core::{
+        FieldDefinition, FieldType, VersionsConfig,
+        upload::{FALLBACK_MAX_ATTEMPTS, ImageProcessingBusy},
+    },
     db::{LocaleContext, LocaleMode, query},
-    service::{delete_document, unpublish_document},
+    service::{ServiceError, delete_document, unpublish_document},
 };
 
 /// Regression: a draft save carrying a new file deleted the file the
@@ -396,4 +401,19 @@ fn an_update_without_a_file_keeps_the_stored_one() {
     update(&infra, &def, &published.id, None, false);
 
     assert!(infra.storage.exists(&key).expect("exists"));
+}
+
+/// Every image-processing slot staying taken is a transient condition — the
+/// same upload succeeds once the burst drains — so it answers a retryable
+/// error, never a `_file` verdict on the file itself.
+#[test]
+fn a_busy_image_queue_is_transient_not_a_file_error() {
+    assert!(matches!(
+        store_error(ImageProcessingBusy.into()),
+        ServiceError::Transient(_)
+    ));
+    assert!(matches!(
+        store_error(anyhow!("undecodable")),
+        ServiceError::Validation(_)
+    ));
 }

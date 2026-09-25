@@ -335,15 +335,19 @@ changing a representation is a breaking change to every consumer.
   shape and `crap.doc.*` the read shape; `crap.data.*` stays the stored shape a
   write hook's `ctx.data` holds, and an `after_read` hook's context
   (`crap.read_hook.*`) types `ctx.data` with the read shape. The typed
-  `crap.where.*` keys and `order_by` values follow the queryable columns — a
-  `hidden` field's are never among them.
+  `crap.where.*` keys and `order_by` values follow the filter grammar — the
+  queryable columns (a group's value in both spellings), the `or` groups and
+  every array/blocks/has-many row path; a `hidden` field's are never among
+  them. An optional write key takes `crap.null` (TypeScript `| null`); a group
+  key does not (a group holds no value of its own, and a write setting one to
+  `null` or a non-object is refused with a validation error on the group). A partial write types a
+  group with every sub-field optional (Lua `crap.group_partial.*`, TypeScript
+  `Update<…Data>`); an array or blocks row is always written whole.
 - **A collection read type declares the populated `collection` tag** as the
   one-value literal of its slug (TypeScript `collection?: "posts"`, Python
   `Optional[Literal["posts"]]`, Go `*string`, Lua `collection? "posts"`); Rust
-  leaves it to the polymorphic enums' serde tag. It is omitted when a field of
-  the collection is itself named `collection`, and it never renames a field: a
-  Go tag member whose name a field's member already holds takes the suffix
-  (`Collection_2`). `_status` is `"draft" |
+  leaves it to the polymorphic enums' serde tag. `collection` is a reserved
+  field name, so no field can shadow the tag. `_status` is `"draft" |
   "published"` in TypeScript, Python and Lua and a plain string in Rust and Go.
 - **Every field of a read type is optional**, independent of the write-side
   `required` flag, and in the group and row types nested inside it. A read can
@@ -582,6 +586,30 @@ changing a representation is a breaking change to every consumer.
   sortable-column sets. (Supersedes the earlier "ranked search removed"
   note.)
 
+## Full-text search semantics
+
+- **One reading of a term on both backends.** Whitespace separates words;
+  each word matches as a prefix, every word must match, and punctuation
+  inside a word is part of it (an email, a hyphenated word, a decimal match
+  as written). A word with no letter or digit is dropped; a term with no word
+  left — like an empty or whitespace-only one — applies no filter.
+- **A search matches the requested content locale.** Localized fields in
+  that locale (through the fallback while one holds nothing) plus every
+  non-localized field; no locale = the default locale; `locale = "all"` =
+  every locale. `_rank` ranks the same text the filter matches.
+- **`list_searchable_fields` is strict.** An entry that is not a searchable,
+  non-hidden field on the document row (text, textarea, richtext, email,
+  code, select, radio; group sub-fields as `group__field`) fails the load.
+
+## Query size limits
+
+- **Every user `where` and `search` is bounded by `[query]`** at the
+  service filter chokepoint (`where`) and the search builder (`search`):
+  total filter conditions across every `or` group, total `in` / `not_in`
+  elements, and `search` length and word count. Over a limit is a
+  validation error naming `where` / `search` (invalid-argument on every
+  surface). Access-rule row constraints are never counted.
+
 ## Hooks
 
 - **A hook rejects a write by raising, and there are exactly two kinds.** A
@@ -603,13 +631,18 @@ changing a representation is a breaking change to every consumer.
   `clock`/`date`/`difftime`/`time`. Every config-dir file is loaded as
   text — bytecode is refused on every load path (`load_source_file`).
   `require` resolves only `{config_dir}/?.lua` and
-  `{config_dir}/?/init.lua`, fixed at VM build. The `io` file API stays
+  `{config_dir}/?/init.lua`, fixed at VM build, and never a file under an
+  `[hooks] io_roots` entry or a protected path. The `io` file API stays
   available but **jailed** (`io_jail`): `io.open`/`lines`/`input`/`output`
-  reach only paths that resolve under the config directory or a
-  `[hooks] io_roots` entry, and never `crap.toml`, `data/`, `backups/`,
-  the log directory, the database file, or `/proc`/`/sys`/`/dev`.
-  Widening the jail is a reviewed decision; letting a hook read the
-  process's secrets again is a breaking security change. The complete
+  READ only paths that resolve under the config directory or an `io_roots`
+  entry and WRITE only under an `io_roots` entry — the config directory is
+  read-only to Lua (`io.output` and any `io.open` mode but `"r"`/`"rb"`
+  write) — and never reach `crap.toml`, `data/`, `backups/`, the log
+  directory, the database file, or `/proc`/`/sys`/`/dev`. An `io_roots`
+  entry may not contain the config directory or lie inside one of its code
+  directories (`scaffold::paths::CODE_DIRS`). Widening the jail is a reviewed
+  decision; letting a hook read the process's secrets, or write — and so
+  `require` — code again, is a breaking security change. The complete
   surviving global set is pinned by
   `sandbox_globals_match_reviewed_allowlist`; extending it is a reviewed
   decision, re-adding a removed capability is a breaking security
@@ -946,7 +979,28 @@ changing a representation is a breaking change to every consumer.
   boolean, populated document object, or list with non-string items is a
   validation error on write; a polymorphic target must be `collection/id`.
   A reference to an id that does not exist is a caller error (400 naming
-  the target), not an internal fault.
+  the target), not an internal fault. A NEW reference to a trashed document
+  is refused exactly like a missing one — a validation error
+  (`validation.reference_unavailable`) on the field key holding it, or
+  `cannot reference {collection}/{id}: no such document` when no field of the
+  write holds it; a reference a write keeps unchanged is not judged again,
+  and an import keeps a stored reference to a trashed target.
+- **A populated document reads as a direct read of it would.** The
+  collection it belongs to is decided by the relationship / join field's
+  definition, never by document data (fail closed: unresolvable → dropped);
+  its field-read strip, its collection's `before_read` (once per collection
+  per read; an abort hides the collection's populated documents) and its
+  field + collection `after_read` hooks (the embedding read's operation,
+  every depth) apply; with `draft = true` it shows its pending draft where the
+  reader holds the target's draft access. The cycle guard is the ancestor
+  path, so `find` and `find_by_id` return the same shape. A join lists at
+  most its `limit` (default 10, ≤ `[pagination] max_limit`) per document in
+  the target's default order, is refused inside array/blocks rows, and a
+  failed lookup fails the population. A global read populates like a
+  collection read (`depth`, default `[depth] default_depth`); a document it
+  embeds sees `ctx.operation = "get"`. An embedded document the pass cannot
+  process (past its recursion bound) is dropped, never passed through.
+  `collection` is a reserved field name.
 - **A self-reference never counts.** A document referencing itself adds
   nothing to its own `_ref_count` (on create, update, hard delete, and the
   backfill alike), so it stays deletable — matching the back-reference
@@ -1369,7 +1423,13 @@ alpha.10 on:
   burst. On the multi-node wire the event's view metadata carries the prior
   view as `prior` and keeps the older `left_published` flag (a move out of
   the published view) for nodes that predate `prior`; both are additive and
-  omitted when the document did not move.
+  omitted when the document did not move. The view left is judged against
+  the row as it was there: a move that also changed the content carries that
+  row as `prior_gate` (server-side, additive, counted toward the snapshot
+  size cap and dropped with the snapshot). An event describing a pending
+  draft of a row stored elsewhere (a draft save) carries the stored
+  placement as `stored` (additive) and never coalesces with the stored row's
+  own events.
 - **Auth strategies are transactional.** Commit on authenticate, rollback
   otherwise; failed attempts can never persist writes.
 - **`select` is strict.** Unknown names error; valid = top-level field names
@@ -1396,6 +1456,27 @@ alpha.10 on:
   `on_rollback` only after rollback; effects run *outside* the transaction
   in pool-mode with `ctx = { data, outcome }`. Registrations from hooks
   fired by nested CRUD attach to the outermost transaction.
+- **Each Lua CRUD call on a shared transaction is one savepoint-backed
+  step** (frozen 2026-09-25) — as is a `crap.transaction(fn)` block inside
+  one. A failed step rolls back its own writes and drops what it queued
+  (events, verifications, file deletions, `on_commit` effects; its
+  `on_rollback` effects then run whatever the outcome), and the transaction
+  stays usable on both backends. A commit whose transaction the database
+  already aborted fails; it never reports success.
+- **Auth hooks get the full transaction scope** (frozen 2026-09-25). A
+  strategy's, auth callback's and `mfa_deliver` hook's transaction opens
+  lazily on a write-pool connection (IMMEDIATE on SQLite) — a strategy's at
+  its first write, its reads before that on the caller's connection — and is
+  settled like every other Lua write scope: events, cache invalidation,
+  verification, file cleanup and `crap.tx` effects after commit only.
+- **Statement budget** (frozen 2026-09-25). Every SQL statement runs under
+  `[database] statement_timeout` (default 30s, `0` = off), shortened by a
+  queued bulk job's deadline; past it the statement is interrupted/cancelled
+  and fails with `StatementTimedOut` (a limit-exceeded error). The schema
+  sync (and `db migrate fresh`), data migrations, backups, `db cleanup`,
+  `export` and `import` are exempt. On SQLite an interrupted *write* ends
+  its whole transaction (SQLite rolls it back); every later statement in it
+  is refused and its commit fails — nothing of it commits.
 
 ## Queued bulk operations (frozen 2026-09-04)
 

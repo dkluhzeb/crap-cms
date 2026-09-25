@@ -5,11 +5,13 @@ use std::slice::from_ref;
 
 use serde_json::{Value, json};
 
-use super::access::{ListFieldAccess, field_label};
+use super::access::ListFieldAccess;
 use crate::{
     admin::{
         Translations,
-        handlers::shared::{StatusFilter, auto_label_from_name, is_column_eligible, url_decode},
+        handlers::shared::{
+            StatusFilter, auto_label_from_name, field_label, is_column_eligible, url_decode,
+        },
     },
     core::collection::CollectionDefinition,
     db::query::{Filter, FilterClause, FilterOp},

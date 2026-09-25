@@ -25,7 +25,7 @@ use crate::{
             },
             shared::{
                 HxNav, ListUrlContext, PageRequest, PaginationParams, extract_where_params, paths,
-                render_page, require_collection,
+                render_page, require_collection, ui_locale_of,
             },
         },
     },
@@ -199,7 +199,7 @@ fn build_list_table(
         base_url: url_ctx.base_url,
         status_filter: inputs.status_filter.as_ref(),
         translations: &state.translations,
-        locale: ui_locale(state, auth_user),
+        locale: ui_locale_of(auth_user),
     });
 
     ListTable {
@@ -210,13 +210,6 @@ fn build_list_table(
         title_label: title_label(def, access),
         table_columns,
     }
-}
-
-/// The viewer's UI locale (the configured default without a viewer).
-fn ui_locale<'a>(state: &'a AdminState, auth_user: Option<&'a Extension<AuthUser>>) -> &'a str {
-    auth_user.map_or(&state.config.locale.default_locale, |Extension(au)| {
-        &au.ui_locale
-    })
 }
 
 /// Inputs to [`build_list_page`]. All fields required; constructed at the
@@ -327,7 +320,7 @@ pub async fn list_items(
         params,
         uri: &uri,
         headers: &headers,
-        ui_locale: ui_locale(&state, auth_user.as_ref()),
+        ui_locale: ui_locale_of(auth_user.as_ref()),
     };
 
     let inputs = match parse_list_inputs(&state, &def, req) {

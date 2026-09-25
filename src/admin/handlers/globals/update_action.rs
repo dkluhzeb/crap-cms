@@ -19,11 +19,12 @@ use crate::{
         handlers::{
             forms::FormData,
             shared::{
-                EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
-                editor_read_ctx, enrich_field_contexts, forbidden, get_user_doc, htmx_redirect,
-                is_non_default_locale, page_with_toast, parse_request_locale, paths,
-                redirect_response, split_sidebar_fields, strip_locale_locked_form_fields,
-                toast_only_error, translate_validation_errors, write_error_toast,
+                EnrichOptions, ErrorLabels, HxNav, PageRequest, apply_display_conditions,
+                build_field_contexts, editor_read_ctx, enrich_field_contexts, forbidden,
+                get_user_doc, htmx_redirect, is_non_default_locale, page_with_toast,
+                parse_request_locale, paths, redirect_response, split_sidebar_fields,
+                strip_locale_locked_form_fields, toast_only_error, translate_validation_errors,
+                ui_locale_of, write_error_response,
             },
         },
     },
@@ -108,11 +109,10 @@ struct ValidationRender<'a> {
 
 /// Build the validation error response with re-rendered form fields.
 async fn render_validation_error(p: &ValidationRender<'_>, ve: &ValidationError) -> Response {
-    let locale = p
-        .auth_user
-        .map_or("en", |Extension(au)| au.ui_locale.as_str());
+    let locale = ui_locale_of(p.auth_user);
 
-    let error_map = translate_validation_errors(ve, &p.state.translations, locale);
+    let labels = ErrorLabels::new(&p.def.fields, Some(p.form.raw()));
+    let error_map = translate_validation_errors(ve, &labels, &p.state.translations, locale);
     let toast_msg = p.state.translations.get(locale, "validation.error_summary");
 
     // Same locale resolution the success-path form makes, so the re-render
@@ -257,11 +257,12 @@ pub async fn update_action(
             // A hook abort, a dangling reference, a lock-retry exhaustion:
             // toast it over the form exactly as the collection edit form does,
             // instead of redirecting back as if the save had gone through.
-            other => toast_only_error(&write_error_toast(
+            other => write_error_response(
+                &state,
+                ui_locale_of(auth_user.as_ref()),
                 "Global update",
                 other,
-                state.infra.pool.kind(),
-            )),
+            ),
         },
         Err(e) => {
             error!("Global update task error: {}", e);

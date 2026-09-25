@@ -39,6 +39,7 @@
 //!   (`FieldHookWalker`, `ValidationWalker`) instead of >4 positional
 //!   args.
 
+mod config_defaults;
 mod init;
 mod io_jail;
 pub mod lifecycle;

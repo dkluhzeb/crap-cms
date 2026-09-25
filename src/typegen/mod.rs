@@ -39,6 +39,8 @@ mod language;
 // gated; only what's `pub use`'d at its mod root is reachable.
 pub mod lua;
 mod rust_proto;
+#[cfg(test)]
+mod toolchain_check;
 
 pub use dispatch::{generate_client, generate_lua, generate_proto};
 pub(crate) use helpers::to_pascal_case;

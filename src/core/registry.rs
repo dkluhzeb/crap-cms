@@ -168,21 +168,6 @@ impl Registry {
             }
         }
 
-        for name in &def.admin.list_searchable_fields {
-            if !Self::field_exists_recursive(name, &def.fields) {
-                warn!(
-                    "Collection '{}': list_searchable_fields references '{}' which is not a field",
-                    slug, name
-                );
-            } else if Self::field_is_hidden_recursive(name, &def.fields) {
-                warn!(
-                    "Collection '{}': list_searchable_fields references hidden field '{}' — \
-                     hidden fields are never indexed (a search hit would leak the value)",
-                    slug, name
-                );
-            }
-        }
-
         for name in &def.admin.list_columns {
             if !is_system_column(name) && !Self::field_exists_recursive(name, &def.fields) {
                 warn!(
@@ -197,9 +182,9 @@ impl Registry {
     /// field promoted through a layout wrapper, or a group sub-field by its flat
     /// `group__child` column name. Uses the same flat-column resolution as the
     /// schema/FTS/column walkers ([`walk_leaf_fields`]) so a valid `list_columns`
-    /// / `list_searchable_fields` entry like `seo__title` is not flagged as
-    /// "not a field". Array/Blocks appear by their own name (leaf columns); their
-    /// sub-fields live in join tables and are intentionally not matched.
+    /// entry like `seo__title` is not flagged as "not a field". Array/Blocks
+    /// appear by their own name (leaf columns); their sub-fields live in join
+    /// tables and are intentionally not matched.
     fn field_exists_recursive(name: &str, fields: &[FieldDefinition]) -> bool {
         let mut found = false;
         let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
@@ -209,18 +194,6 @@ impl Registry {
             Ok(())
         });
         found
-    }
-
-    /// Whether the leaf field at flat name `name` is API-hidden.
-    fn field_is_hidden_recursive(name: &str, fields: &[FieldDefinition]) -> bool {
-        let mut hidden = false;
-        let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
-            if prefixed_name(prefix, &field.name) == name {
-                hidden = field.hidden;
-            }
-            Ok(())
-        });
-        hidden
     }
 
     /// Register a global definition, keyed by slug. Overwrites any existing definition.
@@ -521,7 +494,7 @@ mod tests {
     #[test]
     fn field_exists_recursive_resolves_group_subfield_by_column_name() {
         // Regression: a group sub-field referenced by its flat `group__child`
-        // column name (e.g. in list_columns / list_searchable_fields) must
+        // column name (e.g. in list_columns) must
         // resolve — previously only layout wrappers were descended, so this
         // spuriously logged "not a field".
         let fields = vec![

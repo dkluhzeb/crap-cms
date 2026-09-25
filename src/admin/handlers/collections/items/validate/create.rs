@@ -10,9 +10,10 @@ use crate::{
     admin::{
         AdminState,
         handlers::{
-            shared::{get_user_doc, parse_request_locale},
+            shared::{ErrorLabels, get_user_doc, parse_request_locale},
             validate::{
                 ValidateRequest, handle_validation_outcome, validation_error_response_simple,
+                values_to_string_map,
             },
         },
     },
@@ -66,5 +67,8 @@ pub async fn validate_create(
     )
     .await;
 
-    handle_validation_outcome(result, auth_user.as_ref(), &state)
+    let form = values_to_string_map(&payload.data);
+    let labels = ErrorLabels::new(&def.fields, Some(&form));
+
+    handle_validation_outcome(result, auth_user.as_ref(), &state, &labels)
 }

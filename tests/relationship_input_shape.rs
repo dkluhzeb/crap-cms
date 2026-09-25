@@ -117,16 +117,13 @@ fn an_empty_object_writes_an_empty_has_many_list() {
 }
 
 /// A reference to an id that does not exist is the caller's mistake: a
-/// hook-style (400) error naming the target, not an internal fault.
+/// validation error (400) on the field holding it, not an internal fault.
 #[test]
 fn a_reference_to_a_missing_target_is_a_caller_error() {
     let (_tmp, pool, registry, runner) = setup();
 
     let err = create_post(&pool, &registry, &runner, "author", json!("ghost"))
-        .expect_err("dangling reference must fail")
-        .reclassify("sqlite");
-    assert!(
-        matches!(&err, ServiceError::HookError(m) if m.contains("authors/ghost")),
-        "got {err:?}"
-    );
+        .map_err(|e| e.reclassify("sqlite"));
+
+    assert_shape_error(err, "author");
 }

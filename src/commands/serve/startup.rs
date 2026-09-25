@@ -26,6 +26,7 @@ use crate::{
             warn_if_custom_cache_multi_vm,
         },
         email::{EmailRenderer, create_email_provider_with_lease},
+        open_files::raise_open_file_limit,
         rate_limit::{
             LoginRateLimiter, RateLimitBackend, RateLimitFactoryConfig, create_rate_limit_backend,
         },
@@ -588,6 +589,10 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
     validate_config_dir(&config_dir)?;
+
+    // Before anything opens descriptors or sizes itself from the limit (the
+    // listeners derive their connection caps from it).
+    raise_open_file_limit();
 
     // Before any bootstrap work: schema sync and `on_init` hooks must not run
     // beside an instance that is already serving this project.

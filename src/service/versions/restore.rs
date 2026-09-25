@@ -373,6 +373,11 @@ pub(crate) fn restore_collection_version_core(
     // Rules judge the live row, not the snapshot being restored.
     let prior = lock_and_read_placement(conn, ctx.slug, document_id, def.has_drafts())?;
 
+    // The row as the restore finds it: a restore that changes the status
+    // also replaces the content, and the view the row leaves is judged
+    // against what it held there.
+    let before = ctx.row_before_write(document_id, Some(locale_config))?;
+
     let stored = stored_fields_for_update_rules(
         conn,
         ctx.slug,
@@ -464,8 +469,10 @@ pub(crate) fn restore_collection_version_core(
     // the live event is built from it. A restore that changes the status moves
     // the row between the published and draft views, which the event
     // announces as a removal to the subscribers that could only see it where
-    // it was.
-    let row = ctx.event_row(&doc).map(|row| row.moved_from(Some(prior)));
+    // it was — judged against the content it had there.
+    let row = ctx
+        .event_row(&doc)
+        .map(|row| row.moved_from(Some(prior)).left_as(before));
 
     helpers::strip_reported(ctx, write_hooks, &mut doc, restore_locale_ctx.as_ref())?;
 

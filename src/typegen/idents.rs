@@ -66,15 +66,44 @@ pub(crate) fn rust_field(name: &str) -> RustField {
     }
 }
 
+/// The type names a generated Rust file already binds, which a schema type of
+/// the same name would clash with or shadow: `Self` (the one reserved word that
+/// survives `PascalCase`ing), the client prelude's `Rel` and its `serde`
+/// imports, the std prelude names the fields and impls use, and the proto
+/// decoder's imports (`crate::proto::{DataMap, Document, FieldValue}`,
+/// `field_value::Kind`) and trait (`FromDocument`) — the decoder builds the
+/// client structs by these same names, so one set covers both files.
+const RUST_RESERVED_TYPES: &[&str] = &[
+    "Self",
+    "Rel",
+    "Serialize",
+    "Deserialize",
+    "Option",
+    "Some",
+    "None",
+    "Result",
+    "Ok",
+    "Err",
+    "String",
+    "Vec",
+    "Box",
+    "From",
+    "DataMap",
+    "Document",
+    "FieldValue",
+    "Kind",
+    "FromDocument",
+];
+
 /// Sanitize a `PascalCase` base into a valid Rust type name. Fixes a leading
-/// digit, and `Self` — Rust's one reserved word that survives `PascalCase`ing
-/// (every other keyword is lowercase, so `PascalCase` dodges it). A type or enum
-/// variant named `Self` is rejected by the compiler; `Self_` is not.
+/// digit, and suffixes `_` to a name the generated files already bind
+/// ([`RUST_RESERVED_TYPES`]) — a `PascalCase` schema name never contains `_`,
+/// so the renamed one cannot meet another generated name.
 pub(crate) fn rust_type(pascal: &str) -> String {
     if starts_with_digit(pascal) {
         format!("N{pascal}")
-    } else if pascal == "Self" {
-        "Self_".to_string()
+    } else if RUST_RESERVED_TYPES.contains(&pascal) {
+        format!("{pascal}_")
     } else {
         pascal.to_string()
     }
@@ -92,6 +121,23 @@ pub(crate) fn go_exported(pascal: &str) -> String {
     } else {
         pascal.to_string()
     }
+}
+
+/// The type names the Go prelude declares: the generic relationship wrapper.
+const GO_RESERVED_TYPES: &[&str] = &["Rel"];
+
+/// Sanitize a `PascalCase` base into a Go TYPE name: [`go_exported`], with `_`
+/// suffixed to a name the prelude already declares ([`GO_RESERVED_TYPES`]) —
+/// a `PascalCase` schema name never contains `_`, so the renamed one cannot
+/// meet another generated name.
+pub(crate) fn go_type(pascal: &str) -> String {
+    let name = go_exported(pascal);
+
+    if GO_RESERVED_TYPES.contains(&name.as_str()) {
+        return format!("{name}_");
+    }
+
+    name
 }
 
 /// De-duplicate an identifier against the names already used in the same scope —
@@ -154,24 +200,42 @@ const PYTHON_KEYWORDS: &[&str] = &[
     "with", "yield", "match", "case",
 ];
 
+/// The names the generated Python module's annotations resolve — the builtins
+/// and the `typing` imports. A dataclass attribute spelled as one becomes the
+/// name later annotations in the same class resolve to (the class body is
+/// their namespace for type checkers and `typing.get_type_hints`).
+const PYTHON_ANNOTATION_NAMES: &[&str] = &[
+    "str", "float", "bool", "list", "dict", "Optional", "Any", "Literal",
+];
+
+/// The class names a generated Python module cannot declare: the `PascalCase`
+/// keywords (`class None:` is a syntax error) and the `typing` imports every
+/// annotation uses, which a class of the same name would shadow.
+const PYTHON_RESERVED_CLASSES: &[&str] = &["None", "True", "False", "Optional", "Any", "Literal"];
+
 /// Sanitize a schema field name into a valid Python attribute name, returning
-/// the attribute plus the original wire name when it was changed. A keyword
-/// gets a trailing underscore (PEP 8 convention); a leading digit is prefixed.
+/// the attribute plus the original wire name when it was changed. A keyword or
+/// a name the annotations resolve ([`PYTHON_ANNOTATION_NAMES`]) gets a trailing
+/// underscore (PEP 8 convention); a leading digit is prefixed.
 pub(crate) fn python_field(name: &str) -> (String, Option<String>) {
     if starts_with_digit(name) {
         (format!("n{name}"), Some(name.to_string()))
-    } else if PYTHON_KEYWORDS.contains(&name) {
+    } else if PYTHON_KEYWORDS.contains(&name) || PYTHON_ANNOTATION_NAMES.contains(&name) {
         (format!("{name}_"), Some(name.to_string()))
     } else {
         (name.to_string(), None)
     }
 }
 
-/// Sanitize a `PascalCase` base into a valid Python class name (fixes a leading
-/// digit; `PascalCase` avoids the lowercase Python keywords).
+/// Sanitize a `PascalCase` base into a valid Python class name: fixes a
+/// leading digit, and suffixes `_` to a reserved class name
+/// ([`PYTHON_RESERVED_CLASSES`]) — a `PascalCase` schema name never contains
+/// `_`, so the renamed one cannot meet another generated name.
 pub(crate) fn python_class(pascal: &str) -> String {
     if starts_with_digit(pascal) {
         format!("N{pascal}")
+    } else if PYTHON_RESERVED_CLASSES.contains(&pascal) {
+        format!("{pascal}_")
     } else {
         pascal.to_string()
     }
@@ -460,5 +524,56 @@ mod tests {
     fn escape_str_escapes_quote_backslash_newline_tab() {
         assert_eq!(escape_str("a\"b\\c\nd\te"), "a\\\"b\\\\c\\nd\\te");
         assert_eq!(escape_str("plain"), "plain");
+    }
+
+    /// Regression: a valid slug could `PascalCase` onto a name the generated
+    /// file already binds — `rel` onto the Rust/Go `Rel` wrapper, `option`
+    /// onto `Option`, `document` onto the proto decoder's `Document` import,
+    /// `none` onto Python's `None` — and the output did not compile. Such a
+    /// type name takes a `_` suffix; every other name is unchanged.
+    #[test]
+    fn prelude_names_are_de_collided() {
+        for (pascal, rust) in [
+            ("Rel", "Rel_"),
+            ("Option", "Option_"),
+            ("String", "String_"),
+            ("Serialize", "Serialize_"),
+            ("None", "None_"),
+            ("Document", "Document_"),
+            ("DataMap", "DataMap_"),
+            ("FromDocument", "FromDocument_"),
+            ("Self", "Self_"),
+            ("Posts", "Posts"),
+        ] {
+            assert_eq!(rust_type(pascal), rust, "{pascal}");
+        }
+
+        assert_eq!(go_type("Rel"), "Rel_");
+        assert_eq!(go_type("Posts"), "Posts");
+        assert_eq!(go_type("2fa"), "N2fa");
+
+        for (pascal, python) in [
+            ("None", "None_"),
+            ("True", "True_"),
+            ("Optional", "Optional_"),
+            ("Literal", "Literal_"),
+            ("Posts", "Posts"),
+        ] {
+            assert_eq!(python_class(pascal), python, "{pascal}");
+        }
+    }
+
+    /// A Python attribute named like a builtin or `typing` name the
+    /// annotations use would shadow it inside the dataclass; it is renamed
+    /// with its wire name kept.
+    #[test]
+    fn python_fields_do_not_shadow_annotation_names() {
+        for name in ["str", "list", "dict", "Optional"] {
+            assert_eq!(
+                python_field(name),
+                (format!("{name}_"), Some(name.to_string()))
+            );
+        }
+        assert_eq!(python_field("title"), ("title".to_string(), None));
     }
 }

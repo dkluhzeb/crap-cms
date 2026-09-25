@@ -1,0 +1,41 @@
+-- Usage fixture for the LuaLS check of the kitchen-sink types: calls a hook
+-- author writes against the generated classes. Every line must check clean.
+
+---@type crap.where.Posts
+local where = {
+    ["or"] = { { status = "draft" }, { ["seo.meta_title"] = { contains = "SEO" } } },
+    ["items.label"] = "first",
+    ["content._block_type"] = "text",
+    ["tags.id"] = { ["in"] = { "t1", "t2" } },
+    seo__meta_desc = { exists = true },
+}
+
+local found = crap.collections.posts.find({ where = where, order_by = "-seo.meta_title" })
+for _, doc in ipairs(found.documents) do
+    local _title = doc.title
+end
+
+-- An explicit null clears an optional field; a group takes any subset of its
+-- sub-fields; a nested row keeps its id.
+crap.collections.posts.update("p1", {
+    summary = crap.null,
+    published_at_tz = crap.null,
+    seo = { meta_desc = "only this" },
+    items = { { id = "r1", label = "kept" } },
+})
+
+-- A draft save leaves required fields out.
+crap.collections.posts.create({ summary = "wip" }, { draft = true })
+
+-- Every locale at once: localized fields are per-locale tables.
+local all = crap.collections.posts.find_by_id("p1", { locale = "all" }) --[[@as crap.doc_localized.Posts?]]
+if all and all.summary then
+    for _locale, text in pairs(all.summary) do
+        local _upper = text:upper()
+    end
+end
+
+local user = crap.auth.user()
+if user then
+    local _role = user.role
+end

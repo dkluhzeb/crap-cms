@@ -2,16 +2,13 @@
 //! `typegen/`. Includes naming conventions (`to_pascal_case`),
 //! field-classification predicates (`is_optional`, `rel_has_many`), the
 //! `_status` value set (`DRAFT_STATUS_VALUES`), the populated `collection`
-//! tag (`declares_collection_tag`),
+//! tag key (`COLLECTION_TAG_KEY`),
 //! registry traversal (`sorted_*_slugs`), recursive sub-type
 //! collection (`SubTypeKind`, `SubTypeField`, `collect_sub_type_fields`),
 //! and the [`w!`] macro every generator uses to emit lines without
 //! repeating `.expect("write to String")`.
 
-use crate::core::{
-    FieldChildren, FieldDefinition, FieldType, Registry, Slug, field_children,
-    flatten_array_sub_fields,
-};
+use crate::core::{FieldChildren, FieldDefinition, FieldType, Registry, Slug, field_children};
 
 /// `writeln!` to a `String` that infallibly succeeds — wraps the
 /// boilerplate `.expect("write to String")` every per-language
@@ -49,6 +46,36 @@ macro_rules! wraw {
 }
 pub(super) use wraw;
 
+/// Whether `field` is read as a per-locale map by a `locale = "all"` read:
+/// a column of its own that is localized, itself or through an enclosing
+/// localized group (`inherited`).
+pub(super) fn localizes(field: &FieldDefinition, inherited: bool) -> bool {
+    field.has_parent_column() && (inherited || field.localized)
+}
+
+/// Whether an optional write key for `field` offers the explicit null that
+/// clears its stored value. A group holds no value of its own — its
+/// sub-fields are the columns — so a null group clears nothing (a parent-table
+/// group's null writes no column); its sub-fields are cleared one by one.
+pub(super) fn clears_with_null(field: &FieldDefinition) -> bool {
+    field.field_type != FieldType::Group
+}
+
+/// Whether `fields` hold a per-locale column, looking through layout wrappers
+/// and groups. Array and blocks rows are never per-locale columns (a
+/// `locale = "all"` read returns their default-locale rows).
+pub(super) fn has_localized_columns(fields: &[FieldDefinition], inherited: bool) -> bool {
+    fields.iter().any(|f| match field_children(f) {
+        FieldChildren::Wrapper(sub) => has_localized_columns(sub, inherited),
+        FieldChildren::Tabs(tabs) => tabs
+            .iter()
+            .any(|tab| has_localized_columns(&tab.fields, inherited)),
+        FieldChildren::Group(sub) => has_localized_columns(sub, inherited || f.localized),
+        FieldChildren::Leaf => localizes(f, inherited),
+        FieldChildren::Array(_) | FieldChildren::Blocks(_) => false,
+    })
+}
+
 /// Convert a slug like "`site_settings`" to `PascalCase` "`SiteSettings`".
 pub(crate) fn to_pascal_case(slug: &str) -> String {
     slug.split('_')
@@ -82,17 +109,9 @@ pub(super) fn rel_has_many(field: &FieldDefinition) -> bool {
 pub(super) const DRAFT_STATUS_VALUES: [&str; 2] = ["draft", "published"];
 
 /// The key a document populated into a relationship is tagged with: the slug
-/// of its collection.
+/// of its collection. A reserved field name, so every collection's read
+/// document declares it.
 pub(super) const COLLECTION_TAG_KEY: &str = "collection";
-
-/// Whether a collection's read document declares the populated
-/// [`COLLECTION_TAG_KEY`] tag: every one does, unless one of its own fields
-/// (layout wrappers are transparent) has that name.
-pub(super) fn declares_collection_tag(read: &[FieldDefinition]) -> bool {
-    !flatten_array_sub_fields(read)
-        .iter()
-        .any(|f| f.name == COLLECTION_TAG_KEY)
-}
 
 /// Get sorted collection slugs from the registry.
 pub(super) fn sorted_collection_slugs(registry: &Registry) -> Vec<&Slug> {
@@ -431,18 +450,5 @@ mod tests {
             result.is_empty(),
             "empty Array/Group should not produce sub-types"
         );
-    }
-
-    // ── declares_collection_tag ────────────────────────────────────────
-
-    #[test]
-    fn collection_tag_is_declared_unless_a_field_shadows_it() {
-        assert!(declares_collection_tag(&[text_field("title", true)]));
-        assert!(!declares_collection_tag(&[text_field("collection", false)]));
-
-        let row = FieldDefinition::builder("row", FieldType::Row)
-            .fields(vec![text_field("collection", false)])
-            .build();
-        assert!(!declares_collection_tag(&[row]), "a wrapper is transparent");
     }
 }

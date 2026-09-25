@@ -464,6 +464,48 @@ fn render_callable_aliases(out: &mut String) {
 ",
     );
 }
+/// The option classes narrowed to one value of a flag, which the
+/// per-collection accessors in `hooks.lua` overload on: a draft save
+/// (`draft = true`, required fields relaxed) and an every-locale read
+/// (`locale = "all"`, localized fields returned as per-locale tables).
+fn render_variant_options(out: &mut String) {
+    out.push_str(
+        "\
+--- `crap.CreateOptions` of a draft save: required fields are not enforced,
+--- so a drafts collection's `create` / `create_many` take the all-optional
+--- `crap.partial.<Slug>` payload with these options.
+--- @class crap.DraftCreateOptions : crap.CreateOptions
+--- @field draft true
+
+--- `crap.ValidateOptions` of a draft dry-run: required fields are not
+--- enforced, as for a draft `create`.
+--- @class crap.DraftValidateOptions : crap.ValidateOptions
+--- @field draft true
+
+--- `crap.FindByIdOptions` reading every locale at once: each localized field
+--- comes back as a `{ [locale] = value }` table (`crap.doc_localized.<Slug>`).
+--- @class crap.AllLocalesFindByIdOptions : crap.FindByIdOptions
+--- @field locale \"all\"
+
+",
+    );
+}
+
+/// `crap.GlobalGetOptions` reading every locale at once — see
+/// [`render_variant_options`].
+fn render_all_locales_global_get_options(out: &mut String) {
+    out.push_str(
+        "\
+--- `crap.GlobalGetOptions` reading every locale at once: each localized
+--- field comes back as a `{ [locale] = value }` table
+--- (`crap.global_doc_localized.<Slug>`).
+--- @class crap.AllLocalesGlobalGetOptions : crap.GlobalGetOptions
+--- @field locale \"all\"
+
+",
+    );
+}
+
 fn render_crap_collections(out: &mut String) {
     render_crap_collections_init_root_lua(out);
     render_crap_collections_init_config_lua(out);
@@ -479,6 +521,7 @@ fn render_crap_collections(out: &mut String) {
     // unaffected; this only skips type-annotation emission.
     FindByIdOptions::render_lua_annotation(out);
     CreateOptions::render_lua_annotation(out);
+    render_variant_options(out);
     render_crap_collections_create_lua(out);
     UpdateOptions::render_lua_annotation(out);
     render_crap_collections_update_lua(out);
@@ -518,6 +561,7 @@ fn render_crap_globals(out: &mut String) {
     render_crap_globals_init_root_lua(out);
     render_crap_globals_init_config_lua(out);
     GlobalGetOptions::render_lua_annotation(out);
+    render_all_locales_global_get_options(out);
     GlobalUpdateOptions::render_lua_annotation(out);
     GlobalUnpublishOptions::render_lua_annotation(out);
     GlobalValidateOptions::render_lua_annotation(out);

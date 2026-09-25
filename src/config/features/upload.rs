@@ -1,5 +1,7 @@
 //! Global upload + S3 storage configuration.
 
+use std::num::NonZeroUsize;
+
 use serde::{Deserialize, Serialize};
 
 use crate::config::{S3SecretKey, parsing::serde_filesize};
@@ -27,6 +29,10 @@ pub struct UploadConfig {
     /// Accepts integer bytes or human-readable string ("50MB", "1GB").
     #[serde(with = "serde_filesize")]
     pub max_file_size: u64,
+    /// How many images are decoded and processed (resized, converted) at
+    /// once, across uploads and queued conversions. Further work waits for a
+    /// free slot. `None` (the default) = half the available CPUs, at least 1.
+    pub max_concurrent_image_processing: Option<NonZeroUsize>,
     /// S3-compatible storage configuration. Only used when `storage = "s3"`.
     #[serde(default)]
     pub s3: S3Config,
@@ -89,6 +95,7 @@ impl Default for UploadConfig {
         Self {
             storage: UploadStorage::default(),
             max_file_size: 52_428_800, // 50MB
+            max_concurrent_image_processing: None,
             s3: S3Config::default(),
         }
     }
@@ -114,5 +121,16 @@ mod tests {
     fn upload_config_defaults() {
         let upload = UploadConfig::default();
         assert_eq!(upload.max_file_size, 52_428_800);
+        assert_eq!(upload.max_concurrent_image_processing, None);
+    }
+
+    /// Zero slots would refuse every image; it is refused when the config is
+    /// parsed.
+    #[test]
+    fn zero_image_concurrency_is_refused() {
+        let err =
+            toml::from_str::<UploadConfig>("max_concurrent_image_processing = 0").unwrap_err();
+
+        assert!(err.to_string().contains("nonzero"), "{err}");
     }
 }

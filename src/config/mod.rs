@@ -61,8 +61,8 @@ pub use cors::CorsConfig;
 pub use features::{
     AccessConfig, CacheBackend, CacheConfig, DepthConfig, EmailConfig, EmailProvider, HooksConfig,
     JobsConfig, LiveConfig, LiveTransport, LocaleConfig, LogRotation, LoggingConfig, McpConfig,
-    McpJobTools, PaginationConfig, PaginationMode, QueueConfig, S3Config, SmtpTls, UpdateConfig,
-    UploadConfig, UploadStorage,
+    McpJobTools, PaginationConfig, PaginationMode, QueryConfig, QueueConfig, S3Config, SmtpTls,
+    UpdateConfig, UploadConfig, UploadStorage, query_limits,
 };
 pub(crate) use features::{
     DEFAULT_BULK_QUEUE_TIMEOUT_SECS, DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS,

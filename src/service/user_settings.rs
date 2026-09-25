@@ -14,8 +14,12 @@
 //! save of that collection moves its entry under `collections`.
 
 use serde_json::{Map, Value, from_str, json};
+use tracing::warn;
 
-use crate::db::{DbConnection, query};
+use crate::{
+    core::default_label_locale,
+    db::{DbConnection, query},
+};
 
 use super::ServiceError;
 
@@ -138,6 +142,20 @@ pub fn load_user_settings(
     Ok(UserSettings::parse(stored.as_deref()))
 }
 
+/// The admin UI locale to address `user_id` in outside a request (a system
+/// email): the user's own preference, else the configured default locale.
+/// A settings row that cannot be read falls back to the default — the
+/// message still goes out, in the default language.
+pub fn recipient_ui_locale(conn: &dyn DbConnection, user_id: &str) -> String {
+    let settings = load_user_settings(conn, user_id)
+        .inspect_err(|e| warn!("Cannot read the UI locale of user {user_id}: {e:#}"))
+        .ok();
+
+    settings
+        .and_then(|s| s.ui_locale().map(str::to_string))
+        .unwrap_or_else(|| default_label_locale().to_string())
+}
+
 /// Save a user's settings JSON string (upsert).
 pub fn set_user_settings(
     conn: &dyn DbConnection,
@@ -150,7 +168,49 @@ pub fn set_user_settings(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "sqlite")]
+    use crate::db::InMemoryConn;
+
     use super::*;
+
+    /// An in-memory database holding the settings table, with `settings`
+    /// stored for user `u1` when given.
+    #[cfg(feature = "sqlite")]
+    fn settings_db(settings: Option<&str>) -> InMemoryConn {
+        let conn = InMemoryConn::open();
+        conn.0
+            .execute_batch(
+                "CREATE TABLE _crap_user_settings (user_id TEXT PRIMARY KEY, settings TEXT)",
+            )
+            .expect("settings table");
+
+        if let Some(blob) = settings {
+            set_user_settings(&conn, "u1", blob).expect("store settings");
+        }
+
+        conn
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn recipient_locale_is_the_users_ui_preference() {
+        let conn = settings_db(Some(r#"{"ui_locale":"de"}"#));
+
+        assert_eq!(recipient_ui_locale(&conn, "u1"), "de");
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn recipient_locale_falls_back_to_the_default_locale() {
+        let conn = settings_db(None);
+        assert_eq!(recipient_ui_locale(&conn, "u1"), default_label_locale());
+
+        let unreadable = InMemoryConn::open();
+        assert_eq!(
+            recipient_ui_locale(&unreadable, "u1"),
+            default_label_locale()
+        );
+    }
 
     fn cols(names: &[&str]) -> Vec<String> {
         names.iter().map(|s| (*s).to_string()).collect()

@@ -1,5 +1,5 @@
 //! Feature configuration sections. One file per `[<section>]` table in
-//! `crap.toml`: email, depth, pagination, cache, MCP, upload, locale,
+//! `crap.toml`: email, depth, pagination, query, cache, MCP, upload, locale,
 //! jobs, live events, hooks, access, logging, update check.
 //!
 //! Each section is a self-contained type with its own `Default` impl
@@ -19,6 +19,7 @@ mod locale;
 mod logging;
 mod mcp;
 mod pagination;
+mod query;
 mod update;
 mod upload;
 
@@ -37,5 +38,7 @@ pub use locale::LocaleConfig;
 pub use logging::{LogRotation, LoggingConfig};
 pub use mcp::{McpConfig, McpJobTools};
 pub use pagination::{PaginationConfig, PaginationMode};
+pub(crate) use query::install_query_limits;
+pub use query::{QueryConfig, query_limits};
 pub use update::UpdateConfig;
 pub use upload::{S3Config, UploadConfig, UploadStorage};

@@ -3,35 +3,47 @@
 //!
 //! Each hook's CRUD contract follows what it is for:
 //!
-//! - A **strategy** (at login, or per request) runs in a transaction on the
-//!   caller's connection that commits only when it authenticates someone.
-//! - An **auth callback** and an **`mfa_deliver`** hook run their outbound
-//!   HTTP without a database connection: their transaction is opened lazily
-//!   on a write connection at their first CRUD call ([`LazyTx`]), so the
-//!   network round trip never pins a write connection unless the hook
-//!   touched the database before it.
+//! - A **strategy** (at login, or per request), an **auth callback** and an
+//!   **`mfa_deliver`** hook run their CRUD in one transaction on a write-pool
+//!   connection that opens lazily ([`LazyTx`]): at a callback's or
+//!   `mfa_deliver` hook's first CRUD call, at a strategy's first write — its
+//!   reads before that run on the caller's connection. Outbound HTTP never
+//!   pins a write connection unless the hook wrote before it. The
+//!   transaction gets the full transaction scope every other write surface
+//!   has ([`TxScope`]): live
+//!   events, populate-cache invalidation, account verification, upload file
+//!   cleanup and `crap.tx` effects, all delivered only after it commits.
 //! - **`mfa_when`** is a read-only predicate on the caller's connection.
 
-use anyhow::{Context as _, Result};
+use std::{cell::RefCell, rc::Rc};
+
+use anyhow::Result;
 use mlua::{Lua, Table, Value};
 
 use crate::{
     core::{Document, HookRef, document::DocumentBuilder},
-    db::{DbConnection, DbPool},
+    db::DbConnection,
     hooks::{
-        HookRunner,
+        HookRunner, LuaCrudInfra,
         lifecycle::{
             AuthStrategyContext, AuthStrategyInput, LazyTx, LazyTxGuard, MfaDeliverContext,
             MfaDeliverInput, MfaWhenContext, MfaWhenInput, ReadOnlyScopeGuard, TxContextGuard,
-            commit_or_roll_back, converters::lua_table_to_json_map,
-            execution::resolve_hook_function, roll_back,
+            converters::lua_table_to_json_map, execution::resolve_hook_function,
         },
-        lua_api::to_lua_value,
+        lua_api::{to_lua_value, transaction::TxScope},
     },
+    service::{AppInfra, EventQueue, ServiceContext, flush_queue},
 };
 
 /// Transaction label of a strategy run on the caller's connection.
 const STRATEGY_TX: &str = "auth-strategy";
+
+/// An auth hook's transaction and the infrastructure its writes publish
+/// through.
+struct AuthHookTx<'a> {
+    tx: LazyTx<'a>,
+    infra: &'a AppInfra,
+}
 
 /// Convert a Lua table returned by an auth strategy into a Document.
 fn lua_table_to_auth_user(tbl: &Table) -> Result<Document> {
@@ -105,16 +117,77 @@ fn call_mfa_deliver(lua: &Lua, hook: &HookRef, input: &MfaDeliverInput) -> Resul
 }
 
 impl HookRunner {
-    /// Run a custom auth strategy function on `conn` (a login's connection,
-    /// or the request's own connection for a per-request strategy). Returns
-    /// the user it authenticates, if any.
+    /// Run `call` on a pooled VM inside `hook_tx`'s transaction scope, and
+    /// commit the transaction when `commit_if` accepts the hook's result
+    /// (rolled back otherwise, and on every error). Events the committed
+    /// transaction produced are published after the VM is released — their
+    /// `before_broadcast` hooks acquire a VM of their own.
+    fn run_in_auth_tx<R>(
+        &self,
+        hook_tx: AuthHookTx<'_>,
+        call: impl FnOnce(&Lua) -> Result<R>,
+        commit_if: impl FnOnce(&R) -> bool,
+    ) -> Result<R> {
+        let events: EventQueue = Rc::new(RefCell::new(Vec::new()));
+        let transport = hook_tx.infra.event_transport.clone();
+
+        let result = self.run_auth_tx_in_vm(hook_tx, &events, call, commit_if);
+
+        let flush_ctx = ServiceContext::slug_only("")
+            .runner(self)
+            .event_transport(transport)
+            .build();
+        flush_queue(&flush_ctx, &events);
+
+        result
+    }
+
+    /// The VM-holding body of [`Self::run_in_auth_tx`].
+    fn run_auth_tx_in_vm<R>(
+        &self,
+        hook_tx: AuthHookTx<'_>,
+        events: &EventQueue,
+        call: impl FnOnce(&Lua) -> Result<R>,
+        commit_if: impl FnOnce(&R) -> bool,
+    ) -> Result<R> {
+        let lua = self.pool.acquire()?;
+
+        let mut crud = LuaCrudInfra::for_pool_crud(hook_tx.infra);
+        crud.event_queue = Some(events.clone());
+
+        let _ambient = TxContextGuard::set_hook_tx(&lua, hook_tx.infra.pool.clone(), crud);
+
+        let tx = hook_tx.tx;
+        let scope = TxScope::open(&lua, tx.label());
+
+        let result = {
+            let _lazy = LazyTxGuard::install(&lua, &tx);
+
+            call(&lua)
+        };
+
+        let commit = result.as_ref().is_ok_and(commit_if);
+
+        scope.settle(tx, result, commit, |e| e)
+    }
+
+    /// Run a custom auth strategy function. Returns the user it
+    /// authenticates, if any.
     ///
-    /// The strategy runs inside a transaction that COMMITS only when it
-    /// authenticates someone. A failed or erroring attempt rolls back —
-    /// strategy attempts are attacker-controlled (unauthenticated input), so
-    /// persistent writes keyed to failures would let anyone grow the database
-    /// from the login endpoint. Counters belong in the rate limiters,
-    /// observability in `crap.log` (neither lives in this transaction).
+    /// Its reads run on `conn` — the login's connection, or the request's own
+    /// read connection for a per-request strategy — until it writes: its
+    /// first write opens a transaction on a write-pool connection (so a
+    /// strategy that only looks its user up never takes one, and none is held
+    /// across its network I/O before it writes), which every later call
+    /// shares and which COMMITS only when it authenticates someone. A
+    /// failed or erroring attempt rolls back — strategy attempts are
+    /// attacker-controlled (unauthenticated input), so persistent writes
+    /// keyed to failures would let anyone grow the database from the login
+    /// endpoint. Counters belong in the rate limiters, observability in
+    /// `crap.log` (neither lives in this transaction).
+    ///
+    /// `infra` supplies the write pool and the transports the strategy's
+    /// writes publish through.
     ///
     /// # Errors
     ///
@@ -125,36 +198,30 @@ impl HookRunner {
         authenticate: &HookRef,
         input: &AuthStrategyInput,
         conn: &dyn DbConnection,
+        infra: &AppInfra,
     ) -> Result<Option<Document>> {
-        let lua = self.pool.acquire()?;
+        let hook_tx = AuthHookTx {
+            tx: LazyTx::on_pool_reading(infra.pool.clone(), conn, STRATEGY_TX),
+            infra,
+        };
 
-        // Inject connection for CRUD access — guard ensures cleanup on all exit paths
-        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
-
-        conn.execute("BEGIN", &[])
-            .context("failed to open the auth-strategy transaction")?;
-
-        let outcome = call_auth_strategy(&lua, authenticate, input);
-
-        if matches!(outcome, Ok(Some(_))) {
-            commit_or_roll_back(conn, STRATEGY_TX)?;
-        } else {
-            roll_back(conn, STRATEGY_TX);
-        }
-
-        outcome
+        self.run_in_auth_tx(
+            hook_tx,
+            |lua| call_auth_strategy(lua, authenticate, input),
+            Option::is_some,
+        )
     }
 
-    /// Run an auth-callback hook (OAuth / OIDC: `auth_callback/{name}.lua`)
-    /// against `pool`. Returns the user it authenticates, if any.
+    /// Run an auth-callback hook (OAuth / OIDC: `auth_callback/{name}.lua`).
+    /// Returns the user it authenticates, if any.
     ///
     /// Same contract as [`Self::run_auth_strategy`] — its writes (typically
     /// provisioning the user on first sign-in) commit only when it
-    /// authenticates someone — but the transaction opens **lazily**, on a
-    /// write connection, at the hook's first CRUD call. A callback spends its
-    /// time on outbound HTTP (the code exchange, the userinfo fetch) and
-    /// normally touches the database afterwards, so that round trip holds no
-    /// connection; one that makes no CRUD call never takes one.
+    /// authenticates someone — but the transaction opens on a write-pool
+    /// connection. A callback spends its time on outbound HTTP (the code
+    /// exchange, the userinfo fetch) and normally touches the database
+    /// afterwards, so that round trip holds no connection; one that makes no
+    /// CRUD call never takes one.
     ///
     /// # Errors
     ///
@@ -164,24 +231,18 @@ impl HookRunner {
         &self,
         authenticate: &HookRef,
         input: &AuthStrategyInput,
-        pool: &DbPool,
+        infra: &AppInfra,
     ) -> Result<Option<Document>> {
-        let lua = self.pool.acquire()?;
-        let tx = LazyTx::new(pool.clone(), "auth-callback");
-
-        let outcome = {
-            let _identity = TxContextGuard::set_identity(&lua, None, None);
-            let _lazy = LazyTxGuard::install(&lua, &tx);
-
-            call_auth_strategy(&lua, authenticate, input)
+        let hook_tx = AuthHookTx {
+            tx: LazyTx::on_pool(infra.pool.clone(), "auth-callback"),
+            infra,
         };
 
-        // Dropping the transaction without committing rolls it back.
-        if matches!(outcome, Ok(Some(_))) {
-            tx.commit()?;
-        }
-
-        outcome
+        self.run_in_auth_tx(
+            hook_tx,
+            |lua| call_auth_strategy(lua, authenticate, input),
+            Option::is_some,
+        )
     }
 
     /// Run a `password_login` method's `mfa_when` gate: decides whether THIS
@@ -242,18 +303,17 @@ impl HookRunner {
         &self,
         hook: &HookRef,
         input: &MfaDeliverInput,
-        pool: &DbPool,
+        infra: &AppInfra,
     ) -> Result<()> {
-        let lua = self.pool.acquire()?;
-        let tx = LazyTx::new(pool.clone(), "mfa_deliver");
+        let hook_tx = AuthHookTx {
+            tx: LazyTx::on_pool(infra.pool.clone(), "mfa_deliver"),
+            infra,
+        };
 
-        {
-            let _identity = TxContextGuard::set_identity(&lua, None, None);
-            let _lazy = LazyTxGuard::install(&lua, &tx);
-
-            call_mfa_deliver(&lua, hook, input)?;
-        }
-
-        tx.commit()
+        self.run_in_auth_tx(
+            hook_tx,
+            |lua| call_mfa_deliver(lua, hook, input),
+            |(): &()| true,
+        )
     }
 }

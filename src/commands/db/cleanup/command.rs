@@ -12,6 +12,7 @@ use super::{
 use crate::{
     cli,
     commands::{Project, open_project},
+    db::UnboundedStatements,
 };
 
 /// Detect and optionally remove leftovers no Lua definition accounts for.
@@ -52,6 +53,11 @@ pub fn cleanup(config_dir: &Path, confirm: bool, drop_tables: bool) -> Result<()
         registry,
         pool,
     } = open_project(&config_dir)?;
+
+    // Maintenance over whole tables — a column drop rewrites its table on
+    // SQLite, and every reference is recounted — whose statements may
+    // legitimately outlast the statement timeout.
+    let _unbounded = UnboundedStatements::lift();
 
     let mut conn = pool.write().context("Failed to get database connection")?;
     let mut report = scan(&conn, &registry, &cfg.locale)?;

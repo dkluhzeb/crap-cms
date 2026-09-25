@@ -17,7 +17,7 @@ use crap_cms::{
     admin::{AdminState, server::build_router, templates, translations::Translations},
     config::CrapConfig,
     core::{
-        DocumentFields, JwtSecret, Registry, auth,
+        DocumentFields, JwtSecret, LiveSlots, Registry, auth,
         collection::{
             AdminConfig, Auth, CollectionDefinition, GlobalDefinition, Labels, VersionsConfig,
         },
@@ -91,11 +91,11 @@ pub fn setup_app_with_config(
     let shared = Registry::shared();
     {
         let mut reg = shared.write().unwrap();
-        for def in &collections {
-            reg.register_collection(def.clone());
+        for def in collections {
+            reg.register_collection(def);
         }
-        for def in &globals {
-            reg.register_global(def.clone());
+        for def in globals {
+            reg.register_global(def);
         }
     }
 
@@ -165,8 +165,7 @@ pub fn setup_app_with_config(
         )),
         has_auth,
         translations,
-        sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        max_sse_connections: 0,
+        sse_slots: LiveSlots::new(0, 0),
         shutdown: tokio_util::sync::CancellationToken::new(),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
@@ -213,7 +212,7 @@ pub fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
     let claims = auth::Claims::builder(user_id, "users")
         .email(email)
         .session_version(session_version)
-        .exp((chrono::Utc::now().timestamp() as u64) + 3600)
+        .exp(u64::try_from(chrono::Utc::now().timestamp()).unwrap() + 3600)
         .build()
         .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();

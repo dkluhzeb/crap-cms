@@ -591,16 +591,55 @@ grpcurl -plaintext -d '{
 
 **Behavior:**
 - Each whitespace-separated word is treated as a **prefix** search term (implicit AND): `search = "hel wor"` matches "hello world".
-- `search` acts as an additional **filter** on the result set (`id IN (FTS matches)`); ordering follows `order_by` / the default sort as usual — results are **not** re-ranked by FTS relevance.
+- Punctuation inside a word is part of the word, on both backends: `jane@example.com`, `well-known`, `O'Brien` and `3.14` each match the text they were written in.
+- A word with no letter or digit (`-`, `@`, `"`) carries nothing to match and is ignored; a `search` made only of such words — like an empty or whitespace-only one — applies no search filter at all.
+- `search` acts as an additional **filter** on the result set (`id IN (FTS matches)`); ordering follows `order_by` / the default sort as usual — results are **not** re-ranked by FTS relevance unless you ask for `order_by = "_rank"`.
 - `search` can be combined with `where` filters, pagination, sorting, and all other query parameters.
-- Collections without text fields silently ignore the `search` parameter.
+- Collections without text fields ignore the `search` parameter.
 - The `search` parameter also works with `Count` to get the total number of matching documents.
+- A term longer than `[query] max_search_length` characters (default 1000) or with more than `[query] max_search_terms` words (default 32) is rejected as an invalid query (see [Query size limits](#query-size-limits)).
+
+**Localized collections:** a search matches the text of the requested content
+locale — its localized fields plus every non-localized field. A localized field
+that holds nothing in that locale is matched by the text the read shows for it:
+the default locale's, when `[locale] fallback` is on. A request without a locale
+searches the default locale; `locale = "all"` searches every locale. So in the
+admin list at locale `de`, searching the English title of a document with its
+own German title does not find it. (On Postgres the index of such a collection
+holds one `tsvector` per locale plus one over every locale, each with its own GIN
+index — plan for its size to grow with the number of locales.)
 
 **Indexed fields** are determined by:
 1. `admin.list_searchable_fields` if configured on the collection.
 2. Otherwise, all parent-level fields with types: text, textarea, richtext, email, code.
 
+`list_searchable_fields` is checked when the collection is loaded: every entry
+must name a field stored on the document row (a group sub-field as
+`group__field`) whose type holds text — text, textarea, richtext, email, code,
+select or radio — and that is not `hidden`. An unknown name, an array, blocks
+or group name, a hidden field, or a number, checkbox, date, JSON or
+relationship field fails the load with an error naming the entry. Filter those
+with `where` instead.
+
 The FTS index is automatically created and rebuilt on server startup for every collection with text fields.
+
+## Query Size Limits
+
+Every user-supplied query — admin list filters, gRPC, MCP and Lua CRUD alike —
+is checked against the `[query]` limits before any SQL runs:
+
+| Limit | Default | What it bounds |
+|-------|---------|----------------|
+| `max_filter_terms` | `100` | Filter conditions in one `where`, counted across every `or` group. |
+| `max_filter_values` | `1000` | `in` / `not_in` list elements in one `where`, summed over every list. |
+| `max_search_length` | `1000` | Characters in a `search` term. |
+| `max_search_terms` | `32` | Whitespace-separated words in a `search` term. |
+
+A query over a limit is rejected as an invalid query (`InvalidArgument` on
+gRPC, a 400 elsewhere) naming `where` or `search`. The row constraints an
+access rule returns are not user input and are not counted. Raise a limit in
+`crap.toml` when a trusted client (a Lua hook selecting thousands of ids, say)
+needs more — see [`[query]`](../configuration/crap-toml.md#query).
 
 ## Valid Filter Fields
 

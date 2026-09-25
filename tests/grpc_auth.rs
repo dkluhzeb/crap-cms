@@ -35,8 +35,16 @@ use crap_cms::core::rate_limit::IP_RESET_PASSWORD_KEYSPACE;
 use crap_cms::core::{HookRef, Registry};
 use crap_cms::db::{DbConnection, DbValue, migrate, pool, query::MfaCode};
 use crap_cms::hooks::lifecycle::HookRunner;
-use crap_cms::service::auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution, evaluate};
+use crap_cms::service::{
+    AppInfra,
+    auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution, evaluate},
+};
 use serde_json::json;
+
+/// The address a gRPC call that reached no TCP acceptor (a direct service
+/// call, as in these tests) is attributed to; all such calls share its
+/// rate-limit buckets.
+const UNKNOWN_PEER: &str = "0.0.0.0";
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -107,10 +115,9 @@ struct TestSetup {
     /// The same per-IP forgot/reset limiter the service holds, exposed so
     /// rate-limit tests can seed and inspect it.
     ip_forgot_password_limiter: Arc<crap_cms::core::rate_limit::LoginRateLimiter>,
-    /// The registry and hook runner the service runs on, exposed so a test
-    /// can judge a token the service minted on another surface.
-    registry: Arc<Registry>,
-    hook_runner: HookRunner,
+    /// The infrastructure the service runs on, exposed so a test can judge a
+    /// token the service minted on another surface.
+    infra: Arc<AppInfra>,
 }
 
 fn setup_service(
@@ -183,48 +190,47 @@ fn setup_service_full(
     let ip_forgot_password_limiter =
         Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900));
 
-    let service = ContentService::new(
-        ContentServiceDeps::builder()
-            .pool(db_pool.clone())
-            .registry(Registry::snapshot(&shared))
-            .hook_runner(hook_runner.clone())
-            .config(config.clone())
-            .config_dir(tmp.path().to_path_buf())
-            .storage(
-                crap_cms::core::upload::create_storage(
-                    tmp.path(),
-                    &crap_cms::config::UploadConfig::default(),
-                )
-                .unwrap(),
+    let deps = ContentServiceDeps::builder()
+        .pool(db_pool.clone())
+        .registry(Registry::snapshot(&shared))
+        .hook_runner(hook_runner)
+        .config(config.clone())
+        .config_dir(tmp.path().to_path_buf())
+        .storage(
+            crap_cms::core::upload::create_storage(
+                tmp.path(),
+                &crap_cms::config::UploadConfig::default(),
             )
-            .email_renderer(email_renderer)
-            .login_limiter(std::sync::Arc::new(
-                crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
-            ))
-            .ip_login_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
-                20, 300,
-            )))
-            .forgot_password_limiter(std::sync::Arc::new(
-                crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
-            ))
-            .ip_forgot_password_limiter(Arc::clone(&ip_forgot_password_limiter))
-            .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
-            .token_provider(std::sync::Arc::new(
-                crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
-            ))
-            .password_provider(std::sync::Arc::new(
-                crap_cms::core::auth::Argon2PasswordProvider,
-            ))
-            .build(),
-    );
+            .unwrap(),
+        )
+        .email_renderer(email_renderer)
+        .login_limiter(std::sync::Arc::new(
+            crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
+        ))
+        .ip_login_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            20, 300,
+        )))
+        .forgot_password_limiter(std::sync::Arc::new(
+            crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+        ))
+        .ip_forgot_password_limiter(Arc::clone(&ip_forgot_password_limiter))
+        .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
+        .token_provider(std::sync::Arc::new(
+            crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
+        ))
+        .password_provider(std::sync::Arc::new(
+            crap_cms::core::auth::Argon2PasswordProvider,
+        ))
+        .build();
+    let infra = Arc::clone(&deps.infra);
+    let service = ContentService::new(deps);
 
     TestSetup {
         _tmp: tmp,
         service,
         pool: db_pool,
         ip_forgot_password_limiter,
-        registry,
-        hook_runner,
+        infra,
     }
 }
 
@@ -788,10 +794,11 @@ async fn reset_password_short_password() {
 async fn reset_password_ip_limiter_is_atomic_under_concurrency() {
     let ts = setup_service(vec![make_users_def()], vec![]);
 
-    // Direct service calls carry no remote_addr, so the handler keys the
-    // limiter under "unknown" — seed that key in the reset-token keyspace the
-    // handler derives from the forgot-password IP limiter (20/window).
-    let key = "unknown";
+    // Direct service calls carry no remote_addr, so the handler attributes
+    // them to the unspecified address `0.0.0.0` — seed that bucket in the
+    // reset-token keyspace the handler derives from the forgot-password IP
+    // limiter (20/window).
+    let key = UNKNOWN_PEER;
     let reset_limiter = ts
         .ip_forgot_password_limiter
         .rescoped(IP_RESET_PASSWORD_KEYSPACE);
@@ -987,7 +994,7 @@ async fn resend_verification_does_not_drain_the_forgot_password_budget() {
     }
 
     assert!(
-        !ts.ip_forgot_password_limiter.is_blocked("unknown"),
+        !ts.ip_forgot_password_limiter.is_blocked(UNKNOWN_PEER),
         "a resend burst must leave the password-reset budget intact"
     );
 
@@ -995,7 +1002,7 @@ async fn resend_verification_does_not_drain_the_forgot_password_budget() {
     assert!(
         ts.ip_forgot_password_limiter
             .rescoped("ip_resend_verification")
-            .is_blocked("unknown"),
+            .is_blocked(UNKNOWN_PEER),
         "the resend's own per-IP budget must be spent"
     );
 }
@@ -1863,8 +1870,6 @@ async fn mfa_when_gate_crud_is_read_only() {
 fn judge(ts: &TestSetup, surface: Surface, token: &str, cookie: bool) -> Resolution {
     let conn = ts.pool.get().unwrap();
     let headers = HashMap::new();
-    let token_provider = JwtTokenProvider::new("test-jwt-secret");
-    let locale_config = LocaleConfig::default();
 
     evaluate(
         &AuthRequest {
@@ -1873,13 +1878,7 @@ fn judge(ts: &TestSetup, surface: Surface, token: &str, cookie: bool) -> Resolut
             session_cookie_token: cookie.then_some(token),
             headers: &headers,
         },
-        &EvaluateDeps {
-            registry: &ts.registry,
-            token_provider: &token_provider,
-            hook_runner: &ts.hook_runner,
-            conn: &conn,
-            locale_config: &locale_config,
-        },
+        &EvaluateDeps::new(&ts.infra, &conn),
     )
 }
 
@@ -1917,8 +1916,6 @@ async fn a_per_request_strategy_provisions_its_user_on_the_request_connection() 
 
     let conn = ts.pool.get().unwrap();
     let headers = HashMap::from([("x-remote-user".to_string(), "jit@example.com".to_string())]);
-    let token_provider = JwtTokenProvider::new("test-jwt-secret");
-    let locale_config = LocaleConfig::default();
 
     let resolution = evaluate(
         &AuthRequest {
@@ -1927,13 +1924,7 @@ async fn a_per_request_strategy_provisions_its_user_on_the_request_connection() 
             session_cookie_token: None,
             headers: &headers,
         },
-        &EvaluateDeps {
-            registry: &ts.registry,
-            token_provider: &token_provider,
-            hook_runner: &ts.hook_runner,
-            conn: &conn,
-            locale_config: &locale_config,
-        },
+        &EvaluateDeps::new(&ts.infra, &conn),
     );
 
     let Resolution::Authenticated(auth) = resolution else {

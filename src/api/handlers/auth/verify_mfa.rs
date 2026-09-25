@@ -16,8 +16,9 @@ use crate::{
     api::{
         content,
         handlers::{ContentService, proto::document_to_proto},
+        request_client_ip,
     },
-    core::collection::Surface,
+    core::{collection::Surface, rate_limit::AttemptBudget},
     db::query::MfaCode,
     service::{
         AppInfra, ServiceError,
@@ -52,9 +53,7 @@ impl ContentService {
         &self,
         request: Request<content::VerifyMfaRequest>,
     ) -> Result<Response<content::LoginResponse>, Status> {
-        let ip = request
-            .remote_addr()
-            .map_or_else(|| "unknown".to_string(), |a| a.ip().to_string());
+        let client = request_client_ip(&request, &self.server_config);
         let req = request.into_inner();
 
         // Validate the pending token FIRST (cheap, no DB) — purpose-bound to
@@ -76,11 +75,10 @@ impl ContentService {
         // behind a reusable pending token. The `mfa`/`ip_mfa` limiters are
         // SHARED with the admin MFA page (same keyspace), so the guessing
         // budget is per identity/IP across surfaces, and independent of the
-        // login limiter. Both are evaluated so each records the attempt.
+        // login limiter. The IP budget records first (see `AttemptBudget`).
         let user_id = pending.sub.to_string();
-        let user_blocked = self.mfa_limiter.check_and_block(&user_id);
-        let ip_blocked = self.ip_mfa_limiter.check_and_block(&ip);
-        if user_blocked || ip_blocked {
+        let budget = AttemptBudget::new(&self.ip_mfa_limiter, &self.mfa_limiter);
+        if budget.check_and_block(&client, &user_id) {
             return Err(Status::resource_exhausted(
                 "Too many MFA attempts. Please try again later.",
             ));
@@ -142,8 +140,7 @@ impl ContentService {
         // budget and refund the shared per-IP attempt (mirrors the login
         // limiter semantics: a success must not wipe other identities'
         // failures from the same IP).
-        self.mfa_limiter.clear(&user_id);
-        self.ip_mfa_limiter.refund(&ip);
+        budget.settle_success(&client, &user_id);
 
         Ok(Response::new(content::LoginResponse {
             token,

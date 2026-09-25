@@ -18,10 +18,14 @@ use tokio_postgres::{Statement, types::Type};
 use tracing::info;
 
 mod stmt_cache;
+mod timeout;
+mod tx;
 
 use stmt_cache::{
     CachedClient, CachedManager, CachedObject, CachedPool, StmtCache, cached_stmt_call,
 };
+use timeout::bounded;
+use tx::{TxState, ensure_not_aborted};
 
 use crate::{
     config::CrapConfig,
@@ -29,6 +33,7 @@ use crate::{
     db::{
         BoxedConnection, DbConnection, DbPool, DbRow, DbValue, UpsertSpec,
         connection::{ConnectionInner, TransactionInner},
+        deadline::{configured_timeout, statement_budget},
         pool::PoolBackend,
     },
 };
@@ -437,11 +442,16 @@ pub fn create_pool(config: &CrapConfig) -> Result<DbPool> {
         config.database.pool_max_size, config.database.connection_timeout
     );
 
-    Ok(DbPool::from_backend(Arc::new(PgPoolBackend { pool })))
+    Ok(DbPool::from_backend(Arc::new(PgPoolBackend {
+        pool,
+        statement_timeout: configured_timeout(config.database.statement_timeout),
+    })))
 }
 
 struct PgPoolBackend {
     pool: CachedPool,
+    /// `[database] statement_timeout` (`None`: off).
+    statement_timeout: Option<Duration>,
 }
 
 impl PoolBackend for PgPoolBackend {
@@ -453,7 +463,10 @@ impl PoolBackend for PgPoolBackend {
             // the log and the transient/internal classification read.
             .map_err(|e| Error::new(e).context("Failed to get Postgres connection"))?;
 
-        Ok(BoxedConnection::new(Box::new(PgConnection { inner: obj })))
+        Ok(BoxedConnection::new(Box::new(PgConnection {
+            inner: obj,
+            statement_timeout: self.statement_timeout,
+        })))
     }
 
     fn kind(&self) -> &'static str {
@@ -465,6 +478,7 @@ impl PoolBackend for PgPoolBackend {
 
 pub struct PgConnection {
     inner: CachedObject,
+    statement_timeout: Option<Duration>,
 }
 
 impl ConnectionInner for PgConnection {
@@ -472,14 +486,28 @@ impl ConnectionInner for PgConnection {
         // Splitting borrow on CachedClient: tx needs &mut client, cache stays
         // shared. The Transaction itself implements GenericClient and has
         // its own prepare() — no need to also hold a &Client.
+        let statement_timeout = self.statement_timeout;
         let cached: &mut CachedClient = &mut self.inner;
         let cache = &cached.cache;
+        let state = &cached.tx;
+
+        if state.in_place() {
+            bail!("a transaction is already open on this connection");
+        }
+
         let tx = block_in_place(|| {
             tokio::runtime::Handle::current().block_on(cached.client.transaction())
         })
         .context("Failed to begin transaction")?;
 
-        Ok(Box::new(PgTransaction { inner: tx, cache }))
+        state.began(false);
+
+        Ok(Box::new(PgTransaction {
+            inner: tx,
+            cache,
+            state,
+            statement_timeout,
+        }))
     }
 
     fn transaction_immediate_boxed(&mut self) -> Result<Box<dyn TransactionInner + '_>> {
@@ -500,7 +528,12 @@ impl ConnectionInner for PgConnection {
 ///   transaction-scoped), so the cache lives at the connection level.
 /// - `$cache_expr`: `self -> StmtCache<'_>`.
 macro_rules! pg_query_methods {
-    (|$s:ident| exec = $exec_expr:expr, cache = $cache_expr:expr) => {
+    (
+        |$s:ident| exec = $exec_expr:expr,
+        cache = $cache_expr:expr,
+        state = $state_expr:expr,
+        timeout = $timeout_expr:expr
+    ) => {
         fn execute(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
             let pg_params = to_pg_params(params);
             let owned_refs = pg_param_refs(&pg_params);
@@ -510,15 +543,23 @@ macro_rules! pg_query_methods {
             let $s = self;
             let exec = $exec_expr;
             let cache = $cache_expr;
+            let budget = statement_budget($timeout_expr);
+            let cancel = exec.cancel_token();
             let count = block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(cached_stmt_call(
-                    &cache,
-                    sql,
-                    || exec.prepare(sql),
-                    |stmt| async move { exec.execute(&stmt, refs).await },
+                tokio::runtime::Handle::current().block_on(bounded(
+                    budget,
+                    cancel,
+                    cached_stmt_call(
+                        &cache,
+                        sql,
+                        || exec.prepare(sql),
+                        |stmt| async move { exec.execute(&stmt, refs).await },
+                    ),
                 ))
             })
-            .with_context(|| format!("execute failed: {sql}"))?;
+            .with_context(|| format!("execute failed: {sql}"));
+            $state_expr.record(&count);
+            let count = count?;
             // tokio-postgres returns the row count as u64; we report it as
             // usize. On 32-bit targets a single UPDATE / DELETE returning
             // more than 4 billion rows is implausible, but saturate
@@ -531,11 +572,18 @@ macro_rules! pg_query_methods {
             // no params, no caching). Used for setup/migration SQL where
             // the savings of caching wouldn't apply.
             let $s = self;
-            block_in_place(|| {
-                tokio::runtime::Handle::current().block_on($exec_expr.batch_execute(sql))
+            let exec = $exec_expr;
+            let budget = statement_budget($timeout_expr);
+            let result = block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(bounded(
+                    budget,
+                    exec.cancel_token(),
+                    exec.batch_execute(sql),
+                ))
             })
-            .with_context(|| format!("execute_batch failed: {sql}"))?;
-            Ok(())
+            .with_context(|| format!("execute_batch failed: {sql}"));
+            $state_expr.record(&result);
+            result
         }
 
         fn execute_ddl(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
@@ -553,15 +601,23 @@ macro_rules! pg_query_methods {
             let $s = self;
             let exec = $exec_expr;
             let cache = $cache_expr;
+            let budget = statement_budget($timeout_expr);
+            let cancel = exec.cancel_token();
             let rows = block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(cached_stmt_call(
-                    &cache,
-                    sql,
-                    || exec.prepare(sql),
-                    |stmt| async move { exec.query(&stmt, refs).await },
+                tokio::runtime::Handle::current().block_on(bounded(
+                    budget,
+                    cancel,
+                    cached_stmt_call(
+                        &cache,
+                        sql,
+                        || exec.prepare(sql),
+                        |stmt| async move { exec.query(&stmt, refs).await },
+                    ),
                 ))
             })
-            .with_context(|| format!("query failed: {sql}"))?;
+            .with_context(|| format!("query failed: {sql}"));
+            $state_expr.record(&rows);
+            let rows = rows?;
             Ok(rows.iter().map(pg_row_to_dbrow).collect())
         }
 
@@ -572,15 +628,23 @@ macro_rules! pg_query_methods {
             let $s = self;
             let exec = $exec_expr;
             let cache = $cache_expr;
+            let budget = statement_budget($timeout_expr);
+            let cancel = exec.cancel_token();
             let row = block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(cached_stmt_call(
-                    &cache,
-                    sql,
-                    || exec.prepare(sql),
-                    |stmt| async move { exec.query_opt(&stmt, refs).await },
+                tokio::runtime::Handle::current().block_on(bounded(
+                    budget,
+                    cancel,
+                    cached_stmt_call(
+                        &cache,
+                        sql,
+                        || exec.prepare(sql),
+                        |stmt| async move { exec.query_opt(&stmt, refs).await },
+                    ),
                 ))
             })
-            .with_context(|| format!("query_one failed: {sql}"))?;
+            .with_context(|| format!("query_one failed: {sql}"));
+            $state_expr.record(&row);
+            let row = row?;
             Ok(row.as_ref().map(pg_row_to_dbrow))
         }
     };
@@ -589,9 +653,78 @@ macro_rules! pg_query_methods {
 impl DbConnection for PgConnection {
     pg_query_methods!(
         |this| exec = &this.inner.client,
-        cache = StmtCache::connection(&this.inner.cache)
+        cache = this.stmt_cache(),
+        state = this.inner.tx,
+        timeout = this.statement_timeout
     );
     pg_shared_methods!();
+
+    fn in_transaction(&self) -> bool {
+        self.inner.tx.in_place()
+    }
+
+    fn begin_in_place(&self) -> Result<()> {
+        if self.inner.tx.in_place() {
+            bail!("a transaction is already open on this connection");
+        }
+
+        self.batch("BEGIN").context("Failed to begin transaction")?;
+        self.inner.tx.began(true);
+
+        Ok(())
+    }
+
+    fn commit_in_place(&self) -> Result<()> {
+        if !self.inner.tx.in_place() {
+            bail!("no transaction is open on this connection");
+        }
+
+        let checked = block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(ensure_not_aborted(&self.inner.client, &self.inner.tx))
+        });
+
+        if let Err(e) = checked {
+            self.rollback_in_place()?;
+
+            return Err(e);
+        }
+
+        self.batch("COMMIT")
+            .context("Failed to commit transaction")?;
+        self.inner.tx.settled();
+
+        Ok(())
+    }
+
+    fn rollback_in_place(&self) -> Result<()> {
+        self.batch("ROLLBACK")
+            .context("Failed to roll back transaction")?;
+        self.inner.tx.settled();
+
+        Ok(())
+    }
+}
+
+impl PgConnection {
+    /// The statement cache as this connection sees it right now: inside an
+    /// in-place transaction a stale statement must not be retried (see
+    /// [`StmtCache`]).
+    fn stmt_cache(&self) -> StmtCache<'_> {
+        if self.inner.tx.in_place() {
+            return StmtCache::in_transaction(&self.inner.cache);
+        }
+
+        StmtCache::connection(&self.inner.cache)
+    }
+
+    /// Run one transaction-control statement over the simple-query protocol.
+    fn batch(&self, sql: &str) -> Result<()> {
+        block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.inner.client.batch_execute(sql))
+        })
+        .map_err(Error::new)
+    }
 }
 
 // ── Transaction ──────────────────────────────────────────────────────────
@@ -599,23 +732,51 @@ impl DbConnection for PgConnection {
 pub struct PgTransaction<'conn> {
     inner: tokio_postgres::Transaction<'conn>,
     cache: &'conn Mutex<HashMap<String, Statement>>,
+    state: &'conn TxState,
+    statement_timeout: Option<Duration>,
 }
 
 impl TransactionInner for PgTransaction<'_> {
     fn commit_inner(self: Box<Self>) -> Result<()> {
-        let Self { inner, .. } = *self;
+        let Self { inner, state, .. } = *self;
 
-        block_in_place(|| tokio::runtime::Handle::current().block_on(inner.commit()))
-            .context("Failed to commit transaction")
+        // An aborted transaction is refused before `COMMIT`: dropping `inner`
+        // then rolls it back, instead of the server answering `COMMIT` with a
+        // `ROLLBACK` the driver reports as success.
+        block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                ensure_not_aborted(&inner, state).await?;
+
+                inner.commit().await.context("Failed to commit transaction")
+            })
+        })
     }
 }
 
 impl DbConnection for PgTransaction<'_> {
     pg_query_methods!(
         |this| exec = &this.inner,
-        cache = StmtCache::in_transaction(this.cache)
+        cache = StmtCache::in_transaction(this.cache),
+        state = this.state,
+        timeout = this.statement_timeout
     );
     pg_shared_methods!();
+
+    fn in_transaction(&self) -> bool {
+        true
+    }
+
+    fn begin_in_place(&self) -> Result<()> {
+        bail!("a transaction is already open on this connection")
+    }
+
+    fn commit_in_place(&self) -> Result<()> {
+        bail!("this transaction is settled by its owner, not in place")
+    }
+
+    fn rollback_in_place(&self) -> Result<()> {
+        bail!("this transaction is settled by its owner, not in place")
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────

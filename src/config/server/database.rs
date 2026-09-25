@@ -61,6 +61,12 @@ pub struct DatabaseConfig {
     /// write workloads where requests issue many back-to-back queries.
     #[serde(with = "serde_duration")]
     pub connection_timeout: u64,
+    /// Longest one SQL statement may run, in seconds (`0` = unbounded).
+    /// Accepts integer seconds or a human-readable string ("30s", "1m").
+    /// Default: 30. A request's own deadline shortens it further; schema
+    /// sync, data migrations and backups run unbounded.
+    #[serde(with = "serde_duration")]
+    pub statement_timeout: u64,
     /// `SQLite` page cache size in KB. Negative = KB, positive = pages. Default: 16384 (16MB).
     /// Higher values improve read performance for large datasets.
     #[serde(default = "default_cache_size")]
@@ -119,6 +125,7 @@ impl Default for DatabaseConfig {
             write_pool_max_size: default_write_pool_max_size(),
             busy_timeout: 30000,
             connection_timeout: 30,
+            statement_timeout: 30,
             cache_size: default_cache_size(),
             mmap_size: default_mmap_size(),
             wal_autocheckpoint: default_wal_autocheckpoint(),

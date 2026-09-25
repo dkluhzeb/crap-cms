@@ -8,7 +8,7 @@ Crap CMS provides built-in authentication via auth-enabled collections. Any coll
 - **Two auth surfaces** — Admin UI uses an HttpOnly cookie (`crap_session`). gRPC API uses Bearer tokens.
 - **JWT** — all tokens are JWT signed with the configured secret (or an auto-generated one persisted to `data/.jwt_secret`).
 - **Argon2id** — passwords are hashed with Argon2id before storage.
-- **Rate limiting** — login endpoints enforce per-email rate limiting (configurable max attempts and lockout window).
+- **Rate limiting** — login endpoints enforce per-IP and per-email rate limiting (configurable max attempts and lockout window); see [Login Flow → Rate Limiting](login-flow.md#rate-limiting).
 - **Timing-safe** — login always performs a password hash comparison, even when the user doesn't exist, to prevent timing-based email enumeration.
 - **CSRF protection** — admin UI forms and HTMX requests are protected with double-submit cookie tokens.
 - **Secure cookies** — the `crap_session` cookie includes the `Secure` flag in production (when `dev_mode = false`). The cookie's `SameSite` attribute defaults to `Lax`; set `[auth] session_cookie_samesite = "strict"` in `crap.toml` for stricter CSRF protection at the cost of breaking cross-site navigation (clicks from emails, external links, etc. will require re-login).

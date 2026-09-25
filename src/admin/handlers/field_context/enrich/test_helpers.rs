@@ -98,6 +98,7 @@ pub(super) fn enrich_nested_fields_values(
         reg,
         rel_locale_ctx,
         user: None,
+        doc_id: None,
         ancestor_readonly: false,
     };
 

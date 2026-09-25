@@ -16,7 +16,9 @@ use crate::{
         AdminState,
         handlers::{
             forms::FormData,
-            shared::{get_user_doc, parse_request_locale, strip_locale_locked_form_fields},
+            shared::{
+                ErrorLabels, get_user_doc, parse_request_locale, strip_locale_locked_form_fields,
+            },
             validate::{
                 ValidateRequest, handle_validation_outcome, validation_error_response_simple,
                 values_to_string_map,
@@ -56,7 +58,7 @@ pub async fn validate_global(
     // admin write drops them before the service's locale lock, so the dry-run
     // it previews does too.
     let data = strip_locale_locked_form_fields(
-        FormData::from_raw(form_data, &def.fields).into(),
+        FormData::from_raw(form_data.clone(), &def.fields).into(),
         &def.fields,
         locale_ctx.as_ref(),
     );
@@ -79,5 +81,7 @@ pub async fn validate_global(
     )
     .await;
 
-    handle_validation_outcome(result, auth_user.as_ref(), &state)
+    let labels = ErrorLabels::new(&def.fields, Some(&form_data));
+
+    handle_validation_outcome(result, auth_user.as_ref(), &state, &labels)
 }

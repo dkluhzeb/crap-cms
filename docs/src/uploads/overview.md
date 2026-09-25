@@ -37,6 +37,14 @@ crap.collections.define("media", {
 | `admin_thumbnail` | string | `nil` | Name of an `image_sizes` entry to use as thumbnail in admin lists. |
 | `format_options` | table | `{}` | Auto-generate format variants. See [Image Processing](image-processing.md). |
 
+`max_file_size` bounds each file, not how much a user or collection stores in total:
+there is **no built-in storage quota**. Any caller the collection's `create` access
+admits can keep uploading until the disk or bucket is full. When uploads come from
+low-trust users, enforce a quota yourself — restrict `access.create` to the callers who
+should upload at all, and count what a user already stores in a `before_change` hook
+(for example with `crap.collections.<slug>.count({ where = { owner = ctx.user.id } })`),
+raising an error once they are at their limit.
+
 ## Auto-Injected Fields
 
 When uploads are enabled, these fields are automatically injected before your custom fields:

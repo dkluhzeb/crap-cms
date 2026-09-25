@@ -1,9 +1,11 @@
 //! Type definitions for the populate subsystem.
 
+use std::collections::HashSet;
+
 use anyhow::Result;
 
 use crate::core::cache::CacheBackend;
-use crate::core::{CollectionDefinition, Document, HookRef, Registry};
+use crate::core::{Document, FieldDefinition, HookRef, Registry};
 use crate::db::query::populate::{CachedDoc, Singleflight};
 use crate::db::query::{AccessResult, ReadLocale};
 use crate::db::{DbConnection, LocaleContext};
@@ -34,6 +36,12 @@ pub trait JoinAccessCheck {
         collection: &str,
     ) -> Result<AccessResult>;
 }
+
+/// A populate cycle guard: the `(collection, id)` pairs on the current path —
+/// the documents between the one being populated and the read's top level
+/// (itself included). A reference to a document on the path stays an id; one
+/// merely populated elsewhere in the tree does not.
+pub(crate) type Visited = HashSet<(String, String)>;
 
 /// Build the shared-cache key for a **raw** (unpopulated) target document.
 ///
@@ -123,12 +131,14 @@ pub(crate) struct PopulateCtx<'a> {
     pub user: Option<&'a Document>,
 }
 
-/// Collection and registry context for population.
+/// The document being populated: its connection and registry, the slug its
+/// documents are told apart by on a populate path (a collection's slug, or a
+/// global's table), and its field definitions.
 pub struct PopulateContext<'a> {
     pub(crate) conn: &'a dyn DbConnection,
     pub(crate) registry: &'a Registry,
     pub(crate) collection_slug: &'a str,
-    pub(crate) def: &'a CollectionDefinition,
+    pub(crate) fields: &'a [FieldDefinition],
 }
 
 impl<'a> PopulateContext<'a> {
@@ -136,13 +146,13 @@ impl<'a> PopulateContext<'a> {
         conn: &'a dyn DbConnection,
         registry: &'a Registry,
         collection_slug: &'a str,
-        def: &'a CollectionDefinition,
+        fields: &'a [FieldDefinition],
     ) -> Self {
         Self {
             conn,
             registry,
             collection_slug,
-            def,
+            fields,
         }
     }
 }

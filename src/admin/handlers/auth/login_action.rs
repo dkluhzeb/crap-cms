@@ -20,7 +20,8 @@ use crate::{
     core::{
         CollectionDefinition, Document, SharedPasswordProvider,
         collection::{Auth, Surface},
-        normalize_email,
+        login_email_key,
+        rate_limit::AttemptBudget,
     },
     service::{
         AppInfra, ServiceError,
@@ -116,25 +117,22 @@ pub async fn login_action(
     headers: HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    let ip = client_ip(&headers, &addr, &state.config.server);
+    let client = client_ip(&headers, &addr, &state.config.server);
 
-    // Atomically record this attempt against both the email and IP limiters
-    // and reject if either is now over threshold. Performing the check and the
-    // increment as one operation closes the burst race the old is_blocked +
-    // later record_failure split left open (concurrent attempts all passing an
-    // under-limit check before any recorded). Both are evaluated (not
-    // short-circuited) so each counter advances every attempt; a successful
-    // login clears both below.
-    // Key the per-email limiter on the address in its stored form (trimmed,
-    // lowercased, NFC-composed) so spelling variants of the same account share
-    // one bucket. The credential lookup compares that form, so without this an
-    // attacker rotates `Victim@x.com` / `VICTIM@X.COM` / … to sidestep the
-    // per-account lockout. The clear-on-success below uses the same key.
-    let email_key = normalize_email(&form.email);
+    // An address longer than any deliverable one cannot name an account: it
+    // is refused before it is keyed, throttled, looked up or echoed back.
+    // Otherwise the per-email limiter is keyed on the address in its stored
+    // form (trimmed, lowercased, NFC-composed), so spelling variants of one
+    // account share a bucket — the credential lookup compares that form.
+    let Some(email_key) = login_email_key(&form.email) else {
+        return login_error(&state, "error_invalid_credentials", "");
+    };
 
-    let email_blocked = state.login_limiter.check_and_block(&email_key);
-    let ip_blocked = state.ip_login_limiter.check_and_block(&ip);
-    if email_blocked || ip_blocked {
+    // Atomically record this attempt, IP budget first (see `AttemptBudget`),
+    // and reject if either budget is spent. A successful login settles both
+    // below.
+    let budget = AttemptBudget::new(&state.ip_login_limiter, &state.login_limiter);
+    if budget.check_and_block(&client, &email_key) {
         return login_error(&state, "error_too_many_attempts", &form.email);
     }
 
@@ -163,7 +161,7 @@ pub async fn login_action(
         def: def.clone(),
         email: form.email.clone(),
         password: form.password.clone(),
-        remote_addr: ip.clone(),
+        remote_addr: client.to_string(),
         headers: headers_to_map(&headers),
     })
     .await;
@@ -190,14 +188,11 @@ pub async fn login_action(
         }
     };
 
-    // Successful login — clear the per-email limiter (scoped to this account,
-    // which just proved its identity). For the SHARED per-IP limiter, only
-    // *refund* this one attempt rather than clearing every failure: a success
-    // shouldn't accumulate toward the IP threshold (NAT/VPN friendliness), but
-    // it must not wipe other accounts' failures from the same IP either — that
-    // would let one valid account on a shared IP mask a brute-force of others.
-    state.login_limiter.clear(&email_key);
-    state.ip_login_limiter.refund(&ip);
+    // Successful login: the account proved its identity, so its per-email
+    // budget is cleared; the SHARED per-IP budget only gets this attempt
+    // refunded, so one valid account on a shared IP cannot mask a brute force
+    // of others from behind it.
+    budget.settle_success(&client, &email_key);
 
     // Check admin.access gate before issuing session — deny login entirely
     // if the user doesn't pass the gate function.
@@ -211,104 +206,4 @@ pub async fn login_action(
     }
 
     build_session_response(&state, &login, &form)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{thread::sleep, time::Duration};
-
-    use crate::core::rate_limit::LoginRateLimiter;
-
-    #[test]
-    fn ip_limiter_blocks_after_threshold() {
-        let limiter = LoginRateLimiter::new(3, 60);
-        let ip = "1.2.3.4";
-        limiter.record_failure(ip);
-        limiter.record_failure(ip);
-        assert!(!limiter.is_blocked(ip));
-        limiter.record_failure(ip);
-        assert!(limiter.is_blocked(ip));
-    }
-
-    #[test]
-    fn ip_and_email_limiters_independent() {
-        let email_limiter = LoginRateLimiter::new(2, 60);
-        let ip_limiter = LoginRateLimiter::new(3, 60);
-
-        // Block email limiter
-        email_limiter.record_failure("a@b.com");
-        email_limiter.record_failure("a@b.com");
-        assert!(email_limiter.is_blocked("a@b.com"));
-
-        // IP limiter should not be blocked
-        assert!(!ip_limiter.is_blocked("1.2.3.4"));
-
-        // Block IP limiter
-        ip_limiter.record_failure("1.2.3.4");
-        ip_limiter.record_failure("1.2.3.4");
-        ip_limiter.record_failure("1.2.3.4");
-        assert!(ip_limiter.is_blocked("1.2.3.4"));
-
-        // Different IP should not be blocked
-        assert!(!ip_limiter.is_blocked("5.6.7.8"));
-    }
-
-    #[test]
-    fn ip_limiter_window_expiry() {
-        let limiter = LoginRateLimiter::new(2, 0);
-        limiter.record_failure("1.2.3.4");
-        limiter.record_failure("1.2.3.4");
-        sleep(Duration::from_millis(10));
-        assert!(!limiter.is_blocked("1.2.3.4"));
-    }
-
-    /// Regression: successful login must clear the IP rate limiter, not just the
-    /// email limiter. Without this, users behind a shared IP (NAT/VPN) eventually
-    /// get locked out even when logging in successfully.
-    #[test]
-    fn ip_limiter_cleared_on_success() {
-        let ip_limiter = LoginRateLimiter::new(3, 60);
-        let ip = "10.0.0.1";
-
-        // Accumulate 2 failures (one below threshold)
-        ip_limiter.record_failure(ip);
-        ip_limiter.record_failure(ip);
-        assert!(!ip_limiter.is_blocked(ip));
-
-        // Simulate successful login clearing the IP limiter
-        ip_limiter.clear(ip);
-
-        // After clearing, 2 more failures should not trigger the block
-        // (would have been 4 total without clear, exceeding threshold of 3)
-        ip_limiter.record_failure(ip);
-        ip_limiter.record_failure(ip);
-        assert!(!ip_limiter.is_blocked(ip));
-    }
-
-    /// Regression: email and IP limiters must both be cleared on success.
-    /// Verifies the coordinated clear pattern used in the login handler.
-    #[test]
-    fn both_limiters_cleared_on_success() {
-        let email_limiter = LoginRateLimiter::new(2, 60);
-        let ip_limiter = LoginRateLimiter::new(3, 60);
-        let email = "user@example.com";
-        let ip = "192.168.1.1";
-
-        // Record failures on both
-        email_limiter.record_failure(email);
-        ip_limiter.record_failure(ip);
-        ip_limiter.record_failure(ip);
-
-        // Simulate successful login — clear both
-        email_limiter.clear(email);
-        ip_limiter.clear(ip);
-
-        // Both should be unblocked even after more failures up to threshold
-        email_limiter.record_failure(email);
-        assert!(!email_limiter.is_blocked(email));
-
-        ip_limiter.record_failure(ip);
-        ip_limiter.record_failure(ip);
-        assert!(!ip_limiter.is_blocked(ip));
-    }
 }

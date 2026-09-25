@@ -322,6 +322,21 @@ next round is where most of a round's reading goes, so they are recorded
 here per round; a lens prompt carries the instruction to skip them unless the
 files changed since. Entries are dropped when the area is touched.
 
+- **R28 (2026-09-25)**
+  - *Search:* index freshness on every write path, row/draft/trash filters
+    applied to search, hidden/read-gated fields never indexed, surface
+    parity, en/de key parity.
+  - *Newest code:* LazyTx pointer soundness on every exit path, `mfa_deliver`
+    holds no connection while delivering, io-jail bypass set (debug,
+    package.loaded, symlinks, `..`, TOCTOU, /proc), reference-cardinality
+    carry atomicity, rebuild + dependents, nullable-columns gate, held-value
+    schema-position matching, session stamps.
+  - *Relations:* top-level/group has_many carry ordering, ref-count delta
+    missing-target handling, populate cache locale key, typegen relation
+    shapes.
+  - *Limits:* MCP HTTP checks the key before reading the body, idle HTTP/1
+    keep-alive bounded by header_read_timeout.
+
 - **R27 (2026-09-25)**
   - *Sessions:* token validation purpose checks, per-request lock and
     session-version checks, TOTP replay protection, refresh absolute max age,
@@ -1288,6 +1303,67 @@ files changed since. Entries are dropped when the area is touched.
     chokepoint pass needs its own completeness review — the new primitive's
     call sites are exactly where the next copies are written — and a scan
     guard the day the chokepoint lands, not later. UNCOMMITTED.
+- 2026-09-25 (38) — **CONVERGENCE ROUND 28** (budget lifted; live Postgres 16;
+  the new binary booted on the round-start PG example and an old SQLite example
+  DB; 5 Opus lenses — last round's newest code, search + i18n, resource limits
+  and abuse, relationships at depth, typegen vs the wire — 5 fix batches, 5
+  post-fix reviews, 1 follow-up batch, 3 glue/fix agents). **~80 confirmed —
+  6 HIGH (3 security, 3 data safety), ~35 MED, ~40 LOW — NOT quiet; no new
+  class.**
+  - **F (HIGH, security) — a target field named `collection` steered the
+    populated-doc strip** (the stripper read the target collection from the
+    document's own data): hidden/read-denied fields leaked at depth ≥ 1 or
+    another collection's rules applied. Target now from the field definition,
+    fail-closed; `collection` reserved; the envelope tag wins.
+  - **F (HIGH) — pre-auth memory exhaustion** (unbounded email as a limiter
+    key held for the window, ~51 MiB auth bodies) and **`X-Forwarded-For`
+    taken leftmost** (client-controlled behind an appending proxy → every
+    per-IP budget void). Hashed keys, IP-first budgets, 254-octet emails,
+    right-to-left resolution shared by admin + gRPC, /64 buckets, 64 KB
+    pre-auth bodies, listener header/preface timeouts + connection caps
+    (derived from RLIMIT_NOFILE), request timeouts, per-client live slots,
+    filter/search size caps, statement timeouts, image-decode slots.
+  - **Data safety (HIGH):** (1) Postgres: a `pcall`-caught Lua CRUD error
+    aborted the transaction and the outer `COMMIT` silently rolled back the
+    whole operation while reporting success (verified with psql) — savepoint
+    per Lua step + commit refuses an aborted tx; (2) SQLite: an interrupted
+    write (the new statement timeout) ends the whole transaction and returns
+    to autocommit — later statements committed one by one (**caught by the
+    post-fix review**, reproduced with sqlite3) — statements on a lost
+    transaction are refused; (3) `has_many` toggles inside array/blocks rows
+    were not carried → ref counts dropped, targets hard-deletable.
+  - **Relationships:** populated targets follow the read's draft flag (user
+    decision); target read hooks run on embedded docs (batched per
+    collection); find/find_by_id shapes agree at depth; joins capped and
+    counted honestly; trashed targets refused as a field error; globals
+    populate on every surface (breaking default depth 1); the recursion bound
+    now drops instead of passing unstripped (review catch).
+  - **Search:** Postgres missed every punctuated term (emails!); a non-text
+    searchable field broke PG boot; search now matches the requested locale
+    only (user decision); strict `list_searchable_fields`.
+  - **Events:** a draft save's content view was read as the stored row's
+    position (phantom deletes / swallowed unpublish); the left view is judged
+    against the pre-write row (the carried id leak). Auth hooks now settle
+    through the full transaction scope; Lua `io` config dir read-only (user
+    decision); `require` never from io roots/data.
+  - **Typegen:** Lua where/order_by types, null-to-clear, partial group
+    updates, locale=all shapes, prelude name collisions in Rust/Go/Python
+    (a real proto-vs-client naming bug), now verified by deno/go vet/python
+    toolchain checks and a typed-path ⇄ runtime guard.
+  - **i18n:** localized field labels in validation messages, translated +
+    overridable system email subjects (user decision), translation-key guard.
+    Gates (2026-09-25): clippy clean in both forms; full suite 9,146 green
+    over 130 binaries (default features) + lib 7,383 under `--all-features`;
+    Postgres harness 43/43; the new binary booted on the round-start PG
+    example and an old SQLite example DB (no errors, rows/integrity intact,
+    limits verified live: PG email search, filter cap, 413 on oversized auth
+    body); LuaLS clean on golden + usage + example; all five `gen-*` checks,
+    `cargo fmt`, `crap-cms fmt`, biome clean; e2e 349 green over 82 binaries
+    (per binary). The first full run caught 8 failures — guard drift and one
+    guard bug (out-of-line test files were scanned as production code; one
+    shared `common::is_test_module_file` now serves all eight guards) — fixed
+    before the one re-run.
+    Streak: 0 quiet rounds.
 - 2026-09-25 (37) — **CONVERGENCE ROUND 27** (budget lifted; live Postgres 16
   and the example booted on OLD SQLite + Postgres databases to exercise the
   new one-time migrations; 5 Opus lenses — sessions/MFA end to end, outbound

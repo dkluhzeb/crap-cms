@@ -19,8 +19,8 @@ use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
 use crap_cms::config::CrapConfig;
-use crap_cms::core::Registry;
 use crap_cms::core::rate_limit::LoginRateLimiter;
+use crap_cms::core::{LiveSlots, Registry};
 use crap_cms::db::{migrate, pool};
 use crap_cms::hooks::lifecycle::HookRunner;
 
@@ -113,8 +113,7 @@ fn setup() -> (tempfile::TempDir, axum::Router) {
         ip_mfa_limiter: Arc::new(LoginRateLimiter::new(20, 300)),
         has_auth: false,
         translations,
-        sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        max_sse_connections: 0,
+        sse_slots: LiveSlots::new(0, 0),
         shutdown: tokio_util::sync::CancellationToken::new(),
         password_provider: Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,

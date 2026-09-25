@@ -57,6 +57,13 @@ pub trait ReadHooks: FieldReadStrip {
             .collect()
     }
 
+    /// Whether a document of a collection with `hooks` and `fields` may have
+    /// `after_read` hooks to run — `false` lets a caller skip preparing the
+    /// documents for them at all. Defaults to `true` (always prepare).
+    fn wants_after_read(&self, _hooks: &Hooks, _fields: &[FieldDefinition]) -> bool {
+        true
+    }
+
     /// Check collection-level access. Returns the access result (Allowed/Denied/Constrained).
     ///
     /// `locale` is the locale this read targets (resolved/default, or `None`
@@ -131,6 +138,10 @@ impl ReadHooks for RunnerReadHooks<'_> {
 
     fn after_read_many(&self, ctx: &AfterReadCtx, docs: Vec<Document>) -> Vec<Document> {
         self.runner.apply_after_read_many(ctx, docs)
+    }
+
+    fn wants_after_read(&self, hooks: &Hooks, fields: &[FieldDefinition]) -> bool {
+        self.runner.has_after_read_hooks(hooks, fields)
     }
 
     fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult> {

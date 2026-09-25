@@ -746,6 +746,7 @@ async fn get_global_default() {
             slug: "settings".to_string(),
             locale: None,
             draft: None,
+            depth: None,
         }))
         .await
         .unwrap()
@@ -754,6 +755,77 @@ async fn get_global_default() {
     let doc = resp.document.expect("No global document");
     assert_eq!(doc.id, "default");
     assert_eq!(doc.collection, "settings");
+}
+
+/// Regression: `GetGlobal` had no `depth` and never populated a global's
+/// relationships. It populates like `FindByID` — to the requested depth, or
+/// the configured default when unset — and `depth = 0` returns the id.
+#[tokio::test]
+async fn get_global_populates_relationships_to_depth() {
+    let mut settings = make_global_def();
+    settings.fields.push(
+        FieldDefinition::builder("featured", FieldType::Relationship)
+            .relationship(RelationshipConfig::new("posts", false))
+            .build(),
+    );
+    let ts = setup_service(vec![make_posts_def()], vec![settings]);
+
+    let post_id = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[("title", "Featured post")])),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap()
+        .id;
+
+    ts.service
+        .update_global(Request::new(content::UpdateGlobalRequest {
+            events: None,
+            slug: "settings".to_string(),
+            data: Some(make_struct(&[("featured", &post_id)])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap();
+
+    let read = |depth: Option<i32>| {
+        ts.service
+            .get_global(Request::new(content::GetGlobalRequest {
+                slug: "settings".to_string(),
+                locale: None,
+                draft: None,
+                depth,
+            }))
+    };
+
+    for depth in [None, Some(1)] {
+        let doc = read(depth).await.unwrap().into_inner().document.unwrap();
+        let featured = doc.fields.as_ref().and_then(|f| f.fields.get("featured"));
+
+        let Some(content::FieldValue {
+            kind: Some(content::field_value::Kind::StructValue(target)),
+        }) = featured
+        else {
+            panic!("depth {depth:?}: featured is populated, got {featured:?}");
+        };
+        assert!(
+            matches!(
+                target.fields.get("title").and_then(|v| v.kind.as_ref()),
+                Some(content::field_value::Kind::StringValue(t)) if t == "Featured post"
+            ),
+            "depth {depth:?}: {target:?}"
+        );
+    }
+
+    let ids = read(Some(0)).await.unwrap().into_inner().document.unwrap();
+    assert_eq!(get_proto_field(&ids, "featured"), Some(post_id));
 }
 
 #[tokio::test]
@@ -777,6 +849,7 @@ async fn update_global_and_read_back() {
             slug: "settings".to_string(),
             locale: None,
             draft: None,
+            depth: None,
         }))
         .await
         .unwrap()
@@ -840,6 +913,7 @@ async fn validate_global_reports_field_errors_without_persisting() {
             slug: "settings".to_string(),
             locale: None,
             draft: None,
+            depth: None,
         }))
         .await
         .unwrap()
@@ -859,6 +933,7 @@ async fn get_global_nonexistent() {
             slug: "nope".to_string(),
             locale: None,
             draft: None,
+            depth: None,
         }))
         .await
         .unwrap_err();
@@ -1107,6 +1182,7 @@ async fn grpc_global_read_access_denied_returns_permission_denied() {
         slug: "restricted_settings".to_string(),
         locale: None,
         draft: None,
+        depth: None,
     });
     req.metadata_mut()
         .insert("authorization", format!("Bearer {token}").parse().unwrap());

@@ -71,6 +71,7 @@ Globals always have `created_at` and `updated_at` timestamp columns.
 | Versions | Supported | Supported (version history and unpublish on fewer surfaces — see [Versions by surface](#versions-by-surface)) |
 | Live updates | Supported | Supported |
 | MCP | Supported | Supported |
+| Relationship population (`depth`) | find, find_by_id | get |
 
 ## Lua API
 

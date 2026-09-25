@@ -119,6 +119,39 @@ fn parse_rejects_reserved_system_column_names() {
     }
 }
 
+/// Regression: `collection` is the tag every populated relationship target
+/// carries beside its `id`. A user field of that name overwrote the tag, so the
+/// embedded-document field-access strip picked its rules from document data.
+/// Rejected at the top level and nested alike.
+#[test]
+fn parse_rejects_collection_field_name_at_any_depth() {
+    let lua = Lua::new();
+
+    let err = format!("{:#}", parse_one(&lua, "collection", "text").unwrap_err());
+    assert!(
+        err.contains("reserved") && err.contains("collection"),
+        "expected reserved-name rejection, got: {err}"
+    );
+
+    let fields_tbl = lua.create_table().unwrap();
+    let group = lua.create_table().unwrap();
+    group.set("name", "meta").unwrap();
+    group.set("type", "group").unwrap();
+
+    let sub_fields = lua.create_table().unwrap();
+    let sub = lua.create_table().unwrap();
+    sub.set("name", "collection").unwrap();
+    sub_fields.set(1, sub).unwrap();
+    group.set("fields", sub_fields).unwrap();
+    fields_tbl.set(1, group).unwrap();
+
+    let err = format!("{:#}", parse_fields(&lua, &fields_tbl).unwrap_err());
+    assert!(
+        err.contains("reserved") && err.contains("collection"),
+        "a nested 'collection' field must be rejected too, got: {err}"
+    );
+}
+
 /// Regression: a present-but-unknown field `type` must be rejected, not
 /// silently coerced to `Text` (which would freeze the wrong column shape
 /// and lock out ever adding a real field type of that name).

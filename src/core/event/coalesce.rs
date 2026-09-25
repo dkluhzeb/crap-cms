@@ -29,13 +29,24 @@
 //! told of the removal — an unpublish followed by a draft save, or a trash
 //! followed by a purge, collapses to one event that announces it. A row that
 //! ends up where it started carries no move; one created within the burst
-//! did not exist before it, so it carries none either.
+//! did not exist before it, so it carries none either. The origin carries the
+//! row as it was there too, so the view it left is judged against the content
+//! the subscriber last saw, not the content the burst ended with.
+//!
+//! An event that describes a pending draft of a row stored elsewhere (a draft
+//! save of a published document) never supersedes an event of the stored row,
+//! nor the reverse: the draft save leaves the stored row where it was, so
+//! reading it as the row's position would announce a removal that never
+//! happened — or hide one that did.
 
 use std::collections::{HashMap, hash_map::Entry};
 
 use super::{
     receiver::{EventReceiver, TryRecvError},
-    types::{EventOperation, EventTarget, EventViewPlacement, MutationEvent},
+    types::{
+        EventGateSnapshot, EventOperation, EventTarget, EventViewMeta, EventViewPlacement,
+        MutationEvent,
+    },
 };
 
 /// Upper bound on events drained per sweep — bounds pump-local memory and
@@ -116,16 +127,17 @@ type Arrived = (usize, MutationEvent);
 enum Origin {
     /// Nowhere: the burst created it.
     Created,
-    /// In the views this placement selects.
-    At(EventViewPlacement),
+    /// In the views this placement selects, holding what the snapshot
+    /// captured (`None`: nothing carried to judge it by).
+    At(EventViewPlacement, Option<EventGateSnapshot>),
     /// Unknown: the first event carries no view metadata (every gate drops
     /// such an event), so the survivor keeps the move it carries itself.
     Unknown,
 }
 
 impl Origin {
-    /// Where `event`'s row sat before it: where the event says it moved
-    /// from, or where it now is when it did not move.
+    /// Where `event`'s row sat before it, and what it held there: where the
+    /// event says it moved from, or where it now is when it did not move.
     fn of(event: &MutationEvent) -> Self {
         if event.operation == EventOperation::Create {
             return Self::Created;
@@ -135,9 +147,40 @@ impl Origin {
             return Self::Unknown;
         };
 
-        let before = view.prior_view().unwrap_or_else(|| view.clone());
+        let Some(before) = view.prior_view() else {
+            return Self::At(view.placement(), event.gate.clone());
+        };
 
-        Self::At(before.placement())
+        Self::At(
+            before.placement(),
+            view.left_gate(event.gate.as_ref()).cloned(),
+        )
+    }
+}
+
+/// What one burst survivor stands for: a document of a target — a collection
+/// and a global sharing a slug stay distinct, like their tables — and whether
+/// the events describe the stored row or a pending draft of it (see the
+/// module docs).
+#[derive(PartialEq, Eq, Hash)]
+struct SlotKey {
+    global: bool,
+    collection: String,
+    document: String,
+    pending_draft: bool,
+}
+
+impl SlotKey {
+    fn of(event: &MutationEvent) -> Self {
+        Self {
+            global: matches!(event.target, EventTarget::Global),
+            collection: event.collection.to_string(),
+            document: event.document_id.to_string(),
+            pending_draft: event
+                .view
+                .as_ref()
+                .is_some_and(EventViewMeta::describes_pending_draft),
+        }
     }
 }
 
@@ -167,13 +210,13 @@ impl DocumentSlot {
     fn into_survivor(self) -> Arrived {
         let (arrival, mut event) = self.latest;
 
-        let prior = match self.origin {
+        let (prior, gate) = match self.origin {
             Origin::Unknown => return (arrival, event),
-            Origin::Created => None,
-            Origin::At(placement) => Some(placement),
+            Origin::Created => (None, None),
+            Origin::At(placement, gate) => (Some(placement), gate),
         };
 
-        event.view = event.view.map(|view| view.moved_from(prior));
+        event.view = event.view.map(|view| view.moved_from(prior).left_as(gate));
 
         (arrival, event)
     }
@@ -195,14 +238,10 @@ pub fn coalesce_events(events: Vec<MutationEvent>) -> Vec<MutationEvent> {
         return events;
     }
 
-    let mut slots: HashMap<(bool, String, String), DocumentSlot> = HashMap::new();
+    let mut slots: HashMap<SlotKey, DocumentSlot> = HashMap::new();
 
     for (arrival, event) in events.into_iter().enumerate() {
-        let key = (
-            matches!(event.target, EventTarget::Global),
-            event.collection.to_string(),
-            event.document_id.to_string(),
-        );
+        let key = SlotKey::of(&event);
 
         // Receivers deliver in publish order, so a later entry is the newer
         // state for its document.
@@ -508,6 +547,131 @@ mod tests {
             !gate.matches(&owner_u1, &[]),
             "the newest row (owner u2) decides, not the replaced one"
         );
+    }
+
+    /// A draft save of the published `posts/a`: it describes the pending
+    /// draft, while the stored row stays published.
+    fn draft_save(sequence: u64) -> MutationEvent {
+        let mut event = mk(sequence, EventTarget::Collection, "posts", "a");
+        event.view =
+            Some(EventViewMeta::at(at("draft", false)).stored_at(Some(at("published", false))));
+
+        event
+    }
+
+    /// Regression: a draft save's placement (draft) was read as the stored
+    /// row's position. An update of a published document followed by a draft
+    /// save collapsed to the draft save, recorded as a move out of the
+    /// published view — a published-only subscriber was sent a `delete` for a
+    /// document that was still published. The draft save never supersedes the
+    /// stored row's event, and neither records a move.
+    #[test]
+    fn a_draft_save_never_reads_as_the_stored_rows_position() {
+        let published = at("published", false);
+
+        let out = coalesce_events(vec![
+            moved(1, EventOperation::Update, published, None),
+            draft_save(2),
+        ]);
+
+        assert_eq!(sequences(&out), vec![1, 2], "both survive");
+        assert!(out.iter().all(|e| prior(e).is_none()), "no move recorded");
+        assert!(out.iter().all(|e| !e.view.as_ref().unwrap().left_published));
+    }
+
+    /// Regression: a draft save followed by an unpublish collapsed to the
+    /// unpublish rebased onto the draft save's placement — the same view it
+    /// ends in — so the move out of the published view was swallowed. The
+    /// unpublish keeps its own origin and announces it.
+    #[test]
+    fn an_unpublish_after_a_draft_save_is_still_announced() {
+        let published = at("published", false);
+
+        let out = coalesce_events(vec![
+            draft_save(1),
+            moved(
+                2,
+                EventOperation::Unpublish,
+                at("draft", false),
+                Some(published.clone()),
+            ),
+        ]);
+
+        assert_eq!(sequences(&out), vec![1, 2]);
+        assert_eq!(prior(&out[1]), Some(published));
+        assert!(out[1].view.as_ref().unwrap().left_published);
+    }
+
+    /// Draft saves of the same row coalesce among themselves.
+    #[test]
+    fn draft_saves_coalesce_among_themselves() {
+        let out = coalesce_events(vec![draft_save(1), draft_save(2), draft_save(3)]);
+
+        assert_eq!(sequences(&out), vec![3]);
+        assert!(prior(&out[0]).is_none());
+    }
+
+    fn owner_is(owner: &str) -> [FilterClause; 1] {
+        [FilterClause::Single(Filter {
+            field: "owner".into(),
+            op: FilterOp::Equals(owner.into()),
+        })]
+    }
+
+    /// The origin carries the content the row had there: a burst that ends
+    /// with a move changing the content is judged, in the view the row left,
+    /// against the row as the burst found it.
+    #[test]
+    fn the_left_view_is_judged_against_the_content_the_burst_started_from() {
+        let published = at("published", false);
+
+        let mut first = moved(1, EventOperation::Update, published.clone(), None);
+        first.gate = Some(owned_by("u1"));
+
+        let mut publish_away = moved(
+            2,
+            EventOperation::Update,
+            at("draft", false),
+            Some(published),
+        );
+        publish_away.gate = Some(owned_by("u2"));
+
+        let out = coalesce_events(vec![first, publish_away]);
+
+        let view = out[0].view.as_ref().expect("view");
+        let left = view.left_gate(out[0].gate.as_ref()).expect("a left gate");
+        assert!(left.matches(&owner_is("u1"), &[]), "the row as it was");
+        assert!(!left.matches(&owner_is("u2"), &[]));
+    }
+
+    /// A lone move carries its own left-view content, and a survivor that
+    /// ends where the burst started carries none.
+    #[test]
+    fn the_left_view_content_travels_only_with_a_move() {
+        let published = at("published", false);
+
+        let mut lone = moved(
+            1,
+            EventOperation::Update,
+            at("draft", false),
+            Some(published.clone()),
+        );
+        lone.view = lone.view.map(|v| v.left_as(Some(owned_by("u1"))));
+        lone.gate = Some(owned_by("u2"));
+
+        let out = coalesce_events(vec![lone.clone()]);
+        let left = out[0].view.as_ref().unwrap().prior_gate.clone();
+        assert_eq!(left, Some(owned_by("u1")));
+
+        let back = moved(
+            2,
+            EventOperation::Update,
+            published,
+            Some(at("draft", false)),
+        );
+        let out = coalesce_events(vec![lone, back]);
+        assert!(prior(&out[0]).is_none());
+        assert!(out[0].view.as_ref().unwrap().prior_gate.is_none());
     }
 
     #[test]

@@ -1081,48 +1081,6 @@ fn templates_extract_via_binary() {
 // 35. Nested Fields: Scaffold → Load → Schema Sync (E2E)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Helper: scaffold a fresh project, add a collection with given Lua, load config, sync schema.
-/// Returns (`TempDir`, `DbPool`, Arc<Registry>).
-fn setup_with_collection(
-    slug: &str,
-    lua_content: &str,
-) -> (
-    tempfile::TempDir,
-    DbPool,
-    std::sync::Arc<crap_cms::core::Registry>,
-) {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let config_dir = tmp.path().join("config");
-    scaffold::init(Some(config_dir.clone()), &scaffold::InitOptions::default()).unwrap();
-
-    // Write the collection Lua file
-    std::fs::write(
-        config_dir.join(format!("collections/{slug}.lua")),
-        lua_content,
-    )
-    .unwrap();
-
-    // Also write a users collection for auth (needed by most setups)
-    std::fs::write(
-        config_dir.join("collections/users.lua"),
-        r#"crap.collections.define("users", {
-    auth = true,
-    labels = { singular = "User", plural = "Users" },
-    timestamps = true,
-    admin = { use_as_title = "email" },
-    fields = {},
-})"#,
-    )
-    .unwrap();
-
-    let cfg = CrapConfig::load(&config_dir).expect("load config");
-    let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
-    let db_pool = pool::create_pool(&config_dir, &cfg).expect("create pool");
-    migrate::sync_all(&db_pool, &registry, &cfg.locale).expect("sync schema");
-
-    (tmp, db_pool, registry)
-}
-
 #[test]
 fn nested_group_scaffold_to_schema_sync() {
     // Scaffold a collection with a group field, load config, sync schema — no errors.
@@ -1260,14 +1218,16 @@ fn container_field_as_first_field_uses_scalar_for_title() {
 }
 
 #[test]
-fn fts_excludes_container_fields_from_searchable() {
-    // Manually write a collection Lua where list_searchable_fields includes an array field.
-    // Schema sync (including FTS) should NOT crash.
+fn list_searchable_fields_refuses_a_container_field() {
+    // An array has no column on the document row, so it cannot be searched:
+    // naming it in `list_searchable_fields` fails the load instead of being
+    // dropped (a list with no valid entry used to build no index at all, and
+    // every search then returned the whole collection).
     let lua = r#"crap.collections.define("test_fts", {
     labels = { singular = "Test", plural = "Tests" },
     timestamps = true,
     admin = {
-        use_as_title = "arr",
+        use_as_title = "title",
         list_searchable_fields = { "arr", "title" },
     },
     fields = {
@@ -1284,29 +1244,21 @@ fn fts_excludes_container_fields_from_searchable() {
     },
 })"#;
 
-    let (_tmp, pool, registry) = setup_with_collection("test_fts", lua);
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_dir = tmp.path().join("config");
+    scaffold::init(Some(config_dir.clone()), &scaffold::InitOptions::default()).unwrap();
+    std::fs::write(config_dir.join("collections/test_fts.lua"), lua).unwrap();
 
-    // If we get here, FTS sync didn't crash. Verify title is searchable.
-    let def = registry.get_collection("test_fts").unwrap();
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
+    let err = hooks::init_lua(&config_dir, &cfg)
+        .err()
+        .expect("the collection load is refused");
+    let msg = format!("{err:#}");
 
-    // Verify the FTS fields exclude the array field
-    let fts_fields = crap_cms::db::query::fts::get_fts_fields(def);
     assert!(
-        !fts_fields.contains(&"arr".to_string()),
-        "array field 'arr' should be excluded from FTS fields"
+        msg.contains("list_searchable_fields") && msg.contains("'arr'"),
+        "error names the setting and the entry: {msg}"
     );
-    assert!(
-        fts_fields.contains(&"title".to_string()),
-        "'title' should remain in FTS fields"
-    );
-
-    // Verify we can create a document (full roundtrip)
-    let mut conn = pool.get().unwrap();
-    let tx = conn.transaction().unwrap();
-    let mut data = DocumentFields::new();
-    data.insert("title".to_string(), json!("Hello FTS"));
-    query::create(&tx, "test_fts", def, &data, None).unwrap();
-    tx.commit().unwrap();
 }
 
 #[test]

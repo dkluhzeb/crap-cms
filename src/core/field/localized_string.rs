@@ -41,6 +41,13 @@ pub fn set_default_label_locale(locale: &str) {
     let _ = DEFAULT_LABEL_LOCALE.set(locale.to_string());
 }
 
+/// The configured default locale — the admin UI language of a viewer who has
+/// not chosen one. `"en"` before a config is applied (unit tests, tooling).
+#[must_use]
+pub fn default_label_locale() -> &'static str {
+    DEFAULT_LABEL_LOCALE.get().map_or("en", String::as_str)
+}
+
 /// Run `fut` with `ui_locale` as the active label locale.
 pub async fn with_label_locale<F: Future>(ui_locale: String, fut: F) -> F::Output {
     LABEL_LOCALE.scope(ui_locale, fut).await

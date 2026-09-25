@@ -99,13 +99,26 @@ Via gRPC, pass an array of objects:
 ```json
 {
   "slides": [
-    { "title": "Slide 1", "image_url": "/img/1.jpg" },
+    { "id": "k7Qx2Lr9", "title": "Slide 1", "image_url": "/img/1.jpg" },
     { "title": "Slide 2", "image_url": "/img/2.jpg" }
   ]
 }
 ```
 
-On write, all existing rows for the parent are deleted and replaced with the new data. This is a full replacement, not a merge.
+A write sends the complete list of rows, and the stored rows are reconciled
+against it by row `id` (every row read back carries its `id`):
+
+- A row whose `id` matches an existing row of this document **updates that row
+  in place**, setting only the sub-fields it supplies. A sub-field the row
+  omits — or one the caller may not write (field-level `update` access) —
+  keeps its stored value.
+- A row without an `id` (or with an `id` that is not one of this document's
+  rows) is **inserted** as a new row with a server-generated id.
+- Stored rows missing from the list are **deleted**.
+- Row order follows the list order.
+
+So always send back the `id` of each row you read when updating: a row sent
+without it is a new row, and any sub-field it does not carry is lost.
 
 ## Row Labels
 

@@ -7,7 +7,7 @@ use anyhow::{Context as _, Result};
 use serde_json::{Value, to_string_pretty};
 
 use crate::{
-    db::LocaleContext,
+    db::{LocaleContext, query},
     mcp::tools::{ToolExecCtx, collection::helpers::doc_to_json},
     service::{
         ServiceError,
@@ -25,9 +25,22 @@ pub(in crate::mcp::tools) fn exec_read_global(
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
     let draft = args.get("draft").and_then(Value::as_bool).unwrap_or(false);
 
+    // Resolved as a collection read resolves it: absent (or outside i32) is
+    // the configured default, then floored at 0 and capped at max_depth.
+    let requested = args
+        .get("depth")
+        .and_then(Value::as_i64)
+        .and_then(|d| i32::try_from(d).ok());
+    let depth = query::clamp_depth(
+        requested,
+        ctx.config.depth.default_depth,
+        ctx.config.depth.max_depth,
+    );
+
     let op_args = GetGlobalArgs::builder()
         .locale_ctx(locale_ctx)
         .include_drafts(draft)
+        .depth(depth)
         .build();
 
     let result = op::run::<GetGlobal>(
@@ -52,12 +65,15 @@ pub(in crate::mcp::tools) fn exec_read_global(
 mod tests {
     use std::sync::Arc;
 
-    use serde_json::json;
+    use serde_json::{Value, from_str, json};
 
     use super::exec_read_global;
     use crate::{
         config::CrapConfig,
-        core::{Registry, collection::GlobalDefinition},
+        core::{
+            CollectionDefinition, FieldDefinition, FieldType, Registry, RelationshipConfig,
+            collection::GlobalDefinition,
+        },
         db::{DbConnection, migrate, pool},
         hooks::lifecycle::HookRunner,
         mcp::tools::test_helpers::make_exec_ctx,
@@ -97,5 +113,63 @@ mod tests {
         let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config, tmp.path());
 
         assert!(exec_read_global(&json!({}), "settings", &ctx).is_err());
+    }
+
+    /// Regression: `read_global` had no `depth` and never populated a
+    /// global's relationships. It populates like `find_by_id` — the
+    /// configured default when unset — and `depth = 0` returns the id.
+    #[test]
+    fn read_global_populates_relationships_to_depth() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = CrapConfig::test_default();
+        config.database.path = "test.db".to_string();
+
+        let mut tags = CollectionDefinition::new("tags");
+        tags.fields = vec![FieldDefinition::builder("name", FieldType::Text).build()];
+        let mut settings = GlobalDefinition::new("settings");
+        settings.fields = vec![
+            FieldDefinition::builder("featured", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("tags", false))
+                .build(),
+        ];
+
+        let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+        let shared = Registry::shared();
+        {
+            let mut reg = shared.write().unwrap();
+            reg.register_collection(tags);
+            reg.register_global(settings);
+        }
+        let registry = Registry::snapshot(&shared);
+        migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+
+        db_pool
+            .get()
+            .unwrap()
+            .execute_batch(
+                "INSERT INTO tags (id, name) VALUES ('t1', 'Rust');
+                 UPDATE _global_settings SET featured = 't1' WHERE id = 'default';",
+            )
+            .unwrap();
+
+        let runner = HookRunner::builder()
+            .config_dir(tmp.path())
+            .registry(Arc::clone(&registry))
+            .config(&config)
+            .build()
+            .unwrap();
+        let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config, tmp.path());
+
+        let read = |args| -> Value {
+            from_str(&exec_read_global(&args, "settings", &ctx).unwrap()).unwrap()
+        };
+
+        for args in [json!({}), json!({ "depth": 1 })] {
+            let doc = read(args);
+            assert_eq!(doc["featured"]["name"], "Rust", "{doc}");
+            assert_eq!(doc["featured"]["collection"], "tags", "{doc}");
+        }
+
+        assert_eq!(read(json!({ "depth": 0 }))["featured"], "t1");
     }
 }

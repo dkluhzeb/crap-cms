@@ -18,7 +18,10 @@ pub struct AdminConfig {
     #[serde(default)]
     #[lua(optional)]
     pub hidden: bool,
-    /// Fields searchable in the list view.
+    /// Fields the full-text `search` matches (admin list and every API). Text,
+    /// textarea, richtext, email, code, select or radio fields on the document
+    /// row (`group__field` for a group sub-field), not hidden — anything else
+    /// fails the load. Empty = every text-like field.
     #[serde(default)]
     #[lua(optional)]
     pub list_searchable_fields: Vec<String>,

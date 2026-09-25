@@ -3,6 +3,7 @@
 //! Tracks how many documents reference a given target via `_ref_count` columns.
 //! Replaces the O(N) back-reference scan with O(1) delete-protection checks.
 
+mod anchor;
 mod api;
 mod compute;
 mod delta;
@@ -13,10 +14,12 @@ mod walk;
 #[cfg(test)]
 mod test_helpers;
 
+pub use anchor::anchor_to_fields;
 pub use api::{
-    after_create, after_create_from_data, after_update, backfill_after_create, before_hard_delete,
-    data_touches_refs, get_purgeable_ref_count_locked, get_ref_count, get_ref_count_locked,
-    lock_ref_targets_from_data, snapshot_outgoing_refs,
+    after_create, after_create_from_data, after_import, after_update, backfill_after_create,
+    before_hard_delete, data_touches_refs, get_purgeable_ref_count_locked, get_ref_count,
+    get_ref_count_locked, snapshot_outgoing_refs,
 };
+pub use delta::UnavailableReferences;
 pub use outgoing_ref::OutgoingRef;
 pub(crate) use walk::{walk_blocks_with, walk_nested_with};

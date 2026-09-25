@@ -1,8 +1,14 @@
 //! Batch relationship population across multiple documents.
 
 mod dispatch;
-mod nonpoly;
-mod poly;
+mod refs;
+
+#[cfg(all(test, feature = "sqlite"))]
+mod join_tests;
+#[cfg(all(test, feature = "sqlite"))]
+mod nonpoly_tests;
+#[cfg(all(test, feature = "sqlite"))]
+mod poly_tests;
 #[cfg(all(test, feature = "sqlite"))]
 mod tests;
 

@@ -33,7 +33,7 @@ use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
-use crap_cms::core::{JwtSecret, Registry};
+use crap_cms::core::{JwtSecret, LiveSlots, Registry};
 use crap_cms::db::{DbConnection, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 use serde_json::json;
@@ -175,8 +175,7 @@ fn setup_app_with_config(
         )),
         has_auth,
         translations,
-        sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        max_sse_connections: 0,
+        sse_slots: LiveSlots::new(0, 0),
         shutdown: tokio_util::sync::CancellationToken::new(),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,

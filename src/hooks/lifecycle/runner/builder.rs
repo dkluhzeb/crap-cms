@@ -178,7 +178,7 @@ fn create_lua_vm(blueprint: &VmBlueprint, vm_index: usize) -> Result<Lua> {
 
     lua.set_app_data(VmLabel(format!("vm-{vm_index}")));
 
-    hooks::install_module_loader(&lua, config_dir)?;
+    hooks::install_module_loader(&lua, config_dir, io_jail)?;
 
     register_apis(&lua, registry, config)?;
 

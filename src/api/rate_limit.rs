@@ -8,22 +8,24 @@ use std::{
 };
 
 use axum::http::{Request, Response};
-use tonic::{Status, transport::server::TcpConnectInfo};
+use tonic::Status;
 use tower::{Layer, Service};
 
-use crate::core::rate_limit::GrpcRateLimiter;
+use crate::{api::http_client_ip, config::ServerConfig, core::rate_limit::GrpcRateLimiter};
 
 /// Tower layer that applies per-IP rate limiting to gRPC requests.
 #[derive(Clone)]
 pub struct GrpcRateLimitLayer {
     limiter: Arc<GrpcRateLimiter>,
+    server: Arc<ServerConfig>,
 }
 
 impl GrpcRateLimitLayer {
-    /// Create a new rate limit layer with the given limiter.
+    /// Create a new rate limit layer with the given limiter. `server` decides
+    /// which peers may name the client via `X-Forwarded-For`.
     #[must_use]
-    pub fn new(limiter: Arc<GrpcRateLimiter>) -> Self {
-        Self { limiter }
+    pub fn new(limiter: Arc<GrpcRateLimiter>, server: Arc<ServerConfig>) -> Self {
+        Self { limiter, server }
     }
 }
 
@@ -34,6 +36,7 @@ impl<S> Layer<S> for GrpcRateLimitLayer {
         GrpcRateLimitService {
             inner,
             limiter: self.limiter.clone(),
+            server: self.server.clone(),
         }
     }
 }
@@ -43,6 +46,7 @@ impl<S> Layer<S> for GrpcRateLimitLayer {
 pub struct GrpcRateLimitService<S> {
     inner: S,
     limiter: Arc<GrpcRateLimiter>,
+    server: Arc<ServerConfig>,
 }
 
 impl<S, ReqBody, ResBody> Service<Request<ReqBody>> for GrpcRateLimitService<S>
@@ -61,14 +65,9 @@ where
     }
 
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
-        // Extract IP from TcpConnectInfo (set by tonic's TCP acceptor).
-        let ip = req
-            .extensions()
-            .get::<TcpConnectInfo>()
-            .and_then(tonic::transport::server::TcpConnectInfo::remote_addr)
-            .map_or_else(|| "unknown".to_string(), |addr| addr.ip().to_string());
+        let client = http_client_ip(&req, &self.server);
 
-        if !self.limiter.check_and_record(&ip) {
+        if !self.limiter.check_and_record(&client) {
             let status = Status::resource_exhausted("rate limit exceeded");
             let response = status.into_http();
 
@@ -113,7 +112,7 @@ mod tests {
     use tower::{Layer, Service, ServiceExt};
 
     use super::{GrpcRateLimitLayer, GrpcRateLimitService};
-    use crate::core::rate_limit::GrpcRateLimiter;
+    use crate::{config::ServerConfig, core::rate_limit::GrpcRateLimiter};
 
     // ── gRPC status code constants ─────────────────────────────────────────
     //
@@ -168,7 +167,7 @@ mod tests {
     }
 
     fn make_service(limiter: Arc<GrpcRateLimiter>) -> GrpcRateLimitService<OkService> {
-        GrpcRateLimitLayer::new(limiter).layer(OkService)
+        GrpcRateLimitLayer::new(limiter, Arc::new(ServerConfig::default())).layer(OkService)
     }
 
     /// Return the value of the `grpc-status` response header (as a `&str`).
@@ -260,9 +259,9 @@ mod tests {
         );
     }
 
-    /// When there is no `TcpConnectInfo` the middleware falls back to the key
-    /// `"unknown"`.  All such requests share the same bucket, so they should
-    /// be rate-limited as a group.
+    /// When there is no `TcpConnectInfo` every request is attributed to the
+    /// same unknown peer, so they share one bucket and are rate-limited as a
+    /// group.
     #[tokio::test]
     async fn missing_connect_info_uses_unknown_key() {
         let limiter = Arc::new(GrpcRateLimiter::new(2, 60));
@@ -286,7 +285,7 @@ mod tests {
             .unwrap();
         assert_eq!(grpc_status(&r2), GRPC_STATUS_OK);
 
-        // Third request exceeds the limit for the "unknown" bucket.
+        // Third request exceeds the limit for the shared unknown-peer bucket.
         let r3 = svc
             .ready()
             .await
@@ -297,7 +296,7 @@ mod tests {
         assert_eq!(
             grpc_status(&r3),
             GRPC_STATUS_RESOURCE_EXHAUSTED,
-            "requests without IP info share the 'unknown' bucket"
+            "requests without IP info share one bucket"
         );
     }
 
@@ -431,7 +430,7 @@ mod tests {
         }
     }
 
-    /// Disabled rate limiting also works for the "unknown" IP case.
+    /// Disabled rate limiting also works for requests without a peer.
     #[tokio::test]
     async fn disabled_allows_unknown_ip() {
         let limiter = Arc::new(GrpcRateLimiter::new(0, 60));
@@ -449,6 +448,60 @@ mod tests {
         }
     }
 
+    // ── Trusted proxy ──────────────────────────────────────────────────────
+
+    /// Behind a trusted proxy the layer buckets by the forwarded client (the
+    /// same rule the admin server applies), and a spoofed leftmost entry does
+    /// not buy a fresh budget.
+    #[tokio::test]
+    async fn trusted_proxy_buckets_by_the_forwarded_client() {
+        let server = ServerConfig {
+            trust_proxy: true,
+            trusted_proxies: vec!["10.0.0.0/8".to_string()],
+            ..ServerConfig::default()
+        };
+        let limiter = Arc::new(GrpcRateLimiter::new(1, 60));
+        let mut svc = GrpcRateLimitLayer::new(limiter, Arc::new(server)).layer(OkService);
+
+        let forwarded = |xff: &str| {
+            let mut req = request_with_ip(Ipv4Addr::new(10, 0, 0, 5));
+            req.headers_mut()
+                .insert("x-forwarded-for", xff.parse().unwrap());
+            req
+        };
+
+        let first = svc
+            .ready()
+            .await
+            .unwrap()
+            .call(forwarded("198.51.100.1, 203.0.113.5"))
+            .await
+            .unwrap();
+        assert_eq!(grpc_status(&first), GRPC_STATUS_OK);
+
+        let spoofed = svc
+            .ready()
+            .await
+            .unwrap()
+            .call(forwarded("198.51.100.2, 203.0.113.5"))
+            .await
+            .unwrap();
+        assert_eq!(
+            grpc_status(&spoofed),
+            GRPC_STATUS_RESOURCE_EXHAUSTED,
+            "a new leftmost entry is the same client"
+        );
+
+        let other = svc
+            .ready()
+            .await
+            .unwrap()
+            .call(forwarded("203.0.113.6"))
+            .await
+            .unwrap();
+        assert_eq!(grpc_status(&other), GRPC_STATUS_OK);
+    }
+
     // ── Layer construction ─────────────────────────────────────────────────
 
     /// `GrpcRateLimitLayer::new` + `Layer::layer` must produce a working
@@ -456,7 +509,7 @@ mod tests {
     #[tokio::test]
     async fn layer_wraps_inner_service() {
         let limiter = Arc::new(GrpcRateLimiter::new(10, 60));
-        let layer = GrpcRateLimitLayer::new(limiter);
+        let layer = GrpcRateLimitLayer::new(limiter, Arc::new(ServerConfig::default()));
         let mut svc: GrpcRateLimitService<OkService> = layer.layer(OkService);
 
         let resp = svc

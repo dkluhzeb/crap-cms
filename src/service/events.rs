@@ -45,8 +45,8 @@ use tracing::warn;
 
 use crate::{
     core::{
-        CollectionDefinition, Document, DocumentFields, GlobalDefinition, HookRef, LiveMode,
-        MutationEvent, Registry,
+        CollectionDefinition, Document, DocumentFields, EventGateSnapshot, GlobalDefinition,
+        HookRef, LiveMode, MutationEvent, Registry,
         event::{EventOperation, EventTarget, EventViewMeta},
     },
     db::{AccessResult, DbConnection, EventViewGate, FilterClause},
@@ -168,7 +168,7 @@ impl EventGate<'_> {
         // than default to the published view.
         let view = event.view.as_ref()?;
 
-        if self.admits(event, views.constraints_for(view)) {
+        if self.admits(event, event.gate.as_ref(), views.constraints_for(view)) {
             let data = self.visible_data(event, &event.data, event.operation.as_str());
 
             return Some(EventDelivery::new(event.operation.clone(), data));
@@ -177,31 +177,39 @@ impl EventGate<'_> {
         self.removal(event, views)
     }
 
-    /// Whether the subscriber may see the event's row in the view whose
-    /// `constraints` were selected: `None` means the view is hidden from it
-    /// (closing the draft/trash leak); a non-empty constraint must match the
-    /// gating snapshot. The view metadata and the snapshot are carried
-    /// independent of `live_mode`, so this holds for empty-`data` events too
-    /// (metadata-only collections, all deletes).
-    fn admits(&self, event: &MutationEvent, constraints: Option<&[FilterClause]>) -> bool {
+    /// Whether the subscriber may see the event's row, as `snapshot` holds
+    /// it, in the view whose `constraints` were selected: `None` means the
+    /// view is hidden from it (closing the draft/trash leak); a non-empty
+    /// constraint must match the snapshot. The view metadata and the snapshot
+    /// are carried independent of `live_mode`, so this holds for empty-`data`
+    /// events too (metadata-only collections, all deletes).
+    fn admits(
+        &self,
+        event: &MutationEvent,
+        snapshot: Option<&EventGateSnapshot>,
+        constraints: Option<&[FilterClause]>,
+    ) -> bool {
         let Some(constraints) = constraints else {
             return false;
         };
 
-        constraints.is_empty() || self.row_constraints_match(event, constraints)
+        constraints.is_empty() || self.row_constraints_match(event, snapshot, constraints)
     }
 
     /// The removal a subscriber receives when the event moved the row out of
     /// a view the subscriber could see it in, into one it cannot — without it
     /// the client kept showing a row every read of its own now hides. The
     /// view the row left is judged exactly as the event's own view is, its
-    /// row constraint against the event's gating snapshot. `None` for any
-    /// other drop, and for a subscriber that could not see the row where it
-    /// was either.
+    /// row constraint against the row as it was there — the content the move
+    /// left behind when it changed it too (see
+    /// [`EventViewMeta::left_gate`]), else the event's own snapshot. `None`
+    /// for any other drop, and for a subscriber that could not see the row
+    /// where it was either.
     fn removal(&self, event: &MutationEvent, views: &EventViewGate) -> Option<EventDelivery> {
         let left = removal_view(event)?;
+        let left_row = event.view.as_ref()?.left_gate(event.gate.as_ref());
 
-        if !self.admits(event, views.constraints_for(&left)) {
+        if !self.admits(event, left_row, views.constraints_for(&left)) {
             return None;
         }
 
@@ -232,18 +240,25 @@ impl EventGate<'_> {
         self.strip_full_payload(event, data, operation)
     }
 
-    /// Whether the event's row satisfies a non-empty row constraint.
+    /// Whether the event's row, as `snapshot` holds it, satisfies a
+    /// non-empty row constraint.
     ///
-    /// Judged against the event's gating snapshot — the row as stored (for a
-    /// delete, as it was just before removal), hidden and read-denied fields
-    /// included, as the SQL read path filters — never against the delivered
-    /// `data`, which `live_mode` may empty and `before_broadcast` may reshape.
-    /// An event without a snapshot (from a node that predates it, or dropped to
-    /// fit the transport's size cap) cannot be judged, so a constrained view
-    /// never receives it (fail-closed). Field types (from the schema) make
-    /// Checkbox/Number constraints match SQL, not a blind string compare.
-    fn row_constraints_match(&self, event: &MutationEvent, constraints: &[FilterClause]) -> bool {
-        let Some(snapshot) = &event.gate else {
+    /// Judged against a gating snapshot — the row as stored (for a delete, as
+    /// it was just before removal; for the view a move left, as it was there),
+    /// hidden and read-denied fields included, as the SQL read path filters —
+    /// never against the delivered `data`, which `live_mode` may empty and
+    /// `before_broadcast` may reshape. An event without a snapshot (from a
+    /// node that predates it, or dropped to fit the transport's size cap)
+    /// cannot be judged, so a constrained view never receives it
+    /// (fail-closed). Field types (from the schema) make Checkbox/Number
+    /// constraints match SQL, not a blind string compare.
+    fn row_constraints_match(
+        &self,
+        event: &MutationEvent,
+        snapshot: Option<&EventGateSnapshot>,
+        constraints: &[FilterClause],
+    ) -> bool {
+        let Some(snapshot) = snapshot else {
             return false;
         };
 

@@ -4,7 +4,7 @@
 
 use std::sync::Mutex;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use nanoid::nanoid;
 use redis::Commands;
 
@@ -67,7 +67,7 @@ impl RedisRateLimitBackend {
         let mut guard = self
             .conn
             .lock()
-            .map_err(|e| anyhow::anyhow!("Redis mutex poisoned: {e}"))?;
+            .map_err(|e| anyhow!("Redis mutex poisoned: {e}"))?;
 
         match f(&mut guard) {
             Ok(val) => Ok(val),

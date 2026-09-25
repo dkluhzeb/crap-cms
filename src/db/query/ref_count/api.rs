@@ -5,10 +5,15 @@
 //! - [`data_touches_refs`] — fast-path skip predicate for updates that don't
 //!   touch any ref-bearing field
 //! - [`after_create`] / [`after_create_from_data`] / [`after_update`] /
-//!   [`before_hard_delete`] — apply deltas around a write
+//!   [`after_import`] / [`before_hard_delete`] — apply deltas around a write
 //! - [`snapshot_outgoing_refs`] — capture state for the update path
-//! - [`lock_ref_targets_from_data`] — historical no-op kept for call-site
-//!   stability
+//!
+//! No explicit pre-lock of the referenced targets is needed on any backend:
+//! the delta's `UPDATE <target> SET _ref_count = _ref_count + 1` takes the
+//! target's row lock, and a delete reads the count under the same lock
+//! (`get_ref_count_locked`), so a reference and a concurrent delete of its
+//! target serialize — the loser sees the target gone (the write fails) or the
+//! new count (the delete is refused).
 
 use anyhow::Result;
 
@@ -220,38 +225,6 @@ fn fields_contain_relationship(fields: &[FieldDefinition]) -> bool {
     any_field(fields, &|f| f.field_type.is_reference())
 }
 
-/// Historically this function pre-locked every outgoing ref target with
-/// `SELECT ... FOR UPDATE` before the main INSERT on Postgres. That added
-/// one round-trip per referenced document on the write hot path (3-5 per
-/// typical create), and the serialization it provided was redundant — the
-/// subsequent `UPDATE <target> SET _ref_count = _ref_count + 1 WHERE id = ?`
-/// in [`apply_deltas`] already takes the same row-level write lock and the
-/// `affected == 0` check already bails on a concurrently-deleted target,
-/// rolling back the enclosing transaction. Removing the pre-lock roughly
-/// doubles postgres write throughput under concurrent writes with shared
-/// ref targets.
-///
-/// Kept as a no-op function so every existing call site (create, update,
-/// version restore) stays wired up without churn; callers just don't pay
-/// for an explicit pre-lock anymore.
-///
-/// `SQLite` has always been a no-op here (`IMMEDIATE` transactions serialize
-/// all writers at the DB level), so `SQLite` behavior is unchanged.
-///
-/// # Errors
-///
-/// Currently infallible (returns `Ok(())` unconditionally). The `Result`
-/// return type is preserved so the call sites can keep their `?` operators
-/// in case future backends reintroduce a fallible pre-lock step.
-pub fn lock_ref_targets_from_data(
-    _conn: &dyn DbConnection,
-    _fields: &[FieldDefinition],
-    _data: &DocumentFields,
-    _locale_config: &LocaleConfig,
-) -> Result<()> {
-    Ok(())
-}
-
 /// Adjust ref counts after creating a new document.
 /// Reads the newly written outgoing refs and increments targets.
 ///
@@ -366,6 +339,30 @@ pub fn after_update(
     let deltas = to_delta_map(old_refs, &new_refs);
 
     apply_deltas(conn, &deltas)
+}
+
+/// Adjust ref counts around an import's write of a document: [`after_update`]
+/// replaying the references the document was exported with. A missing target
+/// is refused; a trashed one is kept — the reference was stored before its
+/// target was trashed, and the export carries the target trashed.
+///
+/// # Errors
+///
+/// Returns a backend error if reading the new refs or applying deltas fails,
+/// or [`UnavailableReferences`](super::UnavailableReferences) for a missing
+/// target.
+pub fn after_import(
+    conn: &dyn DbConnection,
+    table: &str,
+    id: &str,
+    fields: &[FieldDefinition],
+    locale_config: &LocaleConfig,
+    old_refs: &[OutgoingRef],
+) -> Result<()> {
+    let new_refs = read_outgoing_refs(conn, table, id, fields, locale_config)?;
+    let deltas = to_delta_map(old_refs, &new_refs);
+
+    apply_deltas_with(conn, &deltas, MissingTarget::RejectMissing)
 }
 
 /// Snapshot the current outgoing refs for a document (call before mutation).

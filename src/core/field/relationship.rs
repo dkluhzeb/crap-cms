@@ -84,7 +84,14 @@ pub struct JoinConfig {
     pub collection: Slug,
     /// Field on target collection that references this document (required).
     pub on: String,
+    /// Most documents the join lists per document (default 10, or `[pagination] max_limit` when lower; at least 1, at most `[pagination] max_limit`).
+    #[serde(default)]
+    pub limit: Option<u32>,
 }
+
+/// How many documents a join lists per document when its definition sets no
+/// `limit`.
+pub const DEFAULT_JOIN_LIMIT: u32 = 10;
 
 impl JoinConfig {
     /// Create a new join configuration (virtual reverse-relationship).
@@ -92,7 +99,17 @@ impl JoinConfig {
         Self {
             collection: collection.into(),
             on: on.into(),
+            limit: None,
         }
+    }
+
+    /// Most documents the join lists per document: its `limit`, else
+    /// [`DEFAULT_JOIN_LIMIT`]. A loaded definition carries a `limit` whenever
+    /// `[pagination] max_limit` is below the default (the config defaults fill
+    /// it in at init).
+    #[must_use]
+    pub fn effective_limit(&self) -> u32 {
+        self.limit.unwrap_or(DEFAULT_JOIN_LIMIT)
     }
 }
 
@@ -137,5 +154,14 @@ mod tests {
         let jc = JoinConfig::new("comments", "post_id");
         assert_eq!(jc.collection.as_ref(), "comments");
         assert_eq!(jc.on, "post_id");
+        assert_eq!(jc.effective_limit(), DEFAULT_JOIN_LIMIT);
+    }
+
+    #[test]
+    fn join_config_limit_overrides_the_default() {
+        let mut jc = JoinConfig::new("comments", "post_id");
+        jc.limit = Some(3);
+
+        assert_eq!(jc.effective_limit(), 3);
     }
 }

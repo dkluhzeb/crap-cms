@@ -100,6 +100,20 @@ fn emit_rel<'a, V>(
 ) where
     V: FnMut(&'a FieldDefinition, &[NestStep<'a>], &str, &str, bool),
 {
+    for_each_ref(rc, value, &mut |coll, id, poly| {
+        visit(field, stack, coll, id, poly);
+    });
+}
+
+/// The one reading of a stored relationship/upload value configured by `rc`:
+/// calls `visit(target_collection, target_id, is_polymorphic)` once per
+/// reference it holds. Has-many values are deduplicated within the value
+/// (mirroring the junction `SELECT DISTINCT`); empty/malformed entries are
+/// dropped.
+pub(super) fn for_each_ref<V>(rc: &RelationshipConfig, value: &Value, visit: &mut V)
+where
+    V: FnMut(&str, &str, bool),
+{
     let collection: &str = &rc.collection;
 
     if rc.has_many {
@@ -108,7 +122,7 @@ fn emit_rel<'a, V>(
 
             for (coll, id) in parse_polymorphic_values(value) {
                 if !coll.is_empty() && !id.is_empty() && seen.insert((coll.clone(), id.clone())) {
-                    visit(field, stack, &coll, &id, true);
+                    visit(&coll, &id, true);
                 }
             }
         } else {
@@ -116,7 +130,7 @@ fn emit_rel<'a, V>(
 
             for id in parse_id_list(value) {
                 if !id.is_empty() && seen.insert(id.clone()) {
-                    visit(field, stack, collection, &id, false);
+                    visit(collection, &id, false);
                 }
             }
         }
@@ -130,10 +144,10 @@ fn emit_rel<'a, V>(
 
     if rc.is_polymorphic() {
         if let Some((coll, id)) = poly_ref::parse(s) {
-            visit(field, stack, &coll, &id, true);
+            visit(&coll, &id, true);
         }
     } else if !s.is_empty() {
-        visit(field, stack, collection, s, false);
+        visit(collection, s, false);
     }
 }
 

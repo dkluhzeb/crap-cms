@@ -5,10 +5,10 @@ use serde_json::Value;
 use crate::{
     core::{Document, HookRef, collection::GlobalDefinition},
     db::{DbConnection, LocaleContext, ops, query, query::helpers::global_table},
-    hooks::{AccessCheckInput, lifecycle::AfterReadCtx},
+    hooks::AccessCheckInput,
     service::{
-        GetGlobalInput, ReadHooks, ReadStripArgs, ServiceContext, ServiceError,
-        global_access_allowed, helpers,
+        GetGlobalInput, ReadHooks, ServiceContext, ServiceError, global_access_allowed,
+        read::post_process::{PostProcessCall, post_process_global},
     },
 };
 
@@ -182,32 +182,17 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
         return Err(ServiceError::AccessDenied("Read access denied".into()));
     };
 
-    let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
-
-    helpers::strip_unreadable(
-        hooks,
-        &ReadStripArgs::builder(&def.fields, ctx.slug)
-            .user(ctx.user)
-            .locale(access_locale)
-            .build(),
+    // Populate to the read's depth, strip what the reader may not read,
+    // process the populated targets, then `after_read` — as a collection
+    // read does.
+    post_process_global(
+        ctx,
+        conn,
         &mut doc,
+        PostProcessCall::builder(input, "get", req_context).build(),
     );
 
-    let ar_ctx = AfterReadCtx {
-        hooks: &def.hooks,
-        fields: &def.fields,
-        collection: ctx.slug,
-        operation: "get",
-        // `hook_locale`, as for collections: in All-locale mode the values are
-        // per-locale maps, so `ctx.locale` is None rather than a misleading
-        // single locale.
-        locale: input.locale_ctx.and_then(LocaleContext::hook_locale),
-        user: ctx.user,
-        ui_locale: input.ui_locale,
-        context: req_context,
-    };
-
-    Ok(hooks.after_read_one(&ar_ctx, doc))
+    Ok(doc)
 }
 
 #[cfg(all(test, feature = "sqlite"))]
@@ -219,8 +204,8 @@ mod tests {
     use crate::{
         config::LocaleConfig,
         core::{
-            Document, FieldDefinition, FieldType, GlobalDefinition, HookRef, Hooks, ReqContext,
-            collection::VersionsConfig,
+            CollectionDefinition, Document, FieldDefinition, FieldType, GlobalDefinition, HookRef,
+            Hooks, Registry, RelationshipConfig, ReqContext, collection::VersionsConfig,
         },
         db::{AccessResult, LocaleMode},
         hooks::lifecycle::AfterReadCtx,
@@ -546,5 +531,63 @@ mod tests {
             Some("Hello new")
         );
         assert!(!doc.fields.contains_key("title__de"), "{:?}", doc.fields);
+    }
+
+    /// A `settings` global whose `featured` relationship points at tag `t1`,
+    /// and the registry resolving `tags`.
+    fn global_referencing_a_tag() -> (Connection, GlobalDefinition, Registry) {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _global_settings (
+                id TEXT PRIMARY KEY, featured TEXT, created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE tags (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
+            INSERT INTO _global_settings (id, featured) VALUES ('default', 't1');
+            INSERT INTO tags (id, name) VALUES ('t1', 'Rust');",
+        )
+        .unwrap();
+
+        let mut def = GlobalDefinition::new("settings");
+        def.fields = vec![
+            FieldDefinition::builder("featured", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("tags", false))
+                .build(),
+        ];
+
+        let mut tags = CollectionDefinition::new("tags");
+        tags.fields = vec![FieldDefinition::builder("name", FieldType::Text).build()];
+
+        let mut registry = Registry::new();
+        registry.register_collection(tags);
+
+        (conn, def, registry)
+    }
+
+    /// Regression: a global read never populated its relationships — every
+    /// surface returned the ids whatever the requested depth. It populates to
+    /// `depth` like a collection read (the populated target tagged with its
+    /// collection), and `depth = 0` keeps the ids.
+    #[test]
+    fn a_global_read_populates_its_relationships_to_depth() {
+        let (conn, def, registry) = global_referencing_a_tag();
+        let rh = NoopReadHooks;
+        let ctx = ServiceContext::global("settings", &def)
+            .conn(&conn)
+            .read_hooks(&rh)
+            .registry(Some(&registry))
+            .build();
+
+        let populated =
+            get_global_document(&ctx, &GetGlobalInput::new(None, None).depth(1)).unwrap();
+        let featured = populated.fields.get("featured").unwrap();
+        assert_eq!(featured["id"], "t1");
+        assert_eq!(featured["name"], "Rust");
+        assert_eq!(featured["collection"], "tags");
+
+        let ids = get_global_document(&ctx, &GetGlobalInput::new(None, None)).unwrap();
+        assert_eq!(
+            ids.fields.get("featured").and_then(Value::as_str),
+            Some("t1")
+        );
     }
 }

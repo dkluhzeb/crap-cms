@@ -388,7 +388,16 @@ other:
   carries an optional `password` (hashed on write, never read back; an empty
   one is rejected on create and keeps the stored hash on update — bulk
   updates reject it). A `hidden` field stays in the input: a write may set it.
-  An update accepts any subset (`Partial<PostsData>`).
+  An update accepts any subset — `Update<PostsData>`, declared at the top of
+  the file — and so does a draft save (`draft: true`) on a collection with
+  drafts, which does not enforce required fields. `Update<T>` makes each
+  group's sub-fields optional too (a sub-field the update does not send keeps
+  its stored value), while an array or blocks row stays whole: send each row
+  with its `id` and its required fields. (`Partial<PostsData>` is shallow and
+  would demand a group's required sub-fields.) Every optional key also takes `null` (`?: T | null`): an
+  absent key keeps the stored value, `null` clears it; a required key and the
+  `password` do not, and neither does a group key — a group has no value of
+  its own, so clear its sub-fields one by one (`seo: { title: null }`).
 - **The read type is what a read returns.** The row type of an array stored in
   its own table (not nested inside another row) has an optional `id` — send it
   back on update to keep the stored row. A read type has `id`, every field
@@ -412,7 +421,7 @@ population depth, narrows selects, and types polymorphic relationships:
 | Schema field | Rust | Go | TypeScript | Python |
 |---|---|---|---|---|
 | `text` / `richtext` (HTML) / `date` / … | `String` | `string` | `string` | `str` |
-| `richtext` with `admin.richtext_format = "json"` | `serde_json::Value` | `interface{}` | `unknown` | `Any` |
+| `richtext` with `admin.format = "json"` | `serde_json::Value` | `interface{}` | `unknown` | `Any` |
 | `number` | `f64` | `float64` | `number` | `float` |
 | `checkbox` | `bool` | `*bool` | `boolean` | `bool` |
 | `select` | `enum { …, Other(String) }` | `type X string` + consts | `"a" \| "b"` | `Literal["a", "b"]` |
@@ -501,14 +510,16 @@ For each collection, typegen emits:
 |------|---------|
 | `crap.data.Posts` | Hook `ctx.data` — the stored fields (upload metadata included) |
 | `crap.input.Posts` | The `create` / `create_many` / `validate` payload — the write shape, required fields required |
-| `crap.partial.Posts` | The `update` payload — the write shape, every field optional (plus `password` on an auth collection) |
+| `crap.partial.Posts` | The `update` payload — the write shape, every field optional, a group's sub-fields too (plus `password` on an auth collection) |
 | `crap.partial_many.Posts` | The `update_many` payload — as `crap.partial.Posts`, never a `password` (`update_many` refuses one) |
 | `crap.doc.Posts` | A returned document — the read shape (id + timestamps) |
 | `crap.hook.Posts` | Typed hook context (`collection`, `operation`, `data` as `crap.data.Posts`) |
 | `crap.read_hook.Posts` | Typed `after_read` hook context — `data` is the read document, `crap.doc.Posts` |
 | `crap.find_result.Posts` | Find result (`documents[]` + `pagination`) |
-| `crap.where.Posts` | Filter keys for queries (every column except a `hidden` field's) |
-| `crap.query.Posts` | Query options (`where`, `order_by`, `limit`, `offset`) |
+| `crap.doc_localized.Posts` | A document read with `locale = "all"` — each localized field a `{ [locale] = value }` table (only for a collection with localized fields) |
+| `crap.where_group.Posts` | One AND-group of filter conditions: every column except a `hidden` field's, a group's value in both spellings (`seo__title`, `["seo.title"]`), and every path into array/blocks/has-many rows (`["items.label"]`, `["content._block_type"]`, `["tags.id"]`) |
+| `crap.where.Posts` | A `where` table: a `crap.where_group.Posts` plus its `["or"]` alternatives |
+| `crap.query.Posts` | Query options (`where`, `order_by` — a group's value sortable in both spellings, `limit`, `offset`) |
 | `crap.hook_fn.Posts` / `crap.read_hook_fn.Posts` | Hook function signatures |
 
 The write shape (`crap.input`, `crap.partial`, `crap.partial_many`) leaves out
@@ -520,11 +531,37 @@ the populated `crap.doc.<Target>` (reads populate at the default depth), a JSON
 rich text field as the parsed `table`, and declares the `collection` tag a
 populated copy carries.
 
+Every optional key of a write class (`crap.input`, `crap.partial`,
+`crap.partial_many`, `crap.data`, and their row/group classes) also accepts
+`crap.null` — an absent key keeps the stored value, `crap.null` clears it. A
+required key of `crap.input` does not: it cannot be cleared. Nor does a group
+key: a group has no value of its own, so clear its sub-fields one by one
+(`seo = { title = crap.null }`). (The TypeScript `…Data` interfaces do the
+same with `| null`.)
+
+On a collection with drafts, `create`, `create_many` and `validate` have an
+overload taking the all-optional `crap.partial.<Slug>` with
+`{ draft = true }` (`crap.DraftCreateOptions` / `crap.DraftValidateOptions`),
+since a draft save does not enforce required fields.
+
+A collection or global with localized fields also gets its `locale = "all"`
+read shape: `crap.doc_localized.<Slug>` / `crap.global_doc_localized.<Slug>`
+(each localized field a per-locale table, each group holding one its
+`crap.doc_group_localized.*`), with `find` / `find_by_id` / `get` overloads
+for a `locale = "all"` query (`crap.query_all_locales.<Slug>`,
+`crap.AllLocalesFindByIdOptions`, `crap.AllLocalesGlobalGetOptions`). Where
+your editor does not pick the overload, cast the result:
+`local d = crap.collections.posts.find_by_id(id, { locale = "all" }) --[[@as crap.doc_localized.Posts?]]`.
+
 For globals: `crap.global_data.*`, `crap.global_partial.*`, `crap.global_doc.*`,
 `crap.hook.global_*`, `crap.read_hook.global_*`.
 
 For array rows and groups: `crap.array_row.*` / `crap.group.*` in the written
-shape, `crap.doc_row.*` / `crap.doc_group.*` in the read shape.
+shape, `crap.doc_row.*` / `crap.doc_group.*` in the read shape. A partial write
+(`crap.partial`, `crap.partial_many`, `crap.data`, `crap.global_partial`,
+`crap.global_data`) types a group as `crap.group_partial.*`, every sub-field
+optional — an update keeps each sub-field it does not send. A row is written
+whole, so its class (and a group inside it) keeps its required fields.
 
 Select fields become union types: `"draft" | "published" | "archived"`.
 
@@ -572,7 +609,7 @@ For a `posts` collection with `title`, `slug`, `status` (select), `content` (ric
 
 ---@class crap.hook.Posts
 ---@field collection "posts"
----@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id"
+---@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id" | "get"
 ---@field data crap.data.Posts
 ---@field id? string
 ---@field context table<string, any>
@@ -586,7 +623,7 @@ For a `posts` collection with `title`, `slug`, `status` (select), `content` (ric
 
 ---@class crap.read_hook.Posts
 ---@field collection "posts"
----@field operation "find" | "find_by_id" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
+---@field operation "find" | "find_by_id" | "get" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
 ---@field data crap.doc.Posts
 ---@field id? string
 ---@field context table<string, any>

@@ -228,7 +228,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            DocumentFields, DocumentId, JoinConfig, Slug, collection::Auth, document::Document,
+            DocumentFields, DocumentId, JoinConfig, collection::Auth, document::Document,
             upload::CollectionUpload,
         },
         db::query,
@@ -688,10 +688,7 @@ mod tests {
     #[test]
     fn extract_data_rejects_a_join_field_key() {
         let mut join = FieldDefinition::builder("comments", crate::core::FieldType::Join).build();
-        join.join = Some(JoinConfig {
-            collection: Slug::new("comments"),
-            on: "post".to_string(),
-        });
+        join.join = Some(JoinConfig::new("comments", "post"));
         let fields = vec![text_field("title"), join];
 
         let err = extract_data_from_args(&json!({ "comments": "x" }), &[], &fields)

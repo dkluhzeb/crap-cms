@@ -4,7 +4,7 @@
        header, sidebar, component singletons) stays untouched in the DOM.
        Full-document requests (direct loads, history-restore) take the
        {{else}} branch below. --}}
-  <title>{{t page.title name=page.title_name}}-{{crap.site_name}}</title>
+  <title>{{t page.title name=page.title_name}} - {{crap.site_name}}</title>
   {{> @partial-block}}
 {{else}}
   <!DOCTYPE html>
@@ -53,7 +53,7 @@
       >
       </script>
 
-      <title>{{t page.title name=page.title_name}}-{{crap.site_name}}</title>
+      <title>{{t page.title name=page.title_name}} - {{crap.site_name}}</title>
       {{> partials/i18n-island}}
 
       {{slot "head_extras"}}

@@ -137,7 +137,9 @@ impl EventViewPlacement {
         self.trashed == other.trashed && self.is_draft() == other.is_draft()
     }
 
-    fn is_draft(&self) -> bool {
+    /// Whether the row is a draft (in the draft view, or the trash's).
+    #[must_use]
+    pub fn is_draft(&self) -> bool {
         self.status.as_deref() == Some("draft")
     }
 }
@@ -180,6 +182,27 @@ pub struct EventViewMeta {
     /// [`prior_view`](Self::prior_view)). Omitted from the wire when false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub left_published: bool,
+    /// The row as it was in the view it left — the gating snapshot the left
+    /// view's row constraint is judged against — carried when the move also
+    /// changed the row's content (an update that publishes a draft, a version
+    /// restore). Without it that constraint would be judged against the row
+    /// as it is now: a subscriber that saw the old row would miss its removal
+    /// when the new content no longer matches, and one that never saw it
+    /// would learn its id when the new content matches. `None` when the move
+    /// left the content as it was (the event's own snapshot then describes
+    /// the row in both views), and on an event from a node that predates it.
+    /// Server-side only, like the view metadata it belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_gate: Option<EventGateSnapshot>,
+    /// Where the stored row sits, when that is not the content view this
+    /// event describes: a draft save of a published document describes its
+    /// pending draft, while the row itself stays published. `None` when the
+    /// event describes the stored row, and on an event from a node that
+    /// predates it. Burst coalescing keeps such an event apart from the
+    /// events of the stored row (see
+    /// [`coalesce_events`](super::coalesce_events)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stored: Option<EventViewPlacement>,
 }
 
 impl EventViewMeta {
@@ -225,7 +248,50 @@ impl EventViewMeta {
             .as_ref()
             .is_some_and(|prior| prior.in_published_view() && !self.in_published_view());
 
+        if self.prior.is_none() {
+            self.prior_gate = None;
+        }
+
         self
+    }
+
+    /// Record the row as it was in the view it left (see
+    /// [`prior_gate`](Self::prior_gate)). Kept only when the event records a
+    /// move — so call it after [`moved_from`](Self::moved_from).
+    #[must_use]
+    pub fn left_as(mut self, gate: Option<EventGateSnapshot>) -> Self {
+        self.prior_gate = gate.filter(|_| self.prior.is_some());
+
+        self
+    }
+
+    /// Record where the stored row sits when this event describes another
+    /// content view (see [`stored`](Self::stored)); a placement in the view
+    /// the event describes records nothing.
+    #[must_use]
+    pub fn stored_at(mut self, stored: Option<EventViewPlacement>) -> Self {
+        self.stored = stored.filter(|stored| !stored.same_view(&self.placement()));
+
+        self
+    }
+
+    /// Whether this event describes a content view the stored row is not in
+    /// (a pending draft of a published document).
+    #[must_use]
+    pub fn describes_pending_draft(&self) -> bool {
+        self.stored.is_some()
+    }
+
+    /// The snapshot the view the row left is judged against: the row as it
+    /// was there when the event carries it, else `current` — the event's own
+    /// snapshot, which describes the row in both views when the move left the
+    /// content as it was.
+    #[must_use]
+    pub fn left_gate<'a>(
+        &'a self,
+        current: Option<&'a EventGateSnapshot>,
+    ) -> Option<&'a EventGateSnapshot> {
+        self.prior_gate.as_ref().or(current)
     }
 
     /// The view the row was in before the mutation moved it — `None` when it

@@ -445,6 +445,57 @@ fn lua_find_depth_zero_returns_id() {
 
 // ── Globals with Join Data ──────────────────────────────────────────────
 
+/// Regression: `crap.globals.get` had no `depth` and never populated a
+/// global's relationships. It populates like `crap.collections.find_by_id` —
+/// `[depth] default_depth` when unset — and `depth = 0` returns the id.
+#[test]
+fn lua_globals_get_populates_relationships_to_depth() {
+    let (_tmp, pool, _reg, runner) = setup_custom_db(
+        &[(
+            "categories",
+            r#"
+            crap.collections.define("categories", {
+                labels = { singular = "Category", plural = "Categories" },
+                fields = {
+                    { name = "name", type = "text", required = true },
+                },
+            })
+            "#,
+        )],
+        &[(
+            "site",
+            r#"
+            crap.globals.define("site", {
+                labels = { singular = "Site" },
+                fields = {
+                    { name = "featured", type = "relationship",
+                      relationship = { collection = "categories" } },
+                },
+            })
+            "#,
+        )],
+        None,
+    );
+
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        local cat = crap.collections.create("categories", { name = "Science" })
+        crap.globals.update("site", { featured = cat.id })
+
+        local default = crap.globals.get("site")
+        local one = crap.globals.get("site", { depth = 1 })
+        local ids = crap.globals.get("site", { depth = 0 })
+
+        return default.featured.name .. ":" .. one.featured.collection .. ":"
+            .. tostring(ids.featured == cat.id)
+        "#,
+    );
+
+    assert_eq!(result, "Science:categories:true");
+}
+
 #[test]
 fn lua_globals_update_with_array() {
     let (_tmp, pool, _reg, runner) = setup_custom_db(

@@ -15,7 +15,7 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, atomic::AtomicUsize},
+    sync::Arc,
     time::Duration,
 };
 
@@ -38,7 +38,7 @@ use crap_cms::{
     },
     config::{CrapConfig, EmailConfig, UploadConfig},
     core::{
-        CollectionDefinition, FieldDefinition, FieldType, HookRef, LiveMode, Registry,
+        CollectionDefinition, FieldDefinition, FieldType, HookRef, LiveMode, LiveSlots, Registry,
         SharedEventTransport, SharedTokenProvider,
         auth::{Argon2PasswordProvider, JwtTokenProvider},
         email::create_email_provider,
@@ -135,8 +135,7 @@ fn build_state(parts: StateParts) -> AdminState {
         // anonymous user.
         has_auth: false,
         translations: parts.translations,
-        sse_connections: Arc::new(AtomicUsize::new(0)),
-        max_sse_connections: parts.max_sse_connections,
+        sse_slots: LiveSlots::new(parts.max_sse_connections, 0),
         shutdown: CancellationToken::new(),
         password_provider: Arc::new(Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,

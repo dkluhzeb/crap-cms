@@ -61,7 +61,7 @@ impl Operation for Find {
         // third. The sort is normalized by `find_documents` itself, which every
         // list read passes.
         normalize_filter_fields(&mut fq.filters, &def.fields);
-        validate_user_filters(&fq.filters).map_err(|e| ServiceError::HookError(e.to_string()))?;
+        validate_user_filters(&fq.filters)?;
 
         // Default sort for trash listings is newest-deleted-first. A
         // presentation default, but identical on every surface, so it lives

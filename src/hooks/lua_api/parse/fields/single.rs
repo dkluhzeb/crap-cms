@@ -17,9 +17,9 @@ use mlua::{Lua, Table};
 
 use crate::{
     core::{
-        AUTO_COLUMNS, BlockDefinition, FieldAccess, FieldAdmin, FieldDefinition, FieldHooks,
-        FieldTab, FieldType, JoinConfig, LANG_SUFFIX, McpFieldConfig, PickerAppearance,
-        RelationshipConfig, SelectOption, TZ_SUFFIX,
+        BlockDefinition, FieldAccess, FieldAdmin, FieldDefinition, FieldHooks, FieldTab, FieldType,
+        JoinConfig, LANG_SUFFIX, McpFieldConfig, PickerAppearance, RelationshipConfig,
+        SelectOption, TZ_SUFFIX, any_field, is_reserved_field_name,
     },
     db::query,
     hooks::lua_api::parse::{
@@ -64,12 +64,15 @@ fn parse_field_name(field_tbl: &Table) -> Result<String> {
         );
     }
 
-    // The non-`_`-prefixed auto columns: the main-table primary key, the
-    // timestamps, and the `parent_id` FK on array/blocks join tables. Shared
-    // with `is_system_column` via `core::AUTO_COLUMNS` so the two can't drift.
-    if AUTO_COLUMNS.contains(&name.as_str()) {
+    // The non-`_`-prefixed auto columns (the main-table primary key, the
+    // timestamps, the `parent_id` FK on array/blocks join tables) plus the
+    // `collection` tag every populated relationship target carries. One list
+    // shared with `is_system_column` via `core::AUTO_COLUMNS`, so they can't drift.
+    if is_reserved_field_name(&name) {
         bail!(
-            "Field name '{name}' is reserved — it collides with an automatically generated column (id, parent_id, created_at, updated_at)"
+            "Field name '{name}' is reserved — it collides with an automatically generated \
+             column (id, parent_id, created_at, updated_at) or the 'collection' tag of a \
+             populated relationship target"
         );
     }
 
@@ -198,6 +201,7 @@ fn parse_field_parts(lua: &Lua, field_tbl: &Table) -> Result<ParsedFieldParts> {
     let block_defs = parse_block_defs(lua, field_tbl, &field_type)?;
     let tab_defs = parse_tab_defs(lua, field_tbl, &field_type)?;
     deny_nested_position(&name, &sub_fields, &block_defs, &tab_defs)?;
+    deny_join_in_rows(&name, &field_type, &sub_fields, &block_defs)?;
 
     let join = parse_join(field_tbl, &field_type, &name)?;
     let mcp = parse_mcp(field_tbl)?;
@@ -247,6 +251,39 @@ fn deny_nested_position(
         "Field '{name}': sub-field '{}' sets admin.position, which applies only to \
          top-level fields — a nested field renders inside its container",
         child.name
+    )
+}
+
+/// A join lists the documents whose `on` field references the document it
+/// belongs to, so inside an array or blocks row it has no per-row meaning —
+/// every row would list the same documents. Refused anywhere under a row
+/// (inside a group or layout wrapper in the row too); a join belongs at the top
+/// level, in a layout wrapper, or in a group.
+fn deny_join_in_rows(
+    name: &str,
+    field_type: &FieldType,
+    sub_fields: &[FieldDefinition],
+    block_defs: &[BlockDefinition],
+) -> Result<()> {
+    if !matches!(field_type, FieldType::Array | FieldType::Blocks) {
+        return Ok(());
+    }
+
+    let is_join = |f: &FieldDefinition| f.field_type == FieldType::Join;
+    let in_rows = any_field(sub_fields, &is_join)
+        || block_defs
+            .iter()
+            .any(|block| any_field(&block.fields, &is_join));
+
+    if !in_rows {
+        return Ok(());
+    }
+
+    bail!(
+        "{} field '{name}': a join field cannot sit inside its rows — a join lists the \
+         documents that reference the whole document, so every row would repeat the same \
+         list; move the join to the top level, a group, or a row/collapsible/tabs wrapper",
+        field_type.as_str()
     )
 }
 

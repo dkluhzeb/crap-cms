@@ -522,6 +522,7 @@ pub static GLOBAL_OPS: &[OpWire] = &[
                 WireKind::Bool,
                 "Read unpublished (draft) content (default: false)",
             ),
+            f("depth", WireKind::Int32, DEPTH_DOC),
         ],
     },
     OpWire {

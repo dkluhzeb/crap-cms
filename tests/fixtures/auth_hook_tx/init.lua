@@ -1,0 +1,1 @@
+-- Auth-hook transaction-scope test fixture — nothing to register globally.

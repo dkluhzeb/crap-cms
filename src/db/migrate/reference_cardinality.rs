@@ -537,6 +537,7 @@ fn junction_params(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::BlockDefinition;
     use crate::db::{
         DbPool,
         migrate::{collection::test_helpers::*, sync_all},
@@ -858,5 +859,134 @@ mod tests {
         let paths: Vec<&str> = leaves.iter().map(|l| l.path.as_str()).collect();
 
         assert_eq!(paths, vec!["meta__author"]);
+    }
+
+    /// `posts` holding `author` (of the given cardinality) inside an `items`
+    /// array row and inside a `hero` block.
+    fn row_registry(has_many: bool) -> Registry {
+        let items = FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![author(has_many)])
+            .build();
+        let content = FieldDefinition::builder("content", FieldType::Blocks)
+            .blocks(vec![BlockDefinition::new("hero", vec![author(has_many)])])
+            .build();
+
+        let mut registry = Registry::new();
+        registry.register_collection(simple_collection("users", vec![]));
+        registry.register_collection(simple_collection("posts", vec![items, content]));
+
+        registry
+    }
+
+    fn row_text(pool: &DbPool, sql: &str) -> Option<String> {
+        pool.get()
+            .unwrap()
+            .query_one(sql, &[])
+            .unwrap()
+            .and_then(|row| row.opt_text_at(0))
+    }
+
+    /// Regression: turning `has_many` off for a reference inside an array or
+    /// blocks row left each row's one-element list behind — the has-one reader
+    /// and the recount saw no reference, so the target lost its count and
+    /// could be hard-deleted while rows still named it. The rows hold the
+    /// single id again and keep counting.
+    #[test]
+    fn turning_has_many_off_inside_rows_keeps_the_single_values() {
+        let (_dir, pool) = in_memory_pool();
+        sync_all(&pool, &row_registry(true), &no_locale()).unwrap();
+
+        pool.get()
+            .unwrap()
+            .execute_batch(
+                r#"INSERT INTO users (id) VALUES ('u1'), ('u2');
+                   INSERT INTO posts (id) VALUES ('p1');
+                   INSERT INTO posts_items (id, parent_id, _order, author)
+                     VALUES ('i1', 'p1', 0, '["u1"]'), ('i2', 'p1', 1, '[]');
+                   INSERT INTO posts_content (id, parent_id, _order, _block_type, data)
+                     VALUES ('b1', 'p1', 0, 'hero', '{"author":["u2"]}');"#,
+            )
+            .unwrap();
+
+        sync_all(&pool, &row_registry(false), &no_locale()).unwrap();
+
+        assert_eq!(
+            row_text(&pool, "SELECT author FROM posts_items WHERE id = 'i1'").as_deref(),
+            Some("u1")
+        );
+        assert_eq!(
+            row_text(&pool, "SELECT author FROM posts_items WHERE id = 'i2'"),
+            None
+        );
+        assert_eq!(
+            row_text(&pool, "SELECT data FROM posts_content").as_deref(),
+            Some(r#"{"author":"u2"}"#)
+        );
+        assert_eq!(ref_count(&pool, "u1"), 1, "the array row keeps counting");
+        assert_eq!(ref_count(&pool, "u2"), 1, "the block keeps counting");
+    }
+
+    /// The other direction inside rows: single ids become one-element lists.
+    #[test]
+    fn turning_has_many_on_inside_rows_lists_the_single_values() {
+        let (_dir, pool) = in_memory_pool();
+        sync_all(&pool, &row_registry(false), &no_locale()).unwrap();
+
+        pool.get()
+            .unwrap()
+            .execute_batch(
+                r#"INSERT INTO users (id) VALUES ('u1'), ('u2');
+                   INSERT INTO posts (id) VALUES ('p1');
+                   INSERT INTO posts_items (id, parent_id, _order, author)
+                     VALUES ('i1', 'p1', 0, 'u1');
+                   INSERT INTO posts_content (id, parent_id, _order, _block_type, data)
+                     VALUES ('b1', 'p1', 0, 'hero', '{"author":"u2"}');"#,
+            )
+            .unwrap();
+
+        sync_all(&pool, &row_registry(true), &no_locale()).unwrap();
+
+        assert_eq!(
+            row_text(&pool, "SELECT author FROM posts_items").as_deref(),
+            Some(r#"["u1"]"#)
+        );
+        assert_eq!(
+            row_text(&pool, "SELECT data FROM posts_content").as_deref(),
+            Some(r#"{"author":["u2"]}"#)
+        );
+        assert_eq!(ref_count(&pool, "u1"), 1);
+        assert_eq!(ref_count(&pool, "u2"), 1);
+    }
+
+    /// A row holding two ids cannot turn has-one without losing one: the sync
+    /// is refused, naming the row, and the row keeps both.
+    #[test]
+    fn turning_has_many_off_inside_rows_with_several_values_is_refused() {
+        let (_dir, pool) = in_memory_pool();
+        sync_all(&pool, &row_registry(true), &no_locale()).unwrap();
+
+        pool.get()
+            .unwrap()
+            .execute_batch(
+                r#"INSERT INTO users (id) VALUES ('u1'), ('u2');
+                   INSERT INTO posts (id) VALUES ('p1');
+                   INSERT INTO posts_items (id, parent_id, _order, author)
+                     VALUES ('i1', 'p1', 0, '["u1","u2"]');"#,
+            )
+            .unwrap();
+
+        let err = format!(
+            "{:#}",
+            sync_all(&pool, &row_registry(false), &no_locale()).unwrap_err()
+        );
+
+        assert!(
+            err.contains("has-one") && err.contains("i1") && err.contains("p1"),
+            "{err}"
+        );
+        assert_eq!(
+            row_text(&pool, "SELECT author FROM posts_items").as_deref(),
+            Some(r#"["u1","u2"]"#)
+        );
     }
 }

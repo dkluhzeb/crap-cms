@@ -24,7 +24,7 @@ use std::{
 
 mod common;
 
-use common::production_code;
+use common::{is_test_module_file, production_code};
 
 /// Minimum `.rs` files the scan must find under `src/mcp/tools`. Without the
 /// floor, moving or renaming the tool tree leaves the scan walking an empty
@@ -64,6 +64,8 @@ fn leak_form(code: &str) -> Option<&'static str> {
     (produces_raw && reaches_client).then_some("raw ServiceError text reaches the client")
 }
 
+/// Recursively collect every production `.rs` file under `dir` — an
+/// out-of-line test module is test code.
 fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -74,7 +76,7 @@ fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
         if path.is_dir() {
             rs_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
+        } else if path.extension().is_some_and(|e| e == "rs") && !is_test_module_file(&path) {
             out.push(path);
         }
     }

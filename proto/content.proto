@@ -632,8 +632,10 @@ message FindRequest {
   // Only effective when cursor pagination is enabled server-side.
   optional string before_cursor = 11;
 
-  // Full-text search query string. When set, results are ranked by relevance
-  // against the collection's full-text search index.
+  // Full-text search query string. When set, only documents whose indexed text
+  // contains every search word (as a word prefix) are returned, in the requested
+  // order — set order_by = "_rank" to sort by relevance instead. Searches the
+  // requested locale's text (every locale with locale = "all").
   optional string search = 12;
 
   // When true, returns only soft-deleted documents (trash view).
@@ -896,6 +898,11 @@ message GetGlobalRequest {
   // enabled and has been unpublished. Default false reads an unpublished global as
   // empty (no field content). Subject to the global's read access.
   optional bool draft = 3;
+
+  // Relationship population depth. 0 = IDs only.
+  // Defaults to the server's default_depth config (1 unless changed) — the
+  // same default as FindByID.
+  optional int32 depth = 4;
 }
 
 // GetGlobalResponse wraps the global's document.
@@ -1466,7 +1473,13 @@ message MutationEvent {
   // Whether a collection or a global was mutated.
   MutationTarget target = 3;
 
-  // The operation that produced this event.
+  // The operation as delivered to THIS subscriber. Usually the operation
+  // that produced the event, but a subscriber that could see the document in
+  // the view it left and cannot see it in the view it moved into (a publish,
+  // unpublish, status-changing restore, soft delete or undelete) is told it
+  // is gone instead: a collection document arrives as DELETE, a global that
+  // leaves the published view as UPDATE carrying the empty global (see
+  // `data`). Merge-on-UPDATE clients must therefore replace, not merge.
   MutationOperation operation = 4;
 
   // The collection or global slug that was mutated.
@@ -1475,8 +1488,12 @@ message MutationEvent {
   // The nanoid ID of the affected document.
   string document_id = 6;
 
-  // The document field values at the time of the event.
-  // For delete events, this is an empty struct.
+  // The document field values at the time of the event, as this subscriber
+  // may read them (`full` live mode only). Empty for a DELETE (including a
+  // removal delivered as DELETE) and for every event in `metadata` live
+  // mode. For a global leaving the published view (delivered as UPDATE) it is
+  // the empty global a non-draft read now returns: no field content, only
+  // `_status = "draft"` — replace any cached field values with it.
   DataMap data = 7;
 
   // Opaque id of the server process that published the event; `sequence`

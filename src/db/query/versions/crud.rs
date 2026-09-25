@@ -1,5 +1,7 @@
 //! Version CRUD operations and document status management.
 
+use std::collections::HashMap;
+
 use anyhow::{Context as _, Result};
 use nanoid::nanoid;
 use serde_json::Value;
@@ -191,6 +193,43 @@ pub fn find_latest_version(
     };
 
     Ok(Some(row_to_version(&row)?))
+}
+
+/// The latest version of each of `parent_ids` that is a draft — the pending
+/// draft a draft read shows in place of the published row — keyed by parent.
+/// Parents whose latest version is published, or who have none, are absent.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails or a row fails to parse.
+pub fn find_latest_draft_versions(
+    conn: &dyn DbConnection,
+    slug: &str,
+    parent_ids: &[String],
+) -> Result<HashMap<String, VersionSnapshot>> {
+    if parent_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let table = version_table(slug);
+    let placeholders: Vec<String> = (1..=parent_ids.len())
+        .map(|i| conn.placeholder(i))
+        .collect();
+    let sql = format!(
+        "SELECT id, _parent, _version, _status, _latest, snapshot, created_at \
+         FROM {table} WHERE _latest = 1 AND _status = 'draft' AND _parent IN ({})",
+        placeholders.join(", ")
+    );
+
+    let params: Vec<DbValue> = parent_ids
+        .iter()
+        .map(|id| DbValue::Text(id.clone()))
+        .collect();
+
+    conn.query_all(&sql, &params)?
+        .iter()
+        .map(|row| row_to_version(row).map(|v| (v.parent.to_string(), v)))
+        .collect()
 }
 
 /// Find the most recent *published* version snapshot for a parent (the highest

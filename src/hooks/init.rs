@@ -3,19 +3,22 @@
 use std::{fs, path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result, bail};
-use mlua::{ChunkMode, Function, Lua, LuaOptions, Result as LuaResult, StdLib, Table, Value};
+use mlua::{
+    ChunkMode, Error::RuntimeError, Function, Lua, LuaOptions, Result as LuaResult, StdLib, Table,
+    Value,
+};
 use tracing::{debug, info};
 
 use crate::{
     config::CrapConfig,
-    core::{FieldDefinition, Registry, SharedRegistry},
+    core::Registry,
     hooks::{
         io_jail::{IoJail, install_io_jail},
         lifecycle::{InitPhase, apply_vm_limits, reset_instruction_budget},
     },
 };
 
-use super::lua_api;
+use super::{config_defaults::apply_config_defaults, lua_api};
 
 /// Initialize the Lua VM, register the crap API, load collections/globals,
 /// and run init.lua. Returns an immutable `Arc<Registry>` snapshot.
@@ -46,7 +49,7 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
 
     let registry = Registry::shared();
 
-    install_module_loader(&lua, config_dir)?;
+    install_module_loader(&lua, config_dir, &io_jail)?;
     lua_api::register_api(&lua, &registry, config)?;
 
     // Mark init phase so register-only APIs (`crap.pages.register`,
@@ -119,6 +122,11 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     // it (and an upload targeting a non-upload collection) at load.
     super::startup_checks::validate_relation_targets(&snapshot)
         .context("Relationship target validation failed")?;
+
+    // A join listing more documents than `[pagination] max_limit` would
+    // populate an unbounded list on every read of its owner.
+    super::startup_checks::validate_join_limits(&snapshot, config.pagination.max_limit)
+        .context("Join limit validation failed")?;
 
     // A rich text field naming a custom node that was never registered would
     // silently lose that node in the editor, validation and search.
@@ -226,52 +234,6 @@ pub(crate) fn load_def_dir(lua: &Lua, config_dir: &Path, kind: &str) -> Result<u
     }
 }
 
-/// Resolve config-level `default_timezone` into date fields that don't specify their own.
-fn apply_config_defaults(registry: &SharedRegistry, config: &CrapConfig) {
-    if config.admin.default_timezone.is_empty() {
-        return;
-    }
-
-    let default_tz = &config.admin.default_timezone;
-
-    let Ok(mut reg) = registry.write() else {
-        return;
-    };
-
-    // Init phase: the registry is being built and nothing else holds a
-    // reference to these Arcs yet, so `make_mut` mutates in place without
-    // cloning.
-    for def in reg.collections.values_mut() {
-        apply_default_timezone(&mut Arc::make_mut(def).fields, default_tz);
-    }
-    for def in reg.globals.values_mut() {
-        apply_default_timezone(&mut Arc::make_mut(def).fields, default_tz);
-    }
-}
-
-/// Recursively set `default_timezone` on Date fields with `timezone: true`
-/// that don't already have their own `default_timezone`.
-fn apply_default_timezone(fields: &mut [FieldDefinition], default_tz: &str) {
-    for field in fields.iter_mut() {
-        if field.has_tz_companion() && field.default_timezone.is_none() {
-            field.default_timezone = Some(default_tz.to_string());
-        }
-
-        apply_default_timezone(&mut field.fields, default_tz);
-
-        for tab in &mut field.tabs {
-            apply_default_timezone(&mut tab.fields, default_tz);
-        }
-
-        // Blocks sub-fields live under `blocks[].fields`, not `fields` — a Date
-        // with `timezone` nested inside a Blocks field must inherit the config
-        // default like one nested in a group/array/tab.
-        for block in &mut field.blocks {
-            apply_default_timezone(&mut block.fields, default_tz);
-        }
-    }
-}
-
 /// Chunk name for Lua error messages: the last two path components
 /// (`hooks/posts.lua`, `init.lua`) instead of the absolute server path.
 /// Lua prefixes `error()` text with `chunkname:line:`, and hook errors
@@ -306,12 +268,21 @@ fn chunk_name(path: &Path) -> String {
 /// filesystem layout in the client-facing `HookError`. The preload searcher
 /// (index 1) still runs first, so `load_lua_dir`-cached modules are untouched.
 ///
+/// A module file must also be one `io_jail` lets `require` load (see
+/// [`IoJail::may_load_module`]): never one under an `[hooks] io_roots`
+/// directory — Lua writes there, and loading what it wrote would be dynamic
+/// code loading — nor under a protected path such as the data directory.
+///
 /// # Errors
 ///
 /// Returns an error if the config dir path contains `;` or `?` (Lua's
 /// template separator and placeholder), or the `package` table can't be
 /// updated.
-pub(crate) fn install_module_loader(lua: &Lua, config_dir: &Path) -> Result<()> {
+pub(crate) fn install_module_loader(
+    lua: &Lua,
+    config_dir: &Path,
+    io_jail: &Arc<IoJail>,
+) -> Result<()> {
     let config_str = config_dir.to_string_lossy();
 
     if config_str.contains([';', '?']) {
@@ -330,19 +301,32 @@ pub(crate) fn install_module_loader(lua: &Lua, config_dir: &Path) -> Result<()> 
     package.set("path", templates.join(";"))?;
 
     let searchers: Table = package.get("searchers")?;
-    searchers.set(2, module_searcher(lua, templates)?)?;
+    searchers.set(2, module_searcher(lua, templates, Arc::clone(io_jail))?)?;
 
     Ok(())
 }
 
-/// The `require` file searcher over the fixed config-dir `templates`.
-fn module_searcher(lua: &Lua, templates: Vec<String>) -> LuaResult<Function> {
+/// The `require` file searcher over the fixed config-dir `templates`,
+/// loading only files `io_jail` allows.
+fn module_searcher(lua: &Lua, templates: Vec<String>, io_jail: Arc<IoJail>) -> LuaResult<Function> {
     lua.create_function(move |lua, module: String| {
         let rel = module.replace('.', "/");
 
         for template in &templates {
             let candidate = template.replace('?', &rel);
             let file = Path::new(&candidate);
+
+            if !file.is_file() {
+                continue;
+            }
+
+            if !io_jail.may_load_module(file) {
+                return Err(RuntimeError(format!(
+                    "module '{module}' lies where Lua code is never loaded from — a \
+                     `[hooks] io_roots` directory Lua writes to, or a protected path such \
+                     as the data directory"
+                )));
+            }
 
             let Ok(code) = fs::read_to_string(file) else {
                 continue;
@@ -367,12 +351,12 @@ fn module_searcher(lua: &Lua, templates: Vec<String>) -> LuaResult<Function> {
 /// - no dynamic code loading (`load`/`loadstring`/`loadfile`/`dofile`),
 /// - no native module loading (`package.cpath`/`loadlib`, `string.dump`),
 /// - `os` reduced to time functions,
-/// - `io` file access jailed by `io_jail` to the config directory plus
-///   `[hooks] io_roots` (custom storage backends are documented as
-///   Lua-may-map-to-filesystem), with the process's secrets — config file,
-///   data directory, database, backups, logs, `/proc` — refused inside
-///   them; `package.searchpath` (a file-existence probe outside the jail)
-///   is removed.
+/// - `io` file access jailed by `io_jail`: reads under the config directory
+///   plus `[hooks] io_roots`, writes under `io_roots` only (custom storage
+///   backends are documented as Lua-may-map-to-filesystem), with the
+///   process's secrets — config file, data directory, database, backups,
+///   logs, `/proc` — refused inside them; `package.searchpath` (a
+///   file-existence probe outside the jail) is removed.
 pub(crate) fn sandbox_lua(lua: &Lua, io_jail: &Arc<IoJail>) -> Result<()> {
     lua.load_std_libs(StdLib::OS)?;
 
@@ -468,7 +452,6 @@ pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{BlockDefinition, FieldType};
     use mlua::{Lua, LuaOptions, StdLib, Value};
 
     fn sandboxed_lua() -> Lua {
@@ -480,9 +463,47 @@ mod tests {
 
     /// A sandboxed VM whose modules resolve under `config_dir`.
     fn module_lua(config_dir: &Path) -> Lua {
-        let lua = sandboxed_lua();
-        install_module_loader(&lua, config_dir).unwrap();
+        module_lua_with_roots(config_dir, &[])
+    }
+
+    /// [`module_lua`] with `io_roots` configured.
+    fn module_lua_with_roots(config_dir: &Path, io_roots: &[&str]) -> Lua {
+        let mut config = CrapConfig::default();
+        config.hooks.io_roots = io_roots.iter().map(ToString::to_string).collect();
+
+        let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default()).unwrap();
+        let jail = Arc::new(IoJail::new(config_dir, &config).unwrap());
+        sandbox_lua(&lua, &jail).unwrap();
+        install_module_loader(&lua, config_dir, &jail).unwrap();
+
         lua
+    }
+
+    /// Regression: `require` read any `.lua` file under the config directory
+    /// — the data directory and a directory Lua writes to included — so a
+    /// hook could write a module and load it (dynamic code loading). Both
+    /// are refused; the config directory's own modules still load.
+    #[test]
+    fn require_never_loads_from_a_writable_or_protected_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        for dir in ["hooks", "data", "uploads"] {
+            fs::create_dir_all(tmp.path().join(dir)).unwrap();
+            fs::write(tmp.path().join(dir).join("m.lua"), "return 7").unwrap();
+        }
+        let lua = module_lua_with_roots(tmp.path(), &["uploads"]);
+
+        let ok: i64 = lua.load("return require('hooks.m')").eval().unwrap();
+        assert_eq!(ok, 7);
+
+        for module in ["data.m", "uploads.m"] {
+            let err = lua
+                .load(format!("return require('{module}')"))
+                .eval::<Value>()
+                .unwrap_err()
+                .to_string();
+
+            assert!(err.contains("never loaded from"), "{module}: {err}");
+        }
     }
 
     /// the sandbox is a denylist, and denylists
@@ -648,7 +669,8 @@ mod tests {
         let lua = sandboxed_lua();
 
         for dir in ["/srv/a;b", "/srv/a?b"] {
-            let err = install_module_loader(&lua, Path::new(dir)).unwrap_err();
+            let jail = Arc::new(IoJail::new(Path::new("."), &CrapConfig::default()).unwrap());
+            let err = install_module_loader(&lua, Path::new(dir), &jail).unwrap_err();
             assert!(err.to_string().contains("';' or '?'"), "{err}");
         }
     }
@@ -886,30 +908,5 @@ mod tests {
 
         assert!(err.contains("init.lua"), "{err}");
         assert!(err.contains("memory"), "{err}");
-    }
-
-    #[test]
-    fn default_timezone_applies_to_date_inside_blocks() {
-        let mut fields = vec![
-            FieldDefinition::builder("body", FieldType::Blocks)
-                .blocks(vec![BlockDefinition::new(
-                    "event",
-                    vec![
-                        FieldDefinition::builder("starts_at", FieldType::Date)
-                            .timezone(true)
-                            .build(),
-                    ],
-                )])
-                .build(),
-        ];
-
-        apply_default_timezone(&mut fields, "America/New_York");
-
-        let date = &fields[0].blocks[0].fields[0];
-        assert_eq!(
-            date.default_timezone.as_deref(),
-            Some("America/New_York"),
-            "a timezone Date nested in a Blocks field must inherit the config default"
-        );
     }
 }

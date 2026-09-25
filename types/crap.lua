@@ -270,6 +270,7 @@ crap = {}
 --- @class crap.JoinField : crap.BaseField
 --- @field collection string Target collection slug (required).
 --- @field on string Field on target collection that references this document (required).
+--- @field limit? integer Most documents the join lists per document (default 10, or `[pagination] max_limit` when lower; at least 1, at most `[pagination] max_limit`).
 
 --- Complete definition of a single field within a collection.
 --- Use the per-type factory classes (`crap.fields.text(...)`,
@@ -315,6 +316,7 @@ crap = {}
 --- @class crap.JoinConfig
 --- @field collection string Target collection slug (required).
 --- @field on string Field on target collection that references this document (required).
+--- @field limit? integer Most documents the join lists per document (default 10, or `[pagination] max_limit` when lower; at least 1, at most `[pagination] max_limit`).
 
 -- ── crap.fields ──────────────────────────────────────────────
 
@@ -452,7 +454,7 @@ function crap.fields.join(config) end
 --- @field use_as_title? string Field name to use as row label in lists.
 --- @field default_sort? string Default sort field (prefix with "-" for desc).
 --- @field hidden? boolean Hide from admin sidebar (default: false).
---- @field list_searchable_fields? string[] Fields searchable in the list view.
+--- @field list_searchable_fields? string[] Fields the full-text `search` matches (admin list and every API). Text, textarea, richtext, email, code, select or radio fields on the document row (`group__field` for a group sub-field), not hidden — anything else fails the load. Empty = every text-like field.
 --- @field list_columns? string[] Default columns shown in the list view, in order. Empty = the built-in default (`_status` if the collection has drafts, plus `created_at`). A per-user column selection overrides this. Entries may be field names or the meta columns `created_at` / `updated_at` / `_status`.
 
 --- A reference to a Lua hook function, optionally carrying per-configuration
@@ -518,7 +520,7 @@ function crap.fields.join(config) end
 --- @class crap.MfaWhenContext
 --- @field collection string Auth collection slug.
 --- @field user table<string, any> The credential-verified user's field data (password hash hidden).
---- @field surface string The login surface: `"admin"` or `"grpc"`.
+--- @field surface crap.Surface The login surface: `"admin"` or `"grpc"`.
 --- @field headers table<string, string> Request headers (lowercase keys).
 --- @field options? table Per-config options from `{ ref, options }`; `nil` for a bare ref.
 
@@ -585,7 +587,7 @@ function crap.fields.join(config) end
 --- @class crap.AuthMethodPasswordLogin
 --- @field type "password_login"
 --- @field mfa? "email"|"custom"|"totp"|false MFA mode. `"email"` sends the code by email, `"custom"` hands it to the `mfa_deliver` hook, `"totp"` verifies against an authenticator app (no delivery); `false` (or omit) disables.
---- @field mfa_when? string | crap.HookRef Optional Lua gate deciding WHETHER a verified login must complete the second factor — called after credential verification with `{ collection, user, surface, headers }`; return `false`/`nil` to skip MFA for this login, anything truthy to require it. Lets MFA apply per surface (`ctx.surface == "grpc"`) or per user field (`ctx.user.mfa_enabled`). Runs for any enabled MFA mode (`"email"` or `"custom"`); no hook = MFA always required. A hook error fails CLOSED (requires MFA).
+--- @field mfa_when? string | crap.HookRef Optional Lua gate deciding WHETHER a verified login must complete the second factor — called after credential verification with `{ collection, user, surface, headers }`; return `false`/`nil` to skip MFA for this login, anything truthy to require it. Lets MFA apply per surface (`ctx.surface == "grpc"`) or per user field (`ctx.user.mfa_enabled`). Runs for any enabled MFA mode (`"email"`, `"custom"` or `"totp"`); no hook = MFA always required. A hook error fails CLOSED (requires MFA).
 --- @field mfa_deliver? string | crap.HookRef Delivery hook for `mfa = "custom"`: called after credential verification with `{ collection, user, code, expires_in }` — send the code via your channel (SMS, push, …). The code is SENSITIVE: never log it. Errors are logged server-side; the previously issued code (if any) stays valid. Required with `mfa = "custom"`, rejected otherwise (startup error).
 --- @field mfa_exempt_callbacks? string[] Auth callbacks (by `{name}` of `/admin/auth/callback/[{collection}/]{name}`) whose identity provider already enforces a second factor: a session they authenticate skips this collection's MFA step. Every other callback completes the same MFA step a password login does. Only valid with an MFA mode set (startup error otherwise).
 --- @field verify_email? boolean Require email verification before login (default `false`).
@@ -834,7 +836,7 @@ function crap.fields.join(config) end
 --- top-level API call, `1+` from Lua CRUD invoked inside another hook.
 --- @class crap.HookContext
 --- @field collection string Collection slug.
---- @field operation "create"|"update"|"undelete"|"delete"|"find"|"find_by_id"|"unpublish"|"restore"|"get"|"init" The operation being performed.
+--- @field operation "create"|"update"|"undelete"|"delete"|"find"|"find_by_id"|"get"|"unpublish"|"restore"|"init" The operation being performed.
 --- @field data table<string, any> Document data. For read hooks, contains document fields including `id` / timestamps. For `before_delete` / `after_delete` hooks, contains the deleted document's fields plus `id` (and `soft_delete` for a soft delete) — so a hook can inspect what is being removed; a hard delete leaves no row to re-fetch, so `after_delete` relies on this snapshot. In `after_change` hooks, `data.id` carries the new document ID.
 --- @field locale? string The content locale this operation targets (e.g. `"en"`, `"de"`) — the requested locale, or the default locale when none was given. Nil when localization is disabled (and on the locale-agnostic `before_delete` / `after_delete` hooks, which remove the whole row across all locales). Otherwise the same resolved value every hook surface sees (field hooks, validators, access functions).
 --- @field draft? boolean `true` when this is a draft save (only set for collections with `versions.drafts` enabled).
@@ -1019,6 +1021,22 @@ function crap.collections.config.list() end
 --- @field draft? boolean When `true` and the collection has `versions.drafts`, creates the document with `_status = 'draft'` and skips required-field validation.
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass hooks (e.g., for seeding/migrations).
 --- @field events? boolean Emit a live-update event for the created document (default: `true`). Set `false` for a quiet write (e.g., seeding/migrations).
+
+--- `crap.CreateOptions` of a draft save: required fields are not enforced,
+--- so a drafts collection's `create` / `create_many` take the all-optional
+--- `crap.partial.<Slug>` payload with these options.
+--- @class crap.DraftCreateOptions : crap.CreateOptions
+--- @field draft true
+
+--- `crap.ValidateOptions` of a draft dry-run: required fields are not
+--- enforced, as for a draft `create`.
+--- @class crap.DraftValidateOptions : crap.ValidateOptions
+--- @field draft true
+
+--- `crap.FindByIdOptions` reading every locale at once: each localized field
+--- comes back as a `{ [locale] = value }` table (`crap.doc_localized.<Slug>`).
+--- @class crap.AllLocalesFindByIdOptions : crap.FindByIdOptions
+--- @field locale "all"
 
 --- Create a new document.
 --- Inside hooks, runs within the parent operation's transaction.
@@ -1309,9 +1327,16 @@ function crap.globals.config.list() end
 
 --- Optional options for `crap.globals.get`.
 --- @class crap.GlobalGetOptions
+--- @field depth? integer Population depth for relationship and upload fields. Unset uses the configured `[depth] default_depth` (as `crap.collections.find_by_id` does); `0` = return IDs only. Clamped to the configured `[depth] max_depth`.
 --- @field locale? string Locale code for localized fields. Nil = default locale.
 --- @field override_access? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass the global's read access function.
 --- @field draft? boolean Include unpublished (draft) content (default: `false`). When the global has drafts enabled and has been unpublished, a normal read returns it empty (no field content); set this to `true` to read the draft instead.
+
+--- `crap.GlobalGetOptions` reading every locale at once: each localized
+--- field comes back as a `{ [locale] = value }` table
+--- (`crap.global_doc_localized.<Slug>`).
+--- @class crap.AllLocalesGlobalGetOptions : crap.GlobalGetOptions
+--- @field locale "all"
 
 --- Optional options for `crap.globals.update`.
 --- @class crap.GlobalUpdateOptions
@@ -1337,7 +1362,7 @@ function crap.globals.config.list() end
 
 --- Get a global's current value.
 --- @param slug string  Global slug.
---- @param opts crap.GlobalGetOptions?  Optional options (e.g., `{ locale = "de" }`).
+--- @param opts crap.GlobalGetOptions?  Optional options (e.g., `{ locale = "de", depth = 1 }`).
 --- @return crap.Document
 function crap.globals.get(slug, opts) end
 
@@ -1669,7 +1694,7 @@ function crap.auth.verify_password(password, hash) end
 
 --- Return the currently authenticated user document for the in-flight request, or nil.
 --- Returns nil from init.lua, on unauthenticated requests, or outside a hook context.
---- @return crap.Document?
+--- @return crap.AuthUser?
 function crap.auth.user() end
 
 --- The standard 3-method auth set: `password_login` + `bearer` (all
@@ -1988,7 +2013,7 @@ function crap.schema.list_globals() end
 --- @field max_date? string
 --- @field picker_appearance? crap.PickerAppearance `Date`-field input type. Matches the user's `crap.FieldDefinition.picker_appearance` value (`"dayOnly"`, `"dayAndTime"`, …); absent for non-date fields.
 --- @field admin? { language?: string, features?: string[], picker?: string } Admin-UI hints: `language` / `features` / `picker`. Nested to mirror the write-side `crap.FieldAdmin` shape — the user writes `admin = { picker = "card" }` and reads back `field.admin.picker`.
---- @field join? { collection: string, on: string } `Join` field config. Absent for every non-`Join` field; for `Join` fields, mirrors the user's `crap.FieldDefinition.join` value (`{ collection, on }`).
+--- @field join? { collection: string, on: string, limit?: integer } `Join` field config. Absent for every non-`Join` field; for `Join` fields, mirrors the user's `crap.FieldDefinition.join` value (`{ collection, on, limit? }`).
 --- @field options? { label: string, value: string }[]
 --- @field fields? crap.SchemaField[] Sub-fields for `Group` / `Array` field types (recursive).
 --- @field blocks? { type: string, label?: string, group?: string, image_url?: string, fields: crap.SchemaField[] }[] Block definitions for `Blocks` field types.
@@ -2203,8 +2228,9 @@ function crap.template_data.list() end
 ---
 --- Returns whatever `fn` returns. Errors raised inside `fn` roll back
 --- the transaction and propagate as Lua errors. Inside a hook (which
---- already runs in the parent's write transaction) this is a
---- pass-through.
+--- already runs in the parent's write transaction) the block joins that
+--- transaction as one atomic step: an error inside it rolls back the
+--- block's writes only.
 ---
 --- Only valid from a job handler — calling from init.lua / collection
 --- definitions / top-level scripts raises a runtime error.

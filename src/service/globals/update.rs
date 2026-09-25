@@ -191,6 +191,11 @@ fn update_global_gated(
         },
     )?;
 
+    // A draft save leaves the published global where it is, which its live
+    // event records beside the pending draft it describes.
+    let snapshot_only = is_draft && def.has_versions();
+    let row_before = ctx.update_row_before("default", snapshot_only, input.locale_ctx)?;
+
     // Both reported shapes carry their rows for the write's locale before
     // after-change hooks see them: a draft save its snapshot, a published write
     // the global as `get_global` reads it.
@@ -229,7 +234,9 @@ fn update_global_gated(
 
     // The global as stored, before anything is shaped or stripped for the
     // writer: the live event is built from it.
-    let row = ctx.write_event_row(&doc, input.locale_ctx, is_draft && def.has_versions())?;
+    let row = ctx
+        .write_event_row(&doc, input.locale_ctx, snapshot_only)?
+        .map(|row| row.before_write(row_before, snapshot_only));
 
     svc_helpers::strip_reported(ctx, write_hooks, &mut doc, input.locale_ctx)?;
 
@@ -395,7 +402,9 @@ fn persist_global_published_update(
         locale_ctx,
     )?;
 
-    query::ref_count::after_update(conn, gtable, "default", &def.fields, &locale_cfg, &old_refs)?;
+    // A refused reference is reported on the field holding it.
+    query::ref_count::after_update(conn, gtable, "default", &def.fields, &locale_cfg, &old_refs)
+        .map_err(|e| query::ref_count::anchor_to_fields(e, &def.fields, &final_ctx.data))?;
 
     if def.has_versions() {
         // Also stamps `doc` published: publishing an unpublished global read

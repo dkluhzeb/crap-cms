@@ -42,6 +42,17 @@ The ref count check only blocks **deletion of a target**: a document can always 
 
 When a referenced document is soft-deleted, it is **omitted** from relationship population on read — it does not appear as an ID string or as a populated object. Has-one fields resolve to `null`; has-many fields have the soft-deleted entry dropped from the array. Restore the document to make it appear again.
 
+A write cannot add a **new** reference to a soft-deleted document: it is
+refused exactly as a reference to a missing document is, since the reference
+would pin the document in the trash (a referenced document is never purged)
+while every read hides it. The refusal is a validation error on the field
+holding the reference — `validation.reference_unavailable`, keyed like every
+field error (`author`, `seo__author`, `items[0][author]`) — on every surface; a
+reference no field of the write carries (a version restore) fails with
+`cannot reference {collection}/{id}: no such document`. References a document
+already holds are kept when it is saved again, and `crap-cms import` keeps an
+exported reference to a document the export carries trashed.
+
 ## Admin UI
 
 The delete confirmation page shows a warning when a document has `_ref_count > 0`:

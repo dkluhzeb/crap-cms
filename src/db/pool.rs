@@ -16,6 +16,8 @@ use crate::config::{CrapConfig, DatabaseBackend};
 use super::connection::BoxedConnection;
 #[cfg(feature = "sqlite")]
 use crate::db::backend::sqlite::SqliteConnection;
+#[cfg(feature = "sqlite")]
+use crate::db::deadline::{configured_timeout, statement_overdue};
 
 /// Trait for pool backends.
 ///
@@ -238,11 +240,16 @@ fn build_sqlite_pool(
             mmap_size: config.database.mmap_size,
             wal_autocheckpoint: config.database.wal_autocheckpoint,
             stmt_cache_capacity: config.database.stmt_cache_capacity,
+            statement_timeout: configured_timeout(config.database.statement_timeout),
         }))
         .test_on_check_out(false)
         .build(manager)
         .context("Failed to create connection pool")
 }
+
+/// How many `SQLite` VM steps run between two statement-budget checks.
+#[cfg(feature = "sqlite")]
+const PROGRESS_STEPS: i32 = 4096;
 
 #[cfg(feature = "sqlite")]
 #[derive(Debug)]
@@ -252,6 +259,8 @@ struct SqlitePragmas {
     mmap_size: u64,
     wal_autocheckpoint: u32,
     stmt_cache_capacity: usize,
+    /// `[database] statement_timeout` (`None`: off).
+    statement_timeout: Option<Duration>,
 }
 
 #[cfg(feature = "sqlite")]
@@ -288,16 +297,89 @@ impl r2d2::CustomizeConnection<rusqlite::Connection, rusqlite::Error> for Sqlite
         conn.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_DQS_DDL, false)?;
         conn.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_DQS_DML, false)?;
 
+        // Every statement runs under the thread's statement budget (see
+        // `db::deadline`): the handler, called every few thousand VM steps,
+        // interrupts one that ran past it. Installed whether or not a timeout
+        // is configured, so an operation's own deadline bounds its statements
+        // either way.
+        let timeout = self.statement_timeout;
+        conn.progress_handler(PROGRESS_STEPS, Some(move || statement_overdue(timeout)))?;
+
         Ok(())
     }
 }
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
+    use std::time::Instant;
+
+    use anyhow::Error;
+
     use super::*;
     use crate::config::CrapConfig;
-    use crate::db::DbConnection;
+    use crate::db::{DbConnection, StatementDeadlineScope, StatementTimedOut, UnboundedStatements};
     use tempfile::TempDir;
+
+    /// A statement that never ends on its own.
+    const RUNAWAY: &str = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) \
+                           SELECT COUNT(*) FROM c";
+
+    /// A statement that runs a while, then ends.
+    const LONG: &str = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c \
+                        WHERE x < 200000) SELECT COUNT(*) FROM c";
+
+    fn timed_out(err: &Error) -> bool {
+        err.downcast_ref::<StatementTimedOut>().is_some()
+    }
+
+    /// Regression: a runaway query held its connection — on `SQLite` the
+    /// single writer, too — for as long as it ran. It is interrupted once the
+    /// operation's deadline passes, with a typed error, and the connection
+    /// stays usable.
+    #[test]
+    fn a_runaway_statement_is_interrupted_at_the_operation_deadline() {
+        let (_dir, pool) = temp_pool();
+        let conn = pool.get().unwrap();
+
+        let err = {
+            let _scope =
+                StatementDeadlineScope::bound_to(Some(Instant::now() + Duration::from_millis(50)));
+            conn.query_one(RUNAWAY, &[]).unwrap_err()
+        };
+
+        assert!(timed_out(&err), "{err:#}");
+        assert!(conn.query_one("SELECT 1", &[]).unwrap().is_some());
+    }
+
+    /// The configured `[database] statement_timeout` bounds every statement.
+    #[test]
+    fn the_configured_statement_timeout_interrupts_a_runaway_statement() {
+        let dir = TempDir::new().unwrap();
+        let mut config = CrapConfig::default();
+        config.database.statement_timeout = 1;
+        let pool = create_pool(dir.path(), &config).unwrap();
+
+        let started = Instant::now();
+        let err = pool.get().unwrap().query_one(RUNAWAY, &[]).unwrap_err();
+
+        assert!(timed_out(&err), "{err:#}");
+        assert!(started.elapsed() < Duration::from_secs(30));
+    }
+
+    /// Maintenance lifts the budget: the same long statement that an expired
+    /// deadline interrupts runs to its end inside an unbounded scope.
+    #[test]
+    fn a_lifted_budget_lets_maintenance_run_long() {
+        let (_dir, pool) = temp_pool();
+        let conn = pool.get().unwrap();
+        let _scope = StatementDeadlineScope::bound_to(Some(Instant::now()));
+
+        assert!(timed_out(&conn.query_one(LONG, &[]).unwrap_err()));
+
+        let _lift = UnboundedStatements::lift();
+        let row = conn.query_one(LONG, &[]).unwrap().unwrap();
+        assert_eq!(row.i64_at(0), Some(200_000));
+    }
 
     fn temp_pool() -> (TempDir, DbPool) {
         let dir = TempDir::new().expect("failed to create temp dir");

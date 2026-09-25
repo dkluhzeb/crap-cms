@@ -6,7 +6,7 @@ use anyhow::{Context as _, Result};
 use mlua::{Function, Lua, Table};
 
 use crate::{
-    db::{DbConnection, DbPool},
+    db::{DbConnection, DbPool, UnboundedStatements},
     hooks::{HookRunner, LuaCrudInfra, load_source_file},
 };
 
@@ -75,6 +75,10 @@ impl HookRunner {
             .with_context(|| format!("Failed to read migration {}", call.path.display()))?;
 
         let label = format!("migration {}", call.path.display());
+
+        // A data migration may rewrite every row: maintenance whose
+        // statements may legitimately outlast the statement timeout.
+        let _unbounded = UnboundedStatements::lift();
 
         self.run_in_system_tx(pool, infra, &label, |lua, conn| {
             call_migration(lua, call, &code)?;

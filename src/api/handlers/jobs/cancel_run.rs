@@ -32,15 +32,8 @@ fn cancel_job_run_blocking(input: &CancelJobRunBlockingInput) -> Result<bool, St
         .inspect_err(|e| error!("CancelJobRun pool error: {}", e))
         .map_err(|e| pool_error_status(e, kind))?;
 
-    let auth_user = ContentService::resolve_auth_user(
-        input.token.as_deref(),
-        &input.headers,
-        &*infra.token_provider,
-        &infra.hook_runner,
-        &infra.registry,
-        &conn,
-        &input.infra.locale_config,
-    )?;
+    let auth_user =
+        ContentService::resolve_auth_user(input.token.as_deref(), &input.headers, infra, &conn)?;
 
     if auth_user.is_none() {
         return Err(Status::unauthenticated("Authentication required"));

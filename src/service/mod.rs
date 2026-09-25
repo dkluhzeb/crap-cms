@@ -79,7 +79,7 @@ pub(crate) use access::{
 pub use app_infra::{AppInfra, AppInfraBuilder, StandaloneInfra};
 pub use context::{Def, ServiceContext};
 pub use error::ServiceError;
-pub(crate) use types::{AfterChangeInput, EventRow, Gated};
+pub(crate) use types::{AfterChangeInput, EventRow, Gated, RowBefore};
 pub use types::{
     CountDocumentsInput, DeferredEffect, DeferredQueue, EffectOutcome, EmailContext, EventQueue,
     FindByIdInput, FindDocumentsInput, GetGlobalInput, ListVersionsInput, OpDeadline,

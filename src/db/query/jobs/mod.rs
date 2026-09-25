@@ -3,6 +3,7 @@
 mod bulk;
 mod claim;
 mod cron;
+mod defer;
 mod lifecycle;
 mod query;
 
@@ -15,6 +16,7 @@ pub use bulk::{
 };
 pub use claim::{ClaimParams, claim_pending_jobs, claim_pending_jobs_with};
 pub use cron::{cron_fired_at, try_claim_cron_window};
+pub use defer::{Deferral, defer_job};
 pub use lifecycle::{
     InsertJobOpts, InsertedJob, complete_job, complete_job_repairing, fail_job, insert_job,
     insert_job_with, mark_stale, set_job_data, update_heartbeat,

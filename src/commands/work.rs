@@ -33,6 +33,7 @@ use crate::{
     core::{
         cache::{periodic_clear_interval, spawn_periodic_clear},
         email::create_email_provider_with_lease,
+        open_files::raise_open_file_limit,
         upload::create_storage_with_lease,
     },
     db::{migrate, pool},
@@ -233,6 +234,10 @@ pub async fn run(
     concurrency: Option<usize>,
     no_cron: bool,
 ) -> Result<()> {
+    // Before anything opens descriptors: job handlers hold database
+    // connections, uploads and outbound connections at once.
+    raise_open_file_limit();
+
     // Before any bootstrap work: schema sync and `on_init` hooks must not run
     // beside a worker that is already running on this project.
     refuse_if_running(config_dir, PID_FILENAME)?;

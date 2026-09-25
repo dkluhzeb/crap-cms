@@ -39,15 +39,7 @@ fn get_job_run_blocking(input: GetJobRunBlockingInput) -> Result<JobRun, Status>
     let token = input.token;
     let headers = input.headers;
 
-    let auth_user = ContentService::resolve_auth_user(
-        token.as_deref(),
-        &headers,
-        &*infra.token_provider,
-        &infra.hook_runner,
-        &infra.registry,
-        &conn,
-        &input.infra.locale_config,
-    )?;
+    let auth_user = ContentService::resolve_auth_user(token.as_deref(), &headers, infra, &conn)?;
 
     if auth_user.is_none() {
         return Err(Status::unauthenticated("Authentication required"));

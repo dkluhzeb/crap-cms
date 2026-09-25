@@ -10,6 +10,8 @@ use parking_lot::Mutex;
 use tokio_postgres::{Client, Error as PgError, NoTls, Statement, error::SqlState};
 use tracing::{error, warn};
 
+use super::tx::TxState;
+
 /// Result of a raw driver call, before it is wrapped in an `anyhow` context.
 pub(super) type PgResult<T> = std::result::Result<T, PgError>;
 
@@ -25,6 +27,9 @@ pub(super) type PgResult<T> = std::result::Result<T, PgError>;
 pub struct CachedClient {
     pub(super) client: Client,
     pub(super) cache: Mutex<HashMap<String, Statement>>,
+    /// Transaction bookkeeping the server does not report back (see
+    /// [`TxState`]).
+    pub(super) tx: TxState,
 }
 
 /// Custom deadpool Manager that produces `CachedClient` instances. We can't
@@ -77,6 +82,7 @@ impl managed::Manager for CachedManager {
         Ok(CachedClient {
             client,
             cache: Mutex::new(HashMap::new()),
+            tx: TxState::default(),
         })
     }
 
@@ -88,6 +94,14 @@ impl managed::Manager for CachedManager {
         // re-prepares what it needs.
         if client.client.is_closed() {
             return Err(RecycleError::message("connection closed"));
+        }
+
+        // A client handed back with an in-place transaction still open would
+        // run the next checkout's statements inside it. Every scope settles its
+        // transaction before releasing the connection; one that could not (a
+        // failed rollback) takes the client out of the pool with it.
+        if client.tx.in_place() {
+            return Err(RecycleError::message("returned with a transaction open"));
         }
 
         // Otherwise a no-op: cache + connection state are preserved across

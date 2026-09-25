@@ -28,7 +28,7 @@ use crate::{
     },
 };
 
-use super::validate::canonicalize_write_input;
+use super::{group_values::reject_non_object_groups, validate::canonicalize_write_input};
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -84,7 +84,8 @@ impl PendingDraft {
 }
 
 /// Admit a create's input: canonicalize it (nested groups, canonical email and
-/// text, untrusted upload metadata stripped) and refuse a non-default locale.
+/// text, untrusted upload metadata stripped), refuse a group set to anything
+/// but an object of its sub-fields, and refuse a non-default locale.
 ///
 /// A document is created in its default (canonical) locale. A new row has no
 /// default-locale value to translate from, so creating under a non-default
@@ -94,12 +95,14 @@ impl PendingDraft {
 ///
 /// # Errors
 ///
-/// Returns a hook error when the write targets a non-default locale.
+/// Returns a validation error for a group set to `null` or a non-object, and a
+/// hook error when the write targets a non-default locale.
 pub(crate) fn admit_create_input(
     def: &CollectionDefinition,
     input: &mut WriteInput<'_>,
 ) -> Result<()> {
     canonicalize_write_input(input, def);
+    reject_non_object_groups(&input.data, &def.fields)?;
 
     if !query::is_non_default_single_locale(input.locale_ctx) {
         return Ok(());
@@ -136,6 +139,7 @@ pub(crate) fn admit_update_input(
     // Canonicalize up front (idempotent); the whole pipeline sees one shape
     // and the DB edge flattens to columns.
     canonicalize_write_input(input, def);
+    reject_non_object_groups(&input.data, &def.fields)?;
 
     let pending = adopt_pending_draft(ctx, def, id, input)?;
 
@@ -159,6 +163,7 @@ pub(crate) fn admit_global_update_input(
 ) -> Result<PendingDraft> {
     input.data = nest_group_fields(&input.data, &def.fields);
     canonicalize_text_values(&mut input.data, &def.fields);
+    reject_non_object_groups(&input.data, &def.fields)?;
 
     let pending = adopt_pending_global_draft(ctx, def, input)?;
 
@@ -252,6 +257,44 @@ mod tests {
 
         assert!(
             matches!(&err, ServiceError::Validation(ve) if ve.to_field_map().contains_key("slug")),
+            "got {err:?}"
+        );
+    }
+
+    fn with_seo() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("title", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+
+        def
+    }
+
+    /// Regression: `{ seo = null }` was dropped without a word on every
+    /// surface. The admission refuses it — for a create and an update alike,
+    /// and so for the dry-run too.
+    #[test]
+    fn a_null_group_is_refused_on_create_and_update() {
+        let def = with_seo();
+        let ctx = ServiceContext::collection("posts", &def).build();
+
+        let mut create = WriteInput::builder(data(&[("seo", Value::Null)])).build();
+        let err = admit_create_input(&def, &mut create).unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(ve) if ve.to_field_map().contains_key("seo")),
+            "got {err:?}"
+        );
+
+        let mut update = WriteInput::builder(data(&[("seo", Value::Null)])).build();
+        let err = admit_update_input(&ctx, &def, "p1", &mut update)
+            .err()
+            .expect("a null group is refused");
+        assert!(
+            matches!(&err, ServiceError::Validation(ve) if ve.to_field_map().contains_key("seo")),
             "got {err:?}"
         );
     }

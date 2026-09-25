@@ -82,5 +82,6 @@ pub(super) fn construct_join(mut base: BaseFieldData, fc: &SingleFieldCtx) -> Fi
         join_on,
         join_items: None,
         join_count: None,
+        join_total: None,
     })
 }

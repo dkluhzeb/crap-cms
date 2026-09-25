@@ -3,20 +3,28 @@
 use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use anyhow::{Context as _, Result, bail};
 use r2d2::PooledConnection;
 use r2d2_sqlite::SqliteConnectionManager;
-use tracing::warn;
 
 use crate::{
     core::FieldType,
     db::{
         DbConnection, DbRow, DbValue, UpsertSpec,
         connection::{ConnectionInner, TransactionInner},
+        deadline::UnboundedStatements,
         query::is_valid_identifier,
     },
+};
+
+mod statement;
+
+use statement::{
+    TRANSACTION_LOST, ensure_transaction_alive, sqlite_execute, sqlite_query_all, sqlite_query_one,
+    timed_run,
 };
 
 // ── Shared SQLite dialect helpers ────────────────────────────────────────
@@ -122,7 +130,10 @@ fn sqlite_supports_drop_column(conn: &dyn DbConnection) -> bool {
     parts.len() >= 2 && (parts[0] > 3 || (parts[0] == 3 && parts[1] >= 35))
 }
 
+/// A backup copies the whole database — maintenance whose statement may
+/// legitimately run past the statement timeout, which it therefore lifts.
 fn sqlite_vacuum_into(conn: &dyn DbConnection, dest: &std::path::Path) -> Result<()> {
+    let _unbounded = UnboundedStatements::lift();
     let p1 = conn.placeholder(1);
 
     conn.execute(
@@ -333,103 +344,131 @@ macro_rules! sqlite_shared_methods {
 ///
 /// The caller passes a closure-style getter `|s| expr` where `s` binds to `self`
 /// and `expr` evaluates to `&rusqlite::Connection`. This works around macro hygiene
-/// restrictions that prevent passing `self` directly as a macro argument.
+/// restrictions that prevent passing `self` directly as a macro argument. Every
+/// statement runs under the thread's statement budget (see
+/// [`crate::db::deadline`]).
+///
+/// `lost` (an expression over `s`) says whether a transaction the type stands
+/// for was ended by the database itself: `SQLite` rolls back the whole
+/// transaction when a write statement inside it is interrupted (or fails
+/// with a full disk or an I/O error) and returns the connection to
+/// autocommit. Every later statement is then refused — run in autocommit, it
+/// would commit on its own while the transaction's earlier writes are gone.
+/// `in_place` (`Option<&AtomicBool>`) records a transaction opened with
+/// [`DbConnection::begin_in_place`] on a type that is not a transaction
+/// itself.
 macro_rules! sqlite_ufcs_query_methods {
     (|$s:ident| $inner:expr) => {
+        sqlite_ufcs_query_methods!(|$s| $inner, lost = false, in_place = None);
+    };
+    (|$s:ident| $inner:expr, lost = $lost:expr, in_place = $flag:expr) => {
         fn execute(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
             let $s = self;
             let inner: &rusqlite::Connection = $inner;
-            let rusqlite_params = to_rusqlite_params(params);
-            let refs: Vec<&dyn rusqlite::types::ToSql> =
-                rusqlite_params.iter().map(|b| b.as_ref()).collect();
+            ensure_transaction_alive($lost)?;
 
-            // `prepare_cached`, like the read methods: `Connection::execute`
-            // prepares from scratch every call, and re-running
-            // `sqlite3_prepare_v2` takes SQLite's globally-locked allocator —
-            // the contention the `stmt_cache_capacity` knob exists to avoid.
-            // A statement that returns rows is rejected by `Statement::execute`
-            // on either path, so no read reaches here (`RETURNING` goes through
-            // `query_one`).
-            let count = rusqlite::Connection::prepare_cached(inner, sql)
-                .with_context(|| format!("prepare failed: {sql}"))?
-                .execute(refs.as_slice())
-                .with_context(|| format!("execute failed: {sql}"))?;
-
-            Ok(count)
+            timed_run(|| sqlite_execute(inner, sql, params))
         }
 
         fn execute_batch(&self, sql: &str) -> Result<()> {
             let $s = self;
             let inner: &rusqlite::Connection = $inner;
+            ensure_transaction_alive($lost)?;
 
-            rusqlite::Connection::execute_batch(inner, sql)
-                .with_context(|| format!("execute_batch failed: {sql}"))?;
-
-            Ok(())
+            timed_run(|| {
+                rusqlite::Connection::execute_batch(inner, sql)
+                    .with_context(|| format!("execute_batch failed: {sql}"))
+            })
         }
 
         fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>> {
             let $s = self;
             let inner: &rusqlite::Connection = $inner;
-            let rusqlite_params = to_rusqlite_params(params);
-            let refs: Vec<&dyn rusqlite::types::ToSql> =
-                rusqlite_params.iter().map(|b| b.as_ref()).collect();
+            ensure_transaction_alive($lost)?;
 
-            let mut stmt = rusqlite::Connection::prepare_cached(inner, sql)
-                .with_context(|| format!("prepare failed: {sql}"))?;
-
-            let col_count = stmt.column_count();
-            let col_names: Vec<String> = (0..col_count)
-                .map(|i| stmt.column_name(i).unwrap_or("").to_string())
-                .collect();
-
-            let rows = stmt
-                .query_map(refs.as_slice(), |row| {
-                    Ok(rusqlite_row_to_dbrow(row, col_count, &col_names))
-                })
-                .with_context(|| format!("query_map failed: {sql}"))?;
-
-            let mut result = Vec::new();
-
-            for row in rows {
-                result.push(row.context("failed to read row")?);
-            }
-
-            Ok(result)
+            timed_run(|| sqlite_query_all(inner, sql, params))
         }
 
         fn query_one(&self, sql: &str, params: &[DbValue]) -> Result<Option<DbRow>> {
             let $s = self;
             let inner: &rusqlite::Connection = $inner;
-            let rusqlite_params = to_rusqlite_params(params);
-            let refs: Vec<&dyn rusqlite::types::ToSql> =
-                rusqlite_params.iter().map(|b| b.as_ref()).collect();
+            ensure_transaction_alive($lost)?;
 
-            let mut stmt = rusqlite::Connection::prepare_cached(inner, sql)
-                .with_context(|| format!("prepare failed: {sql}"))?;
+            timed_run(|| sqlite_query_one(inner, sql, params))
+        }
 
-            let col_count = stmt.column_count();
-            let col_names: Vec<String> = (0..col_count)
-                .map(|i| stmt.column_name(i).unwrap_or("").to_string())
-                .collect();
+        fn in_transaction(&self) -> bool {
+            let $s = self;
+            let inner: &rusqlite::Connection = $inner;
+            let flag: Option<&AtomicBool> = $flag;
 
-            let mut rows = stmt
-                .query_map(refs.as_slice(), |row| {
-                    Ok(rusqlite_row_to_dbrow(row, col_count, &col_names))
-                })
-                .with_context(|| format!("query_map failed: {sql}"))?;
+            flag.is_some_and(|f| f.load(Ordering::Relaxed)) || !inner.is_autocommit()
+        }
 
-            match rows.next() {
-                Some(row) => Ok(Some(row.context("failed to read row")?)),
-                None => Ok(None),
+        fn begin_in_place(&self) -> Result<()> {
+            let $s = self;
+            let inner: &rusqlite::Connection = $inner;
+            let flag: Option<&AtomicBool> = $flag;
+
+            rusqlite::Connection::execute_batch(inner, "BEGIN IMMEDIATE")
+                .context("Failed to begin IMMEDIATE transaction")?;
+
+            if let Some(flag) = flag {
+                flag.store(true, Ordering::Relaxed);
             }
+
+            Ok(())
+        }
+
+        fn commit_in_place(&self) -> Result<()> {
+            let $s = self;
+            let inner: &rusqlite::Connection = $inner;
+            let flag: Option<&AtomicBool> = $flag;
+
+            if inner.is_autocommit() {
+                settle_in_place(flag);
+                bail!(TRANSACTION_LOST);
+            }
+
+            rusqlite::Connection::execute_batch(inner, "COMMIT")
+                .context("Failed to commit transaction")?;
+            settle_in_place(flag);
+
+            Ok(())
+        }
+
+        fn rollback_in_place(&self) -> Result<()> {
+            let $s = self;
+            let inner: &rusqlite::Connection = $inner;
+            let flag: Option<&AtomicBool> = $flag;
+
+            // Already rolled back by the database: nothing left to undo.
+            if !inner.is_autocommit() {
+                rusqlite::Connection::execute_batch(inner, "ROLLBACK")
+                    .context("Failed to roll back transaction")?;
+            }
+
+            settle_in_place(flag);
+
+            Ok(())
         }
     };
+}
+
+/// The in-place transaction `flag` records is settled.
+fn settle_in_place(flag: Option<&AtomicBool>) {
+    if let Some(flag) = flag {
+        flag.store(false, Ordering::Relaxed);
+    }
 }
 
 /// Wraps a pooled `rusqlite` connection, implementing `DbConnection`.
 pub struct SqliteConnection {
     inner: PooledConnection<SqliteConnectionManager>,
+    /// A transaction opened with [`DbConnection::begin_in_place`] is open —
+    /// or was, until the database ended it on its own (see
+    /// `sqlite_ufcs_query_methods!`).
+    in_place: AtomicBool,
 }
 
 impl Deref for SqliteConnection {
@@ -443,7 +482,15 @@ impl Deref for SqliteConnection {
 impl SqliteConnection {
     /// Wrap a pooled connection.
     pub fn new(inner: PooledConnection<SqliteConnectionManager>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            in_place: AtomicBool::new(false),
+        }
+    }
+
+    /// Whether the database ended this connection's in-place transaction.
+    fn in_place_lost(&self) -> bool {
+        self.in_place.load(Ordering::Relaxed) && self.inner.is_autocommit()
     }
 
     /// Open an `IMMEDIATE` transaction (write-lock from the start).
@@ -490,7 +537,11 @@ impl ConnectionInner for SqliteConnection {
 }
 
 impl DbConnection for SqliteConnection {
-    sqlite_ufcs_query_methods!(|s| &*s.inner);
+    sqlite_ufcs_query_methods!(
+        |s| &*s.inner,
+        lost = s.in_place_lost(),
+        in_place = Some(&s.in_place)
+    );
     sqlite_shared_methods!();
 }
 
@@ -522,7 +573,11 @@ impl TransactionInner for SqliteTransaction<'_> {
 }
 
 impl DbConnection for SqliteTransaction<'_> {
-    sqlite_ufcs_query_methods!(|s| &*s.inner);
+    sqlite_ufcs_query_methods!(
+        |s| &*s.inner,
+        lost = s.inner.is_autocommit(),
+        in_place = None
+    );
     sqlite_shared_methods!();
 }
 
@@ -534,7 +589,7 @@ impl DbConnection for SqliteTransaction<'_> {
 /// explicitly via `std::ops::Deref::deref(self)` to reach the inherent methods and
 /// avoid ambiguity with our trait methods that share the same name.
 impl DbConnection for rusqlite::Transaction<'_> {
-    sqlite_ufcs_query_methods!(|s| &**s);
+    sqlite_ufcs_query_methods!(|s| &**s, lost = s.is_autocommit(), in_place = None);
     sqlite_shared_methods!();
 }
 
@@ -547,47 +602,6 @@ impl DbConnection for rusqlite::Transaction<'_> {
 impl DbConnection for rusqlite::Connection {
     sqlite_ufcs_query_methods!(|s| s);
     sqlite_shared_methods!();
-}
-
-/// Convert `&[DbValue]` to a `Vec<Box<dyn ToSql>>` for rusqlite.
-fn to_rusqlite_params(params: &[DbValue]) -> Vec<Box<dyn rusqlite::types::ToSql>> {
-    params
-        .iter()
-        .map(|v| -> Box<dyn rusqlite::types::ToSql> {
-            match v {
-                DbValue::Null => Box::new(rusqlite::types::Null),
-                DbValue::Integer(i) => Box::new(*i),
-                DbValue::Real(f) => Box::new(*f),
-                DbValue::Text(s) => Box::new(s.clone()),
-                DbValue::Blob(b) => Box::new(b.clone()),
-            }
-        })
-        .collect()
-}
-
-/// Convert a `rusqlite::Row` to a `DbRow`.
-fn rusqlite_row_to_dbrow(row: &rusqlite::Row, col_count: usize, col_names: &[String]) -> DbRow {
-    let mut values = Vec::with_capacity(col_count);
-
-    for i in 0..col_count {
-        let val = row.get_ref(i).map_or(DbValue::Null, |v| match v {
-            rusqlite::types::ValueRef::Null => DbValue::Null,
-            rusqlite::types::ValueRef::Integer(i) => DbValue::Integer(i),
-            rusqlite::types::ValueRef::Real(f) => DbValue::Real(f),
-            rusqlite::types::ValueRef::Text(s) => match std::str::from_utf8(s) {
-                Ok(valid) => DbValue::Text(valid.to_owned()),
-                Err(e) => {
-                    warn!("Invalid UTF-8 in SQLite text column: {}", e);
-
-                    DbValue::Text(String::from_utf8_lossy(s).into_owned())
-                }
-            },
-            rusqlite::types::ValueRef::Blob(b) => DbValue::Blob(b.to_vec()),
-        });
-        values.push(val);
-    }
-
-    DbRow::new(col_names.to_vec(), values)
 }
 
 /// Thin wrapper around `rusqlite::Connection` that implements `DbConnection`.

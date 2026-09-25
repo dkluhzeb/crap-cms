@@ -1,14 +1,27 @@
 //! Locale helpers — editor locale extraction and read-context resolution.
 
-use axum::http::{HeaderMap, header};
+use axum::{
+    Extension,
+    http::{HeaderMap, header},
+};
 use tracing::warn;
 
 use crate::{
     admin::{AdminState, handlers::auth::EDITOR_LOCALE_COOKIE, server::extract_cookie},
     config::LocaleConfig,
-    core::{DocumentFields, FieldDefinition, flatten_group_fields},
+    core::{AuthUser, DocumentFields, FieldDefinition, default_label_locale, flatten_group_fields},
     db::{LocaleContext, query::locale_locked_field_names},
 };
+
+/// The UI locale the admin's own messages are translated into: the user's, or
+/// the configured default label locale without one.
+pub(crate) fn ui_locale_of(auth_user: Option<&Extension<AuthUser>>) -> &str {
+    let Some(Extension(au)) = auth_user else {
+        return default_label_locale();
+    };
+
+    au.ui_locale.as_str()
+}
 
 /// Extract the editor locale from the `crap_editor_locale` cookie.
 /// Falls back to the config's default locale if the cookie is absent or invalid.

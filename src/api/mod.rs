@@ -14,6 +14,11 @@
 //!   handlers because uploads are HTTP, not gRPC).
 //! - `rate_limit.rs` -- per-IP gRPC request limiter (`pub(crate)`,
 //!   used internally by `server`).
+//! - `listener.rs` -- the gRPC accept path: connections taken under the
+//!   shared `[server] max_connections` cap and streamed to tonic once they
+//!   open with the HTTP/2 preface.
+//! - `client_ip.rs` -- the client address of a gRPC request, resolved
+//!   through the same `trust_proxy` rule as the admin server.
 //! - `content` -- generated Tonic types from `proto/content.proto`,
 //!   built at compile time via `build.rs`.
 //!
@@ -29,11 +34,14 @@
 //!   codes; handlers use `.map_err(Status::from)` and
 //!   `?`-propagate.
 
+mod client_ip;
 pub mod handlers;
+mod listener;
 pub mod rate_limit;
 pub mod server;
 pub mod upload;
 
+pub(crate) use client_ip::{http_client_ip, request_client_ip};
 pub use server::{GrpcStartParams, start};
 
 /// Generated gRPC content service types.

@@ -222,11 +222,16 @@ translation" is an **update** that clears that locale's content:
 ```lua
 -- Remove the German translation of a document
 crap.collections.pages.update("abc123", {
-    title = nil,        -- clears title__de
-    body = nil,         -- clears body__de
+    title = crap.null,  -- clears title__de
+    body = crap.null,   -- clears body__de
     gallery = {},       -- clears the de rows of a localized array/relationship
 }, { locale = "de" })
 ```
+
+Use `crap.null`, not `nil`: a `nil` value in a Lua table constructor is no key
+at all, so `{ title = nil }` sends nothing and leaves `title__de` untouched (an
+absent key keeps the stored value). Over the wire the same clear is a JSON
+`null` (MCP) or a `null_value` (gRPC).
 
 This nulls the `*__de` columns, removes only the `_locale = "de"` junction
 rows, and decrements ref-counts for any localized relationships that were
@@ -392,6 +397,33 @@ Translation strings support `{{variable}}` placeholders:
 ```
 
 Templates pass values as hash parameters: `{{t "page_of" page=pagination.page total=pagination.total_pages}}`.
+
+Built-in validation messages (the `validation.*` keys) receive the field as
+`{{field}}`. In the admin that is the field's label in the viewer's UI locale —
+for a field inside a group, array or blocks row, prefixed by its containers'
+labels (`SEO › Title`). A field without a label shows its name title-cased.
+The API surfaces (gRPC, MCP, Lua) return the English `message`, which names the
+field by its schema name.
+
+### System email subjects
+
+The subject lines of the emails the CMS sends itself are translation keys too:
+
+| Key | English |
+| --- | --- |
+| `email.subject.verify_email` | Verify your email |
+| `email.subject.password_reset` | Reset your password |
+| `email.subject.mfa_code` | Your verification code |
+
+English and German are built in. Each email's subject is written in the
+recipient's admin UI language (the language they picked in the admin header)
+and, for a user who never picked one, in `default_locale`; a locale without the
+key falls back to English. Override a subject — or add one for another
+language — in `<config_dir>/translations/<locale>.json` like any other string.
+A subject must be a single line: an override containing a line break fails the
+start (`serve` and `work`) with an error naming the key and locale. The email
+bodies are the `templates/email/*.hbs` templates, overridable from
+`<config_dir>/templates/email/`.
 
 ### Available Keys
 

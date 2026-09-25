@@ -1,10 +1,6 @@
 //! `ContentService` struct definition and its impl blocks.
 
-use std::{
-    collections::HashMap,
-    pin::Pin,
-    sync::{Arc, atomic::AtomicUsize},
-};
+use std::{collections::HashMap, pin::Pin, sync::Arc};
 
 use tokio::task;
 use tokio_stream::Stream;
@@ -17,14 +13,12 @@ use crate::{
         content::{self, content_api_server::ContentApi},
         handlers::ContentServiceDeps,
     },
-    config::{LocaleConfig, ServerConfig},
+    config::ServerConfig,
     core::{
-        AuthUser, CollectionDefinition, GlobalDefinition, Registry, SharedPasswordProvider,
-        SharedTokenProvider, auth::TokenProvider, collection::Surface,
-        rate_limit::LoginRateLimiter,
+        AuthUser, CollectionDefinition, GlobalDefinition, LiveSlots, SharedPasswordProvider,
+        collection::Surface, rate_limit::LoginRateLimiter,
     },
-    db::{DbConnection, DbPool, query},
-    hooks::HookRunner,
+    db::{DbConnection, query},
     service::{
         self, AppInfra,
         auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution},
@@ -78,10 +72,9 @@ pub struct ContentService {
     pub(in crate::api::handlers) pagination_ctx: query::PaginationCtx,
     /// Cached backend identifier (e.g. `"sqlite"`, `"postgres"`), set once at startup.
     pub(in crate::api::handlers) db_kind: String,
-    /// Current number of active gRPC Subscribe streams (for connection limiting).
-    pub(in crate::api::handlers) subscribe_connections: Arc<AtomicUsize>,
-    /// Maximum allowed concurrent Subscribe streams. 0 = unlimited.
-    pub(in crate::api::handlers) max_subscribe_connections: usize,
+    /// Slots of the `Subscribe` stream: `[live] max_subscribe_connections` in
+    /// all, `[live] max_connections_per_client` per client.
+    pub(in crate::api::handlers) subscribe_slots: LiveSlots,
     /// Per-subscriber outbound send timeout for live-update streams.
     pub(in crate::api::handlers) subscriber_send_timeout_ms: u64,
     /// Process shutdown token. `Subscribe` pumps end on it, so a graceful
@@ -209,13 +202,9 @@ impl ContentService {
 /// Owned inputs for [`ContentService::resolve_schema_auth_blocking`] — grouped
 /// so the `spawn_blocking` body is a single named call rather than inline logic.
 struct SchemaAuthBlockingInput {
-    pool: DbPool,
+    infra: Arc<AppInfra>,
     token: Option<String>,
     headers: HashMap<String, String>,
-    token_provider: SharedTokenProvider,
-    hook_runner: HookRunner,
-    registry: Arc<Registry>,
-    locale_config: LocaleConfig,
 }
 
 /// I/O-bound methods: constructor, DB-backed auth resolution, access checks.
@@ -231,7 +220,10 @@ impl ContentService {
         let reset_token_expiry = deps.config.auth.reset_token_expiry;
         let auth_secret: String = AsRef::<str>::as_ref(&deps.config.auth.secret).to_string();
         let db_kind = deps.infra.pool.kind().to_string();
-        let max_subscribe_connections = deps.config.live.max_subscribe_connections;
+        let subscribe_slots = LiveSlots::new(
+            deps.config.live.max_subscribe_connections,
+            deps.config.live.max_connections_per_client,
+        );
         let subscriber_send_timeout_ms = deps.config.live.subscriber_send_timeout_ms;
 
         let has_strategies = deps.infra.registry.has_any_strategy();
@@ -271,8 +263,7 @@ impl ContentService {
             password_provider: deps.password_provider,
             pagination_ctx,
             db_kind,
-            subscribe_connections: Arc::new(AtomicUsize::new(0)),
-            max_subscribe_connections,
+            subscribe_slots,
             subscriber_send_timeout_ms,
             shutdown: deps.shutdown,
             infra: deps.infra,
@@ -296,11 +287,8 @@ impl ContentService {
     pub(in crate::api::handlers) fn resolve_auth_user(
         bearer: Option<&str>,
         headers: &HashMap<String, String>,
-        token_provider: &dyn TokenProvider,
-        hook_runner: &HookRunner,
-        registry: &Registry,
+        infra: &AppInfra,
         conn: &dyn DbConnection,
-        locale_config: &LocaleConfig,
     ) -> Result<Option<AuthUser>, Status> {
         let request = AuthRequest {
             surface: Surface::Grpc,
@@ -308,13 +296,7 @@ impl ContentService {
             session_cookie_token: None,
             headers,
         };
-        let deps = EvaluateDeps {
-            registry,
-            token_provider,
-            hook_runner,
-            conn,
-            locale_config,
-        };
+        let deps = EvaluateDeps::new(infra, conn);
         match service::auth::evaluate(&request, &deps) {
             Resolution::Authenticated(auth) => Ok(Some(auth.user)),
             Resolution::Anonymous => Ok(None),
@@ -328,21 +310,13 @@ impl ContentService {
     fn resolve_schema_auth_blocking(
         input: &SchemaAuthBlockingInput,
     ) -> Result<Option<AuthUser>, Status> {
-        let conn = input
-            .pool
+        let pool = &input.infra.pool;
+        let conn = pool
             .get()
             .inspect_err(|e| error!("Schema introspection auth pool error: {}", e))
-            .map_err(|e| pool_error_status(anyhow::anyhow!(e), input.pool.kind()))?;
+            .map_err(|e| pool_error_status(anyhow::anyhow!(e), pool.kind()))?;
 
-        Self::resolve_auth_user(
-            input.token.as_deref(),
-            &input.headers,
-            &*input.token_provider,
-            &input.hook_runner,
-            &input.registry,
-            &conn,
-            &input.locale_config,
-        )
+        Self::resolve_auth_user(input.token.as_deref(), &input.headers, &input.infra, &conn)
     }
 
     /// Gate the schema-introspection RPCs on authentication when
@@ -360,11 +334,7 @@ impl ContentService {
         let blocking_input = SchemaAuthBlockingInput {
             token: Self::extract_token(metadata),
             headers: self.metadata_headers(metadata),
-            pool: self.infra.pool.clone(),
-            token_provider: self.infra.token_provider.clone(),
-            hook_runner: self.infra.hook_runner.clone(),
-            registry: Arc::clone(&self.infra.registry),
-            locale_config: self.infra.locale_config.clone(),
+            infra: Arc::clone(&self.infra),
         };
 
         let authed =

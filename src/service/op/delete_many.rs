@@ -85,7 +85,7 @@ impl Operation for DeleteMany {
         // body-owned `_deleted_at` restriction legitimately does).
         let mut filters = args.filters;
         normalize_filter_fields(&mut filters, ctx.fields()?);
-        validate_user_filters(&filters).map_err(|e| ServiceError::HookError(e.to_string()))?;
+        validate_user_filters(&filters)?;
 
         // Trash purge: restrict the match-set to physically-trashed rows.
         // Without this the include_deleted find would also match live rows.

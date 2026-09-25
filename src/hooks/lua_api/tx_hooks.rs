@@ -77,6 +77,7 @@ fn register_effect(
         outcome,
         hook_ref: hook_ref.to_string(),
         payload,
+        unconditional: false,
     });
 
     Ok(())

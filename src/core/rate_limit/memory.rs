@@ -13,6 +13,10 @@ use super::RateLimitBackend;
 /// Number of unique keys at which the first sweep of expired entries runs.
 const MAX_MAP_SIZE: usize = 100_000;
 
+/// Longest a map may go without a sweep, whatever its size. Without it, keys
+/// below the size threshold would be kept long after their window closed.
+const SWEEP_INTERVAL: Duration = Duration::from_mins(1);
+
 /// One key's recorded events, with the window they are counted under.
 ///
 /// The window is stored per key because limiters with different windows share
@@ -39,6 +43,8 @@ struct State {
     /// keys has expired.
     sweep_at: usize,
     sweep_floor: usize,
+    /// When the last sweep ran; one runs at least every [`SWEEP_INTERVAL`].
+    last_sweep: Instant,
 }
 
 /// In-memory rate limit backend. Stores timestamped events per key
@@ -65,6 +71,7 @@ impl MemoryRateLimitBackend {
                 events: HashMap::new(),
                 sweep_at: threshold,
                 sweep_floor: threshold,
+                last_sweep: Instant::now(),
             }),
         }
     }
@@ -73,21 +80,40 @@ impl MemoryRateLimitBackend {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Number of keys currently held (live or awaiting a sweep).
+    #[cfg(test)]
+    pub(crate) fn key_count(&self) -> usize {
+        self.lock().events.len()
+    }
+
+    /// Drop every key whose events have all left their window, when the map
+    /// has grown past the threshold or the last sweep is [`SWEEP_INTERVAL`]
+    /// old.
+    fn sweep_if_due(state: &mut State, now: Instant) {
+        let oversized = state.events.len() >= state.sweep_at;
+        let interval_elapsed = now.duration_since(state.last_sweep) >= SWEEP_INTERVAL;
+
+        if !oversized && !interval_elapsed {
+            return;
+        }
+
+        state.events.retain(|_, events| {
+            events.prune(now);
+            !events.times.is_empty()
+        });
+        state.sweep_at = state.sweep_floor.max(state.events.len().saturating_mul(2));
+        state.last_sweep = now;
+    }
+
     /// Fetch `key`'s events for a write under `window_secs`, sweeping expired
-    /// keys first when the map has grown past the threshold.
+    /// keys first when a sweep is due.
     fn entry<'a>(
         state: &'a mut State,
         key: &str,
         window_secs: u64,
         now: Instant,
     ) -> &'a mut KeyEvents {
-        if state.events.len() >= state.sweep_at {
-            state.events.retain(|_, events| {
-                events.prune(now);
-                !events.times.is_empty()
-            });
-            state.sweep_at = state.sweep_floor.max(state.events.len().saturating_mul(2));
-        }
+        Self::sweep_if_due(state, now);
 
         let window = Duration::from_secs(window_secs);
         let events = state
@@ -273,6 +299,25 @@ mod tests {
         backend.record("c", 3600).unwrap();
 
         assert!(backend.lock().sweep_at >= 4);
+    }
+
+    /// Regression: below the size threshold expired keys were never swept, so
+    /// a map under 100k keys kept every key it had ever seen. A sweep now runs
+    /// at least every `SWEEP_INTERVAL`, whatever the size.
+    #[test]
+    fn a_small_map_is_swept_once_the_interval_has_passed() {
+        let backend = MemoryRateLimitBackend::new();
+
+        backend.record("expired", 0).unwrap();
+        sleep(Duration::from_millis(5));
+
+        backend.lock().last_sweep = Instant::now()
+            .checked_sub(SWEEP_INTERVAL)
+            .expect("the monotonic clock is past one interval");
+        backend.record("fresh", 3600).unwrap();
+
+        assert_eq!(backend.key_count(), 1);
+        assert!(backend.lock().events.contains_key("fresh"));
     }
 
     /// Once a spike of keys has expired, the threshold returns to its floor

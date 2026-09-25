@@ -41,6 +41,13 @@ pub struct LiveConfig {
     pub max_sse_connections: usize,
     /// Maximum concurrent gRPC Subscribe streams. 0 = unlimited. Default: 1000.
     pub max_subscribe_connections: usize,
+    /// Maximum live-update streams one client may hold open at once, per
+    /// surface (admin SSE and gRPC Subscribe each). A client is the
+    /// authenticated user, or — for an anonymous subscriber — its address
+    /// (an IPv6 client per /64). Keeps one caller from taking every slot of
+    /// `max_sse_connections` / `max_subscribe_connections`. 0 = unlimited.
+    /// Default: 10.
+    pub max_connections_per_client: usize,
     /// Per-subscriber outbound send timeout (milliseconds). If forwarding an
     /// event to a specific live-update client (gRPC Subscribe or admin SSE)
     /// takes longer than this, that subscriber is dropped. Guards against a
@@ -58,6 +65,7 @@ impl Default for LiveConfig {
             channel_capacity: 1024,
             max_sse_connections: 1000,
             max_subscribe_connections: 1000,
+            max_connections_per_client: 10,
             subscriber_send_timeout_ms: 1000,
         }
     }
@@ -77,6 +85,7 @@ mod tests {
         assert_eq!(live.channel_capacity, 1024);
         assert_eq!(live.max_sse_connections, 1000);
         assert_eq!(live.max_subscribe_connections, 1000);
+        assert_eq!(live.max_connections_per_client, 10);
         assert_eq!(live.subscriber_send_timeout_ms, 1000);
     }
 

@@ -3,6 +3,11 @@
 //! `tests/common/` is a subdirectory, so Cargo never compiles it as a test
 //! binary of its own; each guard pulls it in with `mod common;`.
 
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
 /// The production part of `src`, scrubbed so a textual scan can only match
 /// live code. Line numbers are preserved: test code is blanked line for line
 /// and comments are removed in place, so a match reports the file's real line.
@@ -27,6 +32,78 @@
 /// needle containing `{` or `}` inside a literal.
 pub(crate) fn production_code(src: &str) -> String {
     production(&scrub(src))
+}
+
+/// Whether the file at `path` is a test module kept in a file of its own:
+/// declared by its parent with a test-gated `mod name;` (`#[cfg(test)] mod
+/// tests;`), or nested inside such a module (`tests/support.rs` under a gated
+/// `tests/mod.rs`). [`production_code`] blanks a test module written inline,
+/// but an out-of-line one is a whole file, so a scan over a source tree must
+/// skip it — its helpers would otherwise read as production code.
+///
+/// The declaring parent is found the way rustc finds it (`dir/mod.rs`,
+/// `dir.rs`, or a crate root in `dir`); a `#[path = …]` module is not
+/// followed, and a file with no declaring parent reads as production.
+pub(crate) fn is_test_module_file(path: &Path) -> bool {
+    let Some((name, dir)) = module_name_and_dir(path) else {
+        return false;
+    };
+
+    for parent in declaring_candidates(&dir) {
+        let Ok(src) = fs::read_to_string(&parent) else {
+            continue;
+        };
+
+        let code = scrub(&src);
+
+        if !declares_module(&code, &name) {
+            continue;
+        }
+
+        return !declares_module(&production(&code), &name) || is_test_module_file(&parent);
+    }
+
+    false
+}
+
+/// The module name of the file at `path` and the directory its declaring
+/// parent lives in: `a/b.rs` is `b` declared from `a`, `a/b/mod.rs` is `b`
+/// declared from `a`.
+fn module_name_and_dir(path: &Path) -> Option<(String, PathBuf)> {
+    let stem = path.file_stem()?.to_str()?;
+    let dir = path.parent()?;
+
+    if stem != "mod" {
+        return Some((stem.to_string(), dir.to_path_buf()));
+    }
+
+    let name = dir.file_name()?.to_str()?;
+
+    Some((name.to_string(), dir.parent()?.to_path_buf()))
+}
+
+/// The files that can declare a module whose file lives in `dir`.
+fn declaring_candidates(dir: &Path) -> [PathBuf; 4] {
+    [
+        dir.join("mod.rs"),
+        dir.with_extension("rs"),
+        dir.join("lib.rs"),
+        dir.join("main.rs"),
+    ]
+}
+
+/// Whether scrubbed `code` holds an out-of-line `mod name;` declaration.
+fn declares_module(code: &str, name: &str) -> bool {
+    let decl = format!("mod {name};");
+
+    code.lines().any(|line| {
+        line.match_indices(&decl).any(|(at, _)| {
+            line[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+        })
+    })
 }
 
 /// `src` with every test-gated item blanked line for line. An inner

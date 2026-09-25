@@ -22,7 +22,7 @@ use crate::{
     },
     config::LocaleConfig,
     core::Registry,
-    db::DbConnection,
+    db::{DbConnection, UnboundedStatements},
 };
 
 /// Where an import reads from: the export, and this installation's schema and
@@ -110,6 +110,11 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<&str>) -
 
     // Built — and a configured Redis reached — before anything is written.
     let infra = cli_infra(config_dir, &registry, &cfg, &pool)?;
+
+    // Writes a whole export in one transaction and settles every reference
+    // count: maintenance whose statements may legitimately outlast the
+    // statement timeout.
+    let _unbounded = UnboundedStatements::lift();
 
     let mut conn = pool.write().context("Failed to get database connection")?;
     // IMMEDIATE takes SQLite's write lock up front, so the import's reads and

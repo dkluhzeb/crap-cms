@@ -31,7 +31,7 @@ fn verify_password_fn(
 
 /// Return the currently authenticated user document for the in-flight request, or nil.
 /// Returns nil from init.lua, on unauthenticated requests, or outside a hook context.
-#[lua_fn(path = "crap.auth.user", returns = "crap.Document?")]
+#[lua_fn(path = "crap.auth.user", returns = "crap.AuthUser?")]
 fn user_fn(lua: &Lua) -> LuaResult<Value> {
     let user = lua
         .app_data_ref::<UserContext>()

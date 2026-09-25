@@ -65,8 +65,6 @@ pub fn persist_update(
         // IMMEDIATE transaction already serializes writers.
         conn.lock_row(slug, id)?;
 
-        query::ref_count::lock_ref_targets_from_data(conn, &def.fields, data, &locale_cfg)?;
-
         Some(query::ref_count::snapshot_outgoing_refs(
             conn,
             slug,
@@ -108,8 +106,10 @@ pub fn persist_update(
     sync_search_index(ctx, conn, &doc.id, &locale_cfg)?;
 
     // Ref count last: minimizes row-level lock hold time on shared targets.
+    // A refused reference is reported on the field holding it.
     if let Some(old_refs) = old_refs {
-        query::ref_count::after_update(conn, slug, &doc.id, &def.fields, &locale_cfg, &old_refs)?;
+        query::ref_count::after_update(conn, slug, &doc.id, &def.fields, &locale_cfg, &old_refs)
+            .map_err(|e| query::ref_count::anchor_to_fields(e, &def.fields, data))?;
     }
 
     Ok(doc)
@@ -157,8 +157,6 @@ pub(crate) fn persist_bulk_update(
         // would otherwise both read the stale `old_refs` and double-apply.
         conn.lock_row(ctx.slug, id)?;
 
-        query::ref_count::lock_ref_targets_from_data(conn, &def.fields, data, &locale_cfg)?;
-
         Some(query::ref_count::snapshot_outgoing_refs(
             conn,
             ctx.slug,
@@ -197,8 +195,10 @@ pub(crate) fn persist_bulk_update(
     sync_search_index(ctx, conn, id, &locale_cfg)?;
 
     // Ref count last: minimizes row-level lock hold time on shared targets.
+    // A refused reference is reported on the field holding it.
     if let Some(old_refs) = old_refs {
-        query::ref_count::after_update(conn, ctx.slug, id, &def.fields, &locale_cfg, &old_refs)?;
+        query::ref_count::after_update(conn, ctx.slug, id, &def.fields, &locale_cfg, &old_refs)
+            .map_err(|e| query::ref_count::anchor_to_fields(e, &def.fields, data))?;
     }
 
     Ok(updated)

@@ -134,7 +134,7 @@ end
 | `trash` | boolean | `false` | Return only soft-deleted documents (collections with `soft_delete = true`). |
 | `locale` | string | `nil` | Locale code for localized fields. |
 | `override_access` | boolean | `false` | Bypass collection-level and field-level access checks. |
-| `search` | string | `nil` | FTS5 full-text search query. |
+| `search` | string | `nil` | Full-text search in the requested locale's text (every locale with `locale = "all"`). See [Full-Text Search](../query-and-filters/overview.md#full-text-search). |
 
 ### `crap.collections.<slug>.find_by_id(id, opts?)`
 
@@ -201,7 +201,9 @@ gRPC/MCP/admin behavior.
 
 Update an existing document. `data` is a partial payload
 (`crap.partial.<Slug>`) — only the fields being changed need to be
-present. Returns the updated typed document.
+present, down to a group's sub-fields (`seo = { title = "x" }` keeps the
+group's other sub-fields). An array or blocks field is sent whole: every row,
+each with its `id`. Returns the updated typed document.
 
 ```lua
 local doc = crap.collections.posts.update("abc123", {

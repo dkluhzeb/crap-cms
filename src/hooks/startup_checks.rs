@@ -8,6 +8,7 @@
 //! - `default_sort` — admin default-sort fields.
 //! - `relation_targets` — relationship/upload/join fields name a registered
 //!   (for uploads: upload-enabled) target collection.
+//! - `join_limits` — no join lists more than `[pagination] max_limit`.
 //! - `richtext_nodes` — rich text fields list only registered custom nodes.
 //! - This file — locale/field-name collisions, table-name collisions, job
 //!   cron schedules, `required_locales`, and the advisory warnings
@@ -19,6 +20,7 @@
 mod auth_methods;
 mod default_sort;
 mod hook_refs;
+mod join_limits;
 mod pages;
 mod relation_targets;
 mod richtext_nodes;
@@ -27,6 +29,7 @@ mod routes;
 pub use auth_methods::validate_auth_methods;
 pub use default_sort::validate_admin_default_sorts;
 pub use hook_refs::{validate_admin_access_ref, validate_hook_references};
+pub use join_limits::validate_join_limits;
 pub use pages::validate_pages;
 pub use relation_targets::validate_relation_targets;
 pub use richtext_nodes::validate_richtext_nodes;

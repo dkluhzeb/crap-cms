@@ -48,15 +48,7 @@ fn list_jobs_blocking(
         .inspect_err(|e| error!("ListJobs pool error: {}", e))
         .map_err(|e| pool_error_status(e, kind))?;
 
-    let auth_user = ContentService::resolve_auth_user(
-        token,
-        headers,
-        &*infra.token_provider,
-        &infra.hook_runner,
-        &infra.registry,
-        &conn,
-        &infra.locale_config,
-    )?;
+    let auth_user = ContentService::resolve_auth_user(token, headers, infra, &conn)?;
 
     if auth_user.is_none() {
         return Err(Status::unauthenticated("Authentication required"));

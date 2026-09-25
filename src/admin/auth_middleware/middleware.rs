@@ -25,14 +25,10 @@ use crate::admin::{
         shared::paths,
     },
 };
-use crate::config::LocaleConfig;
-use crate::core::{
-    AuthUser, Registry, SharedTokenProvider, collection::Surface, with_label_locale,
-};
-use crate::db::{BoxedConnection, DbPool};
-use crate::hooks::HookRunner;
+use crate::core::{AuthUser, collection::Surface, with_label_locale};
+use crate::db::BoxedConnection;
 use crate::service::{
-    self,
+    self, AppInfra,
     auth::{
         AuthFailure, AuthRequest, AuthenticatedResolution, EvaluateDeps, Resolution, ResolvedMethod,
     },
@@ -164,14 +160,10 @@ fn load_ui_locale(conn: &BoxedConnection, user: &AuthUser) -> Option<String> {
 /// the UI-locale lookup need, cloned out of the request/state so the work
 /// can move onto a blocking thread.
 struct ResolveAuthParams {
-    pool: DbPool,
-    registry: Arc<Registry>,
-    token_provider: SharedTokenProvider,
-    hook_runner: HookRunner,
+    infra: Arc<AppInfra>,
     bearer_token: Option<String>,
     session_token: Option<String>,
     headers_map: HashMap<String, String>,
-    locale_config: LocaleConfig,
 }
 
 /// Resolve the request's principal on a blocking thread: run the unified
@@ -179,7 +171,7 @@ struct ResolveAuthParams {
 /// authenticated user while the connection is still held.
 #[cfg(not(tarpaulin_include))]
 fn resolve_auth(p: &ResolveAuthParams) -> AdminAuthOutcome {
-    let Ok(conn) = p.pool.get() else {
+    let Ok(conn) = p.infra.pool.get() else {
         // Pool exhaustion is a server-side problem, not an
         // auth problem — but the evaluator's contract returns
         // either Authenticated / Anonymous / Invalid.
@@ -199,13 +191,7 @@ fn resolve_auth(p: &ResolveAuthParams) -> AdminAuthOutcome {
             session_cookie_token: p.session_token.as_deref(),
             headers: &p.headers_map,
         },
-        &EvaluateDeps {
-            registry: &p.registry,
-            token_provider: p.token_provider.as_ref(),
-            hook_runner: &p.hook_runner,
-            conn: &conn,
-            locale_config: &p.locale_config,
-        },
+        &EvaluateDeps::new(&p.infra, &conn),
     );
 
     // While we still hold the connection, fetch the admin UI
@@ -243,14 +229,10 @@ pub(in crate::admin) async fn auth_middleware(
     }
 
     let params = ResolveAuthParams {
-        pool: state.infra.pool.clone(),
-        registry: state.infra.registry.clone(),
-        token_provider: state.infra.token_provider.clone(),
-        hook_runner: state.infra.hook_runner.clone(),
+        infra: Arc::clone(&state.infra),
         bearer_token: bearer_token(request.headers()).map(str::to_string),
         session_token: session_cookie_token(request.headers()).map(str::to_string),
         headers_map: headers_to_map(request.headers()),
-        locale_config: state.config.locale.clone(),
     };
 
     let resolution = spawn_blocking(move || resolve_auth(&params)).await;

@@ -18,12 +18,15 @@ use crate::config::{
     env::substitute_in_value,
     features::{
         AccessConfig, CacheConfig, DepthConfig, EmailConfig, HooksConfig, JobsConfig, LiveConfig,
-        LocaleConfig, LoggingConfig, McpConfig, PaginationConfig, UpdateConfig, UploadConfig,
+        LocaleConfig, LoggingConfig, McpConfig, PaginationConfig, QueryConfig, UpdateConfig,
+        UploadConfig, install_query_limits,
     },
     routes::RoutesConfig,
     server::{AdminConfig, DatabaseConfig, ServerConfig},
 };
-use crate::core::{JwtSecret, NESTING_DEPTH, NestingDepth, set_default_label_locale};
+use crate::core::{
+    JwtSecret, NESTING_DEPTH, NestingDepth, set_default_label_locale, upload::set_image_concurrency,
+};
 
 /// Enumerate a config struct's serde keys — implemented by
 /// `#[derive(ConfigKeys)]` (`crap-cms-macros`).
@@ -74,6 +77,8 @@ pub struct CrapConfig {
     pub access: AccessConfig,
     /// Default pagination settings.
     pub pagination: PaginationConfig,
+    /// Size limits on user-supplied queries (`where` width, `search` length).
+    pub query: QueryConfig,
     /// MCP (Model Context Protocol) settings.
     pub mcp: McpConfig,
     /// Cache backend settings.
@@ -290,6 +295,14 @@ impl CrapConfig {
         // from the config rather than passed down. It is fixed for the process
         // lifetime — the first config to reach this point wins.
         depth.install(self.depth.max_nesting_depth);
+
+        // The query-size limits are process-wide for the same reason: every
+        // surface's query reaches one service validation that reads them.
+        install_query_limits(self.query);
+
+        // Image decoding and processing is bounded process-wide: uploads and
+        // queued conversions share one set of processing slots.
+        set_image_concurrency(self.upload.max_concurrent_image_processing);
 
         // Operator-localized labels resolve against the default locale
         // whenever no request UI locale is in scope (API, MCP, Lua schema

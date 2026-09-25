@@ -142,13 +142,27 @@ Via gRPC, pass an array of objects with `_block_type`:
 ```json
 {
   "content": [
-    { "_block_type": "hero", "heading": "Welcome", "subheading": "To our site" },
+    { "id": "m3Vp8Tc1", "_block_type": "hero", "heading": "Welcome", "subheading": "To our site" },
     { "_block_type": "richtext", "body": "<p>Content here</p>" }
   ]
 }
 ```
 
-On write, all existing block rows for the parent are deleted and replaced. This is a full replacement, not a merge.
+A write sends the complete list of blocks, and the stored rows are reconciled
+against it by row `id` (every block read back carries its `id`):
+
+- A block whose `id` matches an existing row of this document **updates that
+  row in place**. Top-level block fields the incoming block omits — or may not
+  write (field-level `update` access) — keep their stored values, as long as
+  the `_block_type` is unchanged (switching a row to another block type
+  starts it from the incoming fields only).
+- A block without an `id` (or with an `id` that is not one of this document's
+  rows) is **inserted** as a new row with a server-generated id.
+- Stored blocks missing from the list are **deleted**.
+- Block order follows the list order.
+
+So always send back the `id` of each block you read when updating: a block sent
+without it is a new row, and any field it does not carry is lost.
 
 ## Row Labels
 

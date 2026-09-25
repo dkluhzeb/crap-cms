@@ -33,7 +33,7 @@ use crap_cms::core::DocumentFields;
 use crap_cms::core::collection::CollectionDefinition;
 use crap_cms::core::field::{FieldDefinition, FieldType};
 use crap_cms::core::upload::{CollectionUpload, signed_upload_url};
-use crap_cms::core::{HookRef, Registry};
+use crap_cms::core::{HookRef, LiveSlots, Registry};
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 
@@ -191,8 +191,7 @@ fn setup_app(default_deny: bool) -> TestApp {
         ip_mfa_limiter: Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(20, 300)),
         has_auth: false,
         translations,
-        sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        max_sse_connections: 0,
+        sse_slots: LiveSlots::new(0, 0),
         shutdown: tokio_util::sync::CancellationToken::new(),
         password_provider: Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,

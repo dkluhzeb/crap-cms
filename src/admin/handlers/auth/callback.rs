@@ -155,7 +155,7 @@ fn run_auth_strategy_blocking(
 
     infra
         .hook_runner
-        .run_auth_callback(&strategy, &input, &infra.pool)
+        .run_auth_callback(&strategy, &input, infra)
         .map_err(|e| anyhow!("Auth callback hook error: {e:#}"))
 }
 
@@ -370,12 +370,12 @@ pub(super) async fn complete_auth_callback(
     state: &AdminState,
     request: &CallbackRequest<'_>,
 ) -> Response {
-    let ip = client_ip(request.headers, &request.addr, &state.config.server);
+    let client = client_ip(request.headers, &request.addr, &state.config.server);
 
     // Atomically record this callback attempt against the IP limiter and bail
     // if over threshold — one operation, closing the burst race the is_blocked
     // + later record_failure split left open. A successful login refunds it below.
-    if state.ip_login_limiter.check_and_block(&ip) {
+    if state.ip_login_limiter.check_and_block_ip(&client) {
         return login_redirect();
     }
 
@@ -392,7 +392,7 @@ pub(super) async fn complete_auth_callback(
     // limiter, exactly as the password login does. Clearing it would wipe every
     // other account's failures from the same IP, letting one working OAuth
     // account mask a password brute-force from behind it.
-    state.ip_login_limiter.refund(&ip);
+    state.ip_login_limiter.refund_ip(&client);
 
     finish_callback(state, request.collection, verified, mfa).await
 }

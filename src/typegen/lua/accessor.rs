@@ -2,9 +2,13 @@
 //! `crap.globals.<slug>`) and their pass-through typing factories.
 
 use crate::{
-    core::{CollectionDefinition, FieldType, collection::GlobalDefinition},
+    core::{
+        CollectionDefinition, FieldType,
+        collection::GlobalDefinition,
+        upload::{read_shape_fields, readable_fields},
+    },
     typegen::{
-        helpers::{w, wraw},
+        helpers::{has_localized_columns, w, wraw},
         idents::lua_index,
     },
 };
@@ -171,29 +175,32 @@ function {local}.row_label(fn) end
 /// uniform `crap.FindQuery` — here the per-collection `crap.query.X`
 /// can be the parameter type directly, so inline `where = { ... }`
 /// tables get per-column autocomplete.
-pub(super) fn render_collection_accessor(out: &mut String, slug: &str, pascal: &str) {
+pub(super) fn render_collection_accessor(
+    out: &mut String,
+    col: &CollectionDefinition,
+    pascal: &str,
+) {
+    let slug: &str = &col.slug;
     let local = collection_local(slug);
+    let variants = AccessorVariants::of(col);
+
     w!(out, "---@class crap.collections.{pascal}");
     w!(out, "local {local} = {{}}");
     out.push('\n');
 
-    // find
-    w!(out, "---@param query? crap.query.{pascal}");
-    w!(out, "---@return crap.find_result.{pascal}");
-    w!(out, "function {local}.find(query) end");
-    out.push('\n');
+    render_read_methods(out, &local, pascal, variants);
 
-    // find_by_id
-    w!(out, "---@param id string");
-    w!(out, "---@param opts? crap.FindByIdOptions");
-    w!(out, "---@return crap.doc.{pascal}?");
-    w!(out, "function {local}.find_by_id(id, opts) end");
-    out.push('\n');
-
-    // create — the write shape, required fields required
+    // create — the write shape, required fields required; a draft save
+    // skips the required checks, so it takes the all-optional payload
     w!(out, "---@param data crap.input.{pascal}");
     w!(out, "---@param opts? crap.CreateOptions");
     w!(out, "---@return crap.doc.{pascal}");
+    if variants.drafts {
+        w!(
+            out,
+            "---@overload fun(data: crap.partial.{pascal}, opts: crap.DraftCreateOptions): crap.doc.{pascal}"
+        );
+    }
     w!(out, "function {local}.create(data, opts) end");
     out.push('\n');
 
@@ -226,10 +233,16 @@ pub(super) fn render_collection_accessor(out: &mut String, slug: &str, pascal: &
     w!(out, "function {local}.undelete(id, opts) end");
     out.push('\n');
 
-    // validate — a dry-run create
+    // validate — a dry-run create (a draft one relaxes required fields)
     w!(out, "---@param data crap.input.{pascal}");
     w!(out, "---@param opts? crap.ValidateOptions");
     w!(out, "---@return crap.ValidateResult");
+    if variants.drafts {
+        w!(
+            out,
+            "---@overload fun(data: crap.partial.{pascal}, opts: crap.DraftValidateOptions): crap.ValidateResult"
+        );
+    }
     w!(out, "function {local}.validate(data, opts) end");
     out.push('\n');
 
@@ -243,6 +256,12 @@ pub(super) fn render_collection_accessor(out: &mut String, slug: &str, pascal: &
     w!(out, "---@param items crap.input.{pascal}[]");
     w!(out, "---@param opts? crap.CreateOptions");
     w!(out, "---@return crap.CreateManyResult");
+    if variants.drafts {
+        w!(
+            out,
+            "---@overload fun(items: crap.partial.{pascal}[], opts: crap.DraftCreateOptions): crap.CreateManyResult"
+        );
+    }
     w!(out, "function {local}.create_many(items, opts) end");
     out.push('\n');
 
@@ -287,6 +306,54 @@ pub(super) fn render_collection_accessor(out: &mut String, slug: &str, pascal: &
     out.push('\n');
 
     w!(out, "{} = {local}", lua_index("crap.collections", slug));
+    out.push('\n');
+}
+
+/// Which signature variants a collection's accessor declares beside the
+/// plain ones.
+#[derive(Clone, Copy)]
+struct AccessorVariants {
+    /// Drafts are enabled: a `draft = true` create / validate skips the
+    /// required checks.
+    drafts: bool,
+    /// A field reads per locale: a `locale = "all"` read returns
+    /// `crap.doc_localized.*`.
+    all_locales: bool,
+}
+
+impl AccessorVariants {
+    fn of(col: &CollectionDefinition) -> Self {
+        Self {
+            drafts: col.has_drafts(),
+            all_locales: has_localized_columns(&read_shape_fields(col), false),
+        }
+    }
+}
+
+/// `find` and `find_by_id`, each with its `locale = "all"` overload when a
+/// field reads per locale.
+fn render_read_methods(out: &mut String, local: &str, pascal: &str, variants: AccessorVariants) {
+    w!(out, "---@param query? crap.query.{pascal}");
+    w!(out, "---@return crap.find_result.{pascal}");
+    if variants.all_locales {
+        w!(
+            out,
+            "---@overload fun(query: crap.query_all_locales.{pascal}): crap.find_result_localized.{pascal}"
+        );
+    }
+    w!(out, "function {local}.find(query) end");
+    out.push('\n');
+
+    w!(out, "---@param id string");
+    w!(out, "---@param opts? crap.FindByIdOptions");
+    w!(out, "---@return crap.doc.{pascal}?");
+    if variants.all_locales {
+        w!(
+            out,
+            "---@overload fun(id: string, opts: crap.AllLocalesFindByIdOptions): crap.doc_localized.{pascal}?"
+        );
+    }
+    w!(out, "function {local}.find_by_id(id, opts) end");
     out.push('\n');
 }
 
@@ -376,15 +443,22 @@ function {local}.row_label(fn) end
 /// `validate(data, opts?)` with typed returns — no overload
 /// narrowing concerns. Runtime-registered in `hooks/init.rs` to
 /// dispatch to the slug-keyed `crap.globals.*` functions.
-pub(super) fn render_global_accessor(out: &mut String, slug: &str, pascal: &str) {
+pub(super) fn render_global_accessor(out: &mut String, global: &GlobalDefinition, pascal: &str) {
+    let slug: &str = &global.slug;
     let local = global_local(slug);
     w!(out, "---@class crap.globals.{pascal}");
     w!(out, "local {local} = {{}}");
     out.push('\n');
 
-    // get
+    // get — with its `locale = "all"` overload when a field reads per locale
     w!(out, "---@param opts? crap.GlobalGetOptions");
     w!(out, "---@return crap.global_doc.{pascal}");
+    if has_localized_columns(&readable_fields(&global.fields), false) {
+        w!(
+            out,
+            "---@overload fun(opts: crap.AllLocalesGlobalGetOptions): crap.global_doc_localized.{pascal}"
+        );
+    }
     w!(out, "function {local}.get(opts) end");
     out.push('\n');
 
@@ -415,6 +489,7 @@ pub(super) fn render_global_accessor(out: &mut String, slug: &str, pascal: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::{FieldDefinition, VersionsConfig};
 
     /// One accessor stub: its annotations, up to the `function` line.
     fn stub<'a>(out: &'a str, function: &str) -> &'a str {
@@ -433,7 +508,7 @@ mod tests {
     #[test]
     fn write_methods_take_the_write_shape_classes() {
         let mut out = String::new();
-        render_collection_accessor(&mut out, "posts", "Posts");
+        render_collection_accessor(&mut out, &CollectionDefinition::new("posts"), "Posts");
 
         let create = stub(&out, "function _coll_posts.create(data, opts) end");
         assert!(
@@ -479,18 +554,18 @@ mod tests {
     #[test]
     fn non_identifier_slugs_bind_with_a_quoted_index() {
         let mut out = String::new();
-        render_collection_accessor(&mut out, "2fa", "2fa");
+        render_collection_accessor(&mut out, &CollectionDefinition::new("2fa"), "2fa");
         assert!(
             out.contains("crap.collections[\"2fa\"] = _coll_2fa\n"),
             "{out}"
         );
 
         let mut out = String::new();
-        render_global_accessor(&mut out, "end", "End");
+        render_global_accessor(&mut out, &GlobalDefinition::new("end"), "End");
         assert!(out.contains("crap.globals[\"end\"] = _glob_end\n"), "{out}");
 
         let mut out = String::new();
-        render_global_accessor(&mut out, "settings", "Settings");
+        render_global_accessor(&mut out, &GlobalDefinition::new("settings"), "Settings");
         assert!(
             out.contains("crap.globals.settings = _glob_settings\n"),
             "{out}"
@@ -536,5 +611,87 @@ mod tests {
             assert!(out.contains(factory), "{factory}: {out}");
         }
         assert!(!out.contains("function crap."), "{out}");
+    }
+
+    /// Regression: a draft create was typed as a full create, so the
+    /// documented `create({ ... }, { draft = true })` flow with required
+    /// fields left out was a `missing-fields` diagnostic. A drafts collection
+    /// declares the draft overloads; one without drafts does not.
+    #[test]
+    fn a_drafts_collection_declares_the_draft_write_overloads() {
+        let mut col = CollectionDefinition::new("posts");
+        col.versions = Some(VersionsConfig::new(true, 0));
+
+        let mut out = String::new();
+        render_collection_accessor(&mut out, &col, "Posts");
+
+        for (function, overload) in [
+            (
+                "function _coll_posts.create(data, opts) end",
+                "---@overload fun(data: crap.partial.Posts, opts: crap.DraftCreateOptions): crap.doc.Posts",
+            ),
+            (
+                "function _coll_posts.create_many(items, opts) end",
+                "---@overload fun(items: crap.partial.Posts[], opts: crap.DraftCreateOptions): crap.CreateManyResult",
+            ),
+            (
+                "function _coll_posts.validate(data, opts) end",
+                "---@overload fun(data: crap.partial.Posts, opts: crap.DraftValidateOptions): crap.ValidateResult",
+            ),
+        ] {
+            assert!(stub(&out, function).contains(overload), "{overload}: {out}");
+        }
+
+        let mut out = String::new();
+        render_collection_accessor(&mut out, &CollectionDefinition::new("tags"), "Tags");
+        assert!(!out.contains("Draft"), "{out}");
+    }
+
+    /// Regression: a `locale = "all"` read was typed as a single-locale
+    /// document. A collection or global holding a localized field declares
+    /// the all-locales overloads returning the per-locale classes.
+    #[test]
+    fn localized_owners_declare_the_all_locales_overloads() {
+        let mut col = CollectionDefinition::new("posts");
+        col.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .localized(true)
+                .build(),
+        ];
+
+        let mut out = String::new();
+        render_collection_accessor(&mut out, &col, "Posts");
+
+        assert!(
+            stub(&out, "function _coll_posts.find(query) end").contains(
+                "---@overload fun(query: crap.query_all_locales.Posts): crap.find_result_localized.Posts"
+            ),
+            "{out}"
+        );
+        assert!(
+            stub(&out, "function _coll_posts.find_by_id(id, opts) end").contains(
+                "---@overload fun(id: string, opts: crap.AllLocalesFindByIdOptions): crap.doc_localized.Posts?"
+            ),
+            "{out}"
+        );
+
+        let mut global = GlobalDefinition::new("settings");
+        global.fields = col.fields.clone();
+
+        let mut out = String::new();
+        render_global_accessor(&mut out, &global, "Settings");
+        assert!(
+            stub(&out, "function _glob_settings.get(opts) end").contains(
+                "---@overload fun(opts: crap.AllLocalesGlobalGetOptions): crap.global_doc_localized.Settings"
+            ),
+            "{out}"
+        );
+
+        let mut out = String::new();
+        render_collection_accessor(&mut out, &CollectionDefinition::new("tags"), "Tags");
+        assert!(
+            !out.contains("all_locales") && !out.contains("AllLocales"),
+            "{out}"
+        );
     }
 }

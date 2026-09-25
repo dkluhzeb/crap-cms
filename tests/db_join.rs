@@ -628,7 +628,7 @@ fn populate_depth_0_leaves_ids() {
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def.fields),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(0),
@@ -659,7 +659,7 @@ fn populate_depth_1_hydrates_has_one() {
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def.fields),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(1),
@@ -716,7 +716,7 @@ fn populate_depth_1_hydrates_has_many() {
 
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def.fields),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(1),
@@ -760,7 +760,7 @@ fn populate_circular_ref_stops() {
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry, "categories", &cats_def),
+        &query::PopulateContext::new(&conn, &registry, "categories", &cats_def.fields),
         &mut cat_a,
         &mut visited,
         &query::PopulateOpts::new(10),
@@ -791,7 +791,7 @@ fn populate_missing_related_doc_becomes_null() {
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def.fields),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(1),
@@ -833,7 +833,7 @@ fn populate_respects_field_max_depth() {
     let mut visited = HashSet::new();
     // Even with depth=5, the limited_cat field has max_depth=0, so it shouldn't populate
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def.fields),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(5),
@@ -878,7 +878,7 @@ fn populate_respects_field_max_depth_1_stops_nested_relations() {
     let mut visited = HashSet::new();
     // Request depth=3 — but `capped_cat` has max_depth = 1, so the cap wins.
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def.fields),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(3),
@@ -986,7 +986,7 @@ fn populate_with_localized_related_collection() {
             &conn,
             &shared_registry.read().unwrap(),
             "articles",
-            &articles_def,
+            &articles_def.fields,
         ),
         &mut article,
         &mut visited,

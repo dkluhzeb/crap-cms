@@ -24,8 +24,8 @@ use crate::{
     core::{
         CollectionDefinition,
         email::{
-            EmailJobData, EmailRenderer, PasswordResetEmailContext, VerifyEmailContext,
-            is_configured, queue_email,
+            EmailJobData, EmailRenderer, PasswordResetEmailContext, SystemEmail,
+            VerifyEmailContext, is_configured, queue_email,
         },
     },
     db::{BoxedConnection, DbConnection, DbPool},
@@ -35,6 +35,7 @@ use crate::{
             VERIFICATION_TOKEN_EXPIRY, generate_reset_token, generate_verification_token,
             issue_verification_token,
         },
+        user_settings::recipient_ui_locale,
     },
 };
 
@@ -73,7 +74,7 @@ impl VerificationMailer {
     }
 
     /// Render the verification email for `token` and insert its `_crap_jobs`
-    /// row on `conn`.
+    /// row on `conn`. The subject is in the recipient's admin UI language.
     ///
     /// # Errors
     ///
@@ -82,7 +83,7 @@ impl VerificationMailer {
     fn render_and_queue(
         &self,
         conn: &dyn DbConnection,
-        recipient: &str,
+        recipient: &VerificationRecipient<'_>,
         token: &str,
     ) -> Result<(), ServiceError> {
         let base_url = self.server_config.base_url();
@@ -99,11 +100,15 @@ impl VerificationMailer {
             )
             .context("Failed to render verify email template")?;
 
+        let locale = recipient_ui_locale(conn, recipient.user_id);
+
         queue_email(
             conn,
             &EmailJobData {
-                to: recipient.to_string(),
-                subject: "Verify your email".to_string(),
+                to: recipient.email.to_string(),
+                subject: self
+                    .email_renderer
+                    .subject(SystemEmail::VerifyEmail, &locale),
                 html,
                 text: None,
             },
@@ -147,7 +152,7 @@ impl VerificationMailer {
             VERIFICATION_TOKEN_EXPIRY,
         )?;
 
-        self.render_and_queue(conn, recipient.email, &token)
+        self.render_and_queue(conn, recipient, &token)
     }
 }
 
@@ -294,9 +299,15 @@ fn resend_in_transaction(
         return Ok(());
     };
 
-    input
-        .mailer
-        .render_and_queue(&tx, &issued.email, &issued.token)?;
+    input.mailer.render_and_queue(
+        &tx,
+        &VerificationRecipient {
+            slug: &input.slug,
+            user_id: &issued.user_id,
+            email: &issued.email,
+        },
+        &issued.token,
+    )?;
 
     tx.commit()
         .context("Failed to commit verification resend")?;
@@ -318,8 +329,9 @@ pub(crate) struct ResetMailer {
 }
 
 impl ResetMailer {
-    /// Render the reset email for `token` and insert its `_crap_jobs` row on
-    /// `conn`.
+    /// Render the reset email for `token` to the account `user_id` at
+    /// `recipient` and insert its `_crap_jobs` row on `conn`. The subject is in
+    /// the account's admin UI language.
     ///
     /// # Errors
     ///
@@ -329,6 +341,7 @@ impl ResetMailer {
         &self,
         conn: &dyn DbConnection,
         recipient: &str,
+        user_id: &str,
         token: &str,
     ) -> Result<(), ServiceError> {
         // The shared `base_url()` trims a configured `public_url`'s trailing
@@ -348,11 +361,15 @@ impl ResetMailer {
             )
             .context("Failed to render reset email template")?;
 
+        let locale = recipient_ui_locale(conn, user_id);
+
         queue_email(
             conn,
             &EmailJobData {
                 to: recipient.to_string(),
-                subject: "Reset your password".to_string(),
+                subject: self
+                    .email_renderer
+                    .subject(SystemEmail::PasswordReset, &locale),
                 html,
                 text: None,
             },
@@ -397,7 +414,7 @@ impl ResetMailer {
 
         // The mail goes to the address the caller typed, matching the account
         // the lookup resolved it to.
-        self.render_and_queue(conn, email, &issued.token)
+        self.render_and_queue(conn, email, &issued.user_id, &issued.token)
     }
 }
 
@@ -482,6 +499,7 @@ fn issue_reset_in_transaction(
 mod tests {
     use r2d2::Pool;
     use r2d2_sqlite::SqliteConnectionManager;
+    use serde_json::from_str;
 
     use crate::{
         config::{CrapConfig, EmailProvider},
@@ -670,6 +688,39 @@ mod tests {
             "the account must carry the token the emailed link uses"
         );
         assert_eq!(queued_emails(&conn), 1, "exactly one email must be queued");
+    }
+
+    /// The subjects of the queued `_system_email` jobs.
+    fn queued_subjects(conn: &BoxedConnection) -> Vec<String> {
+        job_query::list_job_runs(conn, Some(SYSTEM_EMAIL_JOB), None, 100, 0)
+            .expect("list queued email jobs")
+            .iter()
+            .map(|run| {
+                let data: EmailJobData = from_str(&run.data).expect("email job data");
+                data.subject
+            })
+            .collect()
+    }
+
+    /// Regression: the subject was a hard-coded English string whatever
+    /// language the recipient uses the admin in. It is the account's UI
+    /// locale translation now.
+    #[test]
+    fn the_reset_subject_is_in_the_recipients_ui_locale() {
+        let (pool, mut conn) = reset_fixture(true);
+        conn.execute_batch(
+            "CREATE TABLE _crap_user_settings (user_id TEXT PRIMARY KEY, settings TEXT);
+            INSERT INTO _crap_user_settings VALUES ('u1', '{\"ui_locale\":\"de\"}');",
+        )
+        .expect("settings table");
+        let input = reset_input(&pool);
+
+        issue_reset_in_transaction(&mut conn, &input).expect("reset email queued");
+
+        assert_eq!(
+            queued_subjects(&conn),
+            vec!["Passwort zurücksetzen".to_string()]
+        );
     }
 
     /// An address with no account writes nothing and reports nothing — the

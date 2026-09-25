@@ -2,9 +2,11 @@
 
 use std::sync::Arc;
 
+use sha2::{Digest, Sha256};
 use tracing::{error, warn};
 
 use super::{MemoryRateLimitBackend, SharedRateLimitBackend};
+use crate::core::{ClientIp, hex::hex_encode};
 
 /// Per-key login rate limiter. Tracks failed attempts in a sliding window
 /// and blocks further attempts after a configurable threshold.
@@ -40,6 +42,11 @@ pub const IP_RESET_PASSWORD_KEYSPACE: &str = "ip_reset_password";
 /// verification attempts cannot exhaust what a password reset from the same IP
 /// needs.
 pub const IP_VERIFY_EMAIL_KEYSPACE: &str = "ip_verify_email";
+
+/// Keyspace for per-IP failed API-key attempts on the MCP HTTP endpoint. Sized
+/// like the per-IP login budget but separate from it, so MCP failures and
+/// admin logins from one address never drain each other.
+pub const IP_MCP_API_KEY_KEYSPACE: &str = "ip_mcp_api_key";
 
 /// Keyspace for per-user MFA code ISSUANCE (email/custom delivery). Shared by
 /// every surface: the login limiter cannot cap issuance because a successful
@@ -98,8 +105,18 @@ impl LoginRateLimiter {
     }
 
     /// Build the prefixed key for backend storage.
+    ///
+    /// The caller's key is stored as its SHA-256 digest, never verbatim: keys
+    /// are caller-controlled (an email typed into a pre-auth form, a user id,
+    /// an address), and a verbatim key lets one request pin arbitrarily many
+    /// bytes in the backend for the whole window. Hashing here covers every
+    /// limiter and every backend at once.
     fn prefixed_key(&self, key: &str) -> String {
-        format!("{}:{}", self.prefix, key)
+        format!(
+            "{}:{}",
+            self.prefix,
+            hex_encode(&Sha256::digest(key.as_bytes())[..])
+        )
     }
 
     /// Check if a key is currently blocked (too many recent failures).
@@ -154,6 +171,20 @@ impl LoginRateLimiter {
         }
     }
 
+    /// [`Self::check_and_block`] for a per-IP limiter: the attempt counts
+    /// against the client's rate-limit bucket ([`ClientIp::rate_limit_key`]),
+    /// never its exact address.
+    #[must_use]
+    pub fn check_and_block_ip(&self, client: &ClientIp) -> bool {
+        self.check_and_block(&client.rate_limit_key())
+    }
+
+    /// [`Self::refund`] for a per-IP limiter, keyed like
+    /// [`Self::check_and_block_ip`].
+    pub fn refund_ip(&self, client: &ClientIp) {
+        self.refund(&client.rate_limit_key());
+    }
+
     /// Record a failed attempt for the given key.
     pub fn record_failure(&self, key: &str) {
         let pkey = self.prefixed_key(key);
@@ -187,7 +218,12 @@ impl LoginRateLimiter {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::Mutex, thread::sleep, time::Duration};
+
+    use anyhow::{Result as AnyResult, bail};
+
     use super::*;
+    use crate::core::rate_limit::RateLimitBackend;
 
     fn memory_backend() -> SharedRateLimitBackend {
         Arc::new(MemoryRateLimitBackend::new())
@@ -233,7 +269,7 @@ mod tests {
         let limiter = LoginRateLimiter::with_backend(memory_backend(), "test", 2, 0);
         limiter.record_failure("a@b.com");
         limiter.record_failure("a@b.com");
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
         assert!(!limiter.is_blocked("a@b.com"));
     }
 
@@ -310,28 +346,95 @@ mod tests {
         );
     }
 
+    /// Records every key the limiter hands its backend.
+    #[derive(Default)]
+    struct KeyLog(Mutex<Vec<String>>);
+
+    impl RateLimitBackend for KeyLog {
+        fn count(&self, key: &str, _window_secs: u64) -> AnyResult<u32> {
+            self.0.lock().unwrap().push(key.to_string());
+            Ok(0)
+        }
+        fn record(&self, key: &str, _window_secs: u64) -> AnyResult<()> {
+            self.0.lock().unwrap().push(key.to_string());
+            Ok(())
+        }
+        fn clear(&self, key: &str) -> AnyResult<()> {
+            self.0.lock().unwrap().push(key.to_string());
+            Ok(())
+        }
+        fn check_and_record(
+            &self,
+            key: &str,
+            _max_count: u32,
+            _window_secs: u64,
+        ) -> AnyResult<bool> {
+            self.0.lock().unwrap().push(key.to_string());
+            Ok(true)
+        }
+        fn kind(&self) -> &'static str {
+            "key-log"
+        }
+    }
+
+    /// Regression: the caller's key was stored verbatim, so one pre-auth
+    /// request carrying a multi-megabyte "email" pinned that many bytes in the
+    /// backend for the whole window. Every stored key is now a fixed-size
+    /// digest, whatever the caller passes.
+    #[test]
+    fn stored_keys_are_fixed_size_whatever_the_input() {
+        let log = Arc::new(KeyLog::default());
+        let limiter = LoginRateLimiter::with_backend(log.clone(), "login", 5, 60);
+        let huge = "a".repeat(1024 * 1024);
+
+        assert!(!limiter.check_and_block(&huge));
+        assert!(!limiter.check_and_block("a@b.com"));
+        limiter.clear(&huge);
+
+        let keys = log.0.lock().unwrap().clone();
+        assert_eq!(keys.len(), 3);
+        assert!(keys.iter().all(|k| k.len() == "login:".len() + 64));
+        assert_eq!(keys[0], keys[2], "the same input maps to the same key");
+        assert_ne!(keys[0], keys[1]);
+    }
+
+    /// Per-IP helpers key on the client's rate-limit bucket, so two addresses
+    /// inside one IPv6 /64 share a budget.
+    #[test]
+    fn ip_helpers_key_on_the_rate_limit_bucket() {
+        let limiter = LoginRateLimiter::with_backend(memory_backend(), "ip", 1, 60);
+        let a = ClientIp::new("2001:db8:1:2::1".parse().unwrap());
+        let b = ClientIp::new("2001:db8:1:2::2".parse().unwrap());
+
+        assert!(!limiter.check_and_block_ip(&a));
+        assert!(limiter.check_and_block_ip(&b), "same /64, same budget");
+
+        limiter.refund_ip(&a);
+        assert!(!limiter.check_and_block_ip(&b));
+    }
+
     /// Security: a backend failure must fail CLOSED (blocked), not silently
     /// disable brute-force protection for the duration of the outage.
     #[test]
     fn check_and_block_fails_closed_on_backend_error() {
         struct FailingBackend;
-        impl super::super::RateLimitBackend for FailingBackend {
-            fn count(&self, _key: &str, _window_secs: u64) -> anyhow::Result<u32> {
-                anyhow::bail!("backend down")
+        impl RateLimitBackend for FailingBackend {
+            fn count(&self, _key: &str, _window_secs: u64) -> AnyResult<u32> {
+                bail!("backend down")
             }
-            fn record(&self, _key: &str, _window_secs: u64) -> anyhow::Result<()> {
-                anyhow::bail!("backend down")
+            fn record(&self, _key: &str, _window_secs: u64) -> AnyResult<()> {
+                bail!("backend down")
             }
-            fn clear(&self, _key: &str) -> anyhow::Result<()> {
-                anyhow::bail!("backend down")
+            fn clear(&self, _key: &str) -> AnyResult<()> {
+                bail!("backend down")
             }
             fn check_and_record(
                 &self,
                 _key: &str,
                 _max_count: u32,
                 _window_secs: u64,
-            ) -> anyhow::Result<bool> {
-                anyhow::bail!("backend down")
+            ) -> AnyResult<bool> {
+                bail!("backend down")
             }
             fn kind(&self) -> &'static str {
                 "failing"
@@ -350,23 +453,23 @@ mod tests {
     #[test]
     fn backend_error_fails_closed() {
         struct FailingBackend;
-        impl super::super::RateLimitBackend for FailingBackend {
-            fn count(&self, _key: &str, _window_secs: u64) -> anyhow::Result<u32> {
-                anyhow::bail!("backend down")
+        impl RateLimitBackend for FailingBackend {
+            fn count(&self, _key: &str, _window_secs: u64) -> AnyResult<u32> {
+                bail!("backend down")
             }
-            fn record(&self, _key: &str, _window_secs: u64) -> anyhow::Result<()> {
-                anyhow::bail!("backend down")
+            fn record(&self, _key: &str, _window_secs: u64) -> AnyResult<()> {
+                bail!("backend down")
             }
-            fn clear(&self, _key: &str) -> anyhow::Result<()> {
-                anyhow::bail!("backend down")
+            fn clear(&self, _key: &str) -> AnyResult<()> {
+                bail!("backend down")
             }
             fn check_and_record(
                 &self,
                 _key: &str,
                 _max_count: u32,
                 _window_secs: u64,
-            ) -> anyhow::Result<bool> {
-                anyhow::bail!("backend down")
+            ) -> AnyResult<bool> {
+                bail!("backend down")
             }
             fn kind(&self) -> &'static str {
                 "failing"

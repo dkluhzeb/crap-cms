@@ -13,8 +13,9 @@ pub const COLLECTION_WRITE_OPERATIONS: &[&str] = &["create", "update", "undelete
 pub const DELETE_OPERATION: &str = "delete";
 
 /// A collection read's hooks (`before_read`, and `after_read` outside a live
-/// event).
-pub const COLLECTION_READ_OPERATIONS: &[&str] = &["find", "find_by_id"];
+/// event): a read of the collection, or — `get` — a global read embedding its
+/// documents as populated relationship targets.
+pub const COLLECTION_READ_OPERATIONS: &[&str] = &["find", "find_by_id", GLOBAL_READ_OPERATION];
 
 /// A global write's hooks — every global write, unpublish included, is an
 /// `update` to a hook.
@@ -102,8 +103,9 @@ pub fn hook_context_operations() -> Vec<&'static str> {
 mod tests {
     use super::*;
 
-    /// A collection hook names its writes, the delete and its reads; the
-    /// state-change undelete is among the writes.
+    /// A collection hook names its writes, the delete and its reads — `get`
+    /// being a global read embedding its documents; the state-change
+    /// undelete is among the writes.
     #[test]
     fn collection_hooks_see_every_write_and_read() {
         assert_eq!(
@@ -114,7 +116,8 @@ mod tests {
                 "undelete",
                 "delete",
                 "find",
-                "find_by_id"
+                "find_by_id",
+                "get"
             ]
         );
     }

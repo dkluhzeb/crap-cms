@@ -1,22 +1,43 @@
 //! Migration-time FTS table sync: drop + recreate the FTS5 / tsvector table
 //! and bulk-populate from the main table.
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 
-use crate::db::query::fts::fields::get_fts_columns;
 use crate::db::query::fts::index::{ColumnText, FtsIndex};
+use crate::db::query::fts::layout::{FtsColumn, PgVector, fts_columns, pg_vectors};
 use crate::db::query::fts::search::fts_table_name;
-use crate::db::query::fts::sync::helpers::pg_tsvector;
+use crate::db::query::fts::sync::helpers::{column_texts, pg_tsvector, pg_vector_texts};
 use crate::db::query::helpers::{placeholder_list, quote_ident};
-use crate::db::query::is_valid_identifier;
 use crate::db::{DbConnection, DbValue};
 
-/// The FTS table being rebuilt and the columns it indexes.
+/// The FTS table being rebuilt: its columns and, on Postgres, its tsvectors.
 struct IndexTable<'a> {
     name: &'a str,
-    columns: &'a [String],
-    /// `columns` quoted and comma-joined, for the INSERT column list.
-    column_list: &'a str,
+    columns: &'a [FtsColumn],
+    /// Empty on `SQLite`, which indexes each column separately.
+    vectors: &'a [PgVector],
+}
+
+impl IndexTable<'_> {
+    /// The quoted, comma-joined names the INSERT lists: the FTS5 columns on
+    /// `SQLite`, the tsvector columns on Postgres.
+    fn insert_columns(&self, conn: &dyn DbConnection) -> String {
+        let names: Vec<String> = if conn.is_postgres() {
+            self.vectors.iter().map(|v| quote_ident(&v.name)).collect()
+        } else {
+            self.columns.iter().map(|c| quote_ident(&c.name)).collect()
+        };
+
+        names.join(", ")
+    }
+
+    /// Each column's text read from the collection row, NULL as `''`.
+    fn read_exprs(&self) -> Vec<String> {
+        self.columns
+            .iter()
+            .map(|c| format!("COALESCE({}, '')", c.read_expr))
+            .collect()
+    }
 }
 
 /// Drop and recreate `index`'s FTS table, then bulk-populate it from the main
@@ -30,33 +51,28 @@ struct IndexTable<'a> {
 /// Returns a backend error if any DROP, CREATE, or INSERT fails.
 pub fn sync_fts_table(conn: &dyn DbConnection, index: &FtsIndex<'_>) -> Result<()> {
     let fts_table = fts_table_name(index.slug);
-    let fts_fields = get_fts_columns(index.def, index.locale_config)?;
 
-    // Validate field names BEFORE dropping the old table — if validation fails,
-    // the existing FTS index is preserved rather than silently lost.
-    for f in &fts_fields {
-        if !is_valid_identifier(f) {
-            bail!("Invalid FTS field name '{f}': must be alphanumeric/underscore");
-        }
-    }
+    // Resolve (and validate) the columns BEFORE dropping the old table — if
+    // resolution fails, the existing FTS index is preserved rather than lost.
+    let columns = fts_columns(index.def, index.locale_config)?;
+    let vectors = if conn.is_postgres() {
+        pg_vectors(&columns, index.locale_config)?
+    } else {
+        Vec::new()
+    };
 
     // Always drop existing FTS table first
     conn.execute_batch_ddl(&format!("DROP TABLE IF EXISTS {fts_table}"))
         .with_context(|| format!("Failed to drop FTS table {fts_table}"))?;
 
-    if fts_fields.is_empty() {
+    if columns.is_empty() {
         return Ok(());
     }
 
-    let column_list = fts_fields
-        .iter()
-        .map(|f| quote_ident(f))
-        .collect::<Vec<_>>()
-        .join(", ");
     let table = IndexTable {
         name: &fts_table,
-        columns: &fts_fields,
-        column_list: &column_list,
+        columns: &columns,
+        vectors: &vectors,
     };
 
     create_fts_table(conn, &table)?;
@@ -71,55 +87,74 @@ pub fn sync_fts_table(conn: &dyn DbConnection, index: &FtsIndex<'_>) -> Result<(
     }
 }
 
-/// Create the empty FTS table: a tsvector table with a GIN index on Postgres,
-/// an FTS5 virtual table on `SQLite`.
+/// Create the empty FTS table: on Postgres a table of tsvector columns, each
+/// with a GIN index; on `SQLite` an FTS5 virtual table.
 fn create_fts_table(conn: &dyn DbConnection, table: &IndexTable<'_>) -> Result<()> {
     let fts_table = table.name;
+    let columns = table.insert_columns(conn);
 
     if !conn.is_postgres() {
-        let create_sql = format!(
-            "CREATE VIRTUAL TABLE {fts_table} USING fts5(id UNINDEXED, {})",
-            table.column_list
-        );
+        let create_sql =
+            format!("CREATE VIRTUAL TABLE {fts_table} USING fts5(id UNINDEXED, {columns})");
 
         return conn
             .execute_batch_ddl(&create_sql)
             .with_context(|| format!("Failed to create FTS table {fts_table}"));
     }
 
-    // Regular table with a single tsvector column
-    let create_sql = format!("CREATE TABLE {fts_table} (id TEXT PRIMARY KEY, tsv TSVECTOR)");
+    let vector_defs: Vec<String> = table
+        .vectors
+        .iter()
+        .map(|v| format!("{} TSVECTOR", quote_ident(&v.name)))
+        .collect();
+    let create_sql = format!(
+        "CREATE TABLE {fts_table} (id TEXT PRIMARY KEY, {})",
+        vector_defs.join(", ")
+    );
+
     conn.execute_batch_ddl(&create_sql)
         .with_context(|| format!("Failed to create FTS table {fts_table}"))?;
 
-    // GIN index for fast tsvector lookups
-    let index_sql =
-        format!("CREATE INDEX IF NOT EXISTS idx_{fts_table}_tsv ON {fts_table} USING GIN(tsv)");
-    conn.execute_batch_ddl(&index_sql)
-        .with_context(|| format!("Failed to create GIN index on {fts_table}"))
+    // One GIN index per tsvector. Unnamed: Postgres picks a unique name, so a
+    // long slug truncated past the identifier limit can never collide with
+    // another index, and the drop above removes them with the table.
+    for vector in table.vectors {
+        let index_sql = format!(
+            "CREATE INDEX ON {fts_table} USING GIN({})",
+            quote_ident(&vector.name)
+        );
+
+        conn.execute_batch_ddl(&index_sql)
+            .with_context(|| format!("Failed to create GIN index on {fts_table}"))?;
+    }
+
+    Ok(())
 }
 
 /// Fast path: no rich text fields, pure SQL bulk insert.
 fn bulk_populate_fast(conn: &dyn DbConnection, slug: &str, table: &IndexTable<'_>) -> Result<()> {
     let fts_table = table.name;
-    let coalesce_fields: Vec<String> = table
-        .columns
-        .iter()
-        .map(|f| format!("COALESCE({}, '')", quote_ident(f)))
-        .collect();
+    let read_exprs = table.read_exprs();
 
-    let insert_sql = if conn.is_postgres() {
-        let tsvector_expr = pg_tsvector(&coalesce_fields.join(" || ' ' || "));
-        format!("INSERT INTO {fts_table}(id, tsv) SELECT id, {tsvector_expr} FROM \"{slug}\"")
+    let values: Vec<String> = if conn.is_postgres() {
+        table
+            .vectors
+            .iter()
+            .map(|v| {
+                let members: Vec<&str> =
+                    v.members.iter().map(|&i| read_exprs[i].as_str()).collect();
+                pg_tsvector(&members.join(" || ' ' || "))
+            })
+            .collect()
     } else {
-        format!(
-            "INSERT INTO {}(id, {}) SELECT id, {} FROM \"{}\"",
-            fts_table,
-            table.column_list,
-            coalesce_fields.join(", "),
-            slug
-        )
+        read_exprs
     };
+
+    let insert_sql = format!(
+        "INSERT INTO {fts_table}(id, {}) SELECT id, {} FROM \"{slug}\"",
+        table.insert_columns(conn),
+        values.join(", ")
+    );
 
     conn.execute_batch(&insert_sql)
         .with_context(|| format!("Failed to populate FTS table {fts_table}"))?;
@@ -136,12 +171,11 @@ fn bulk_populate_slow(
     column_text: &ColumnText<'_>,
 ) -> Result<()> {
     let fts_table = table.name;
-    let select_fields: Vec<String> = table
-        .columns
-        .iter()
-        .map(|f| format!("COALESCE({}, '')", quote_ident(f)))
-        .collect();
-    let select_sql = format!("SELECT id, {} FROM \"{}\"", select_fields.join(", "), slug);
+    let select_sql = format!(
+        "SELECT id, {} FROM \"{}\"",
+        table.read_exprs().join(", "),
+        slug
+    );
 
     let db_rows = conn
         .query_all(&select_sql, &[])
@@ -154,19 +188,14 @@ fn bulk_populate_slow(
             continue;
         };
 
-        let field_texts = table
-            .columns
-            .iter()
-            .enumerate()
-            .map(|(i, col)| column_text.text(col, row.text_at(i + 1).unwrap_or("")));
+        let texts = column_texts(table.columns, column_text, |i| row.text_at(i + 1));
 
         let mut params = vec![DbValue::Text(id)];
 
         if conn.is_postgres() {
-            // All field texts in one string for the tsvector
-            params.push(DbValue::Text(field_texts.collect::<Vec<_>>().join(" ")));
+            params.extend(pg_vector_texts(table.vectors, &texts).map(DbValue::Text));
         } else {
-            params.extend(field_texts.map(DbValue::Text));
+            params.extend(texts.into_iter().map(DbValue::Text));
         }
 
         conn.execute(&insert_sql, &params)
@@ -176,24 +205,26 @@ fn bulk_populate_slow(
     Ok(())
 }
 
-/// The per-row INSERT of the slow path: `(id, tsv)` on Postgres, `id` plus
-/// one placeholder per indexed column on `SQLite`.
+/// The per-row INSERT of the slow path: `id` plus one placeholder per indexed
+/// column on `SQLite`, one `to_tsvector` placeholder per tsvector on Postgres.
 fn bulk_insert_sql(conn: &dyn DbConnection, table: &IndexTable<'_>) -> String {
     let fts_table = table.name;
+    let columns = table.insert_columns(conn);
 
     if conn.is_postgres() {
-        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+        let values: Vec<String> = (0..table.vectors.len())
+            .map(|i| pg_tsvector(&conn.placeholder(i + 2)))
+            .collect();
+
         return format!(
-            "INSERT INTO {fts_table}(id, tsv) VALUES ({p1}, {})",
-            pg_tsvector(&p2)
+            "INSERT INTO {fts_table}(id, {columns}) VALUES ({}, {})",
+            conn.placeholder(1),
+            values.join(", ")
         );
     }
 
     let placeholders = placeholder_list(conn, table.columns.len() + 1);
-    format!(
-        "INSERT INTO {fts_table}(id, {}) VALUES ({placeholders})",
-        table.column_list
-    )
+    format!("INSERT INTO {fts_table}(id, {columns}) VALUES ({placeholders})")
 }
 
 #[cfg(test)]

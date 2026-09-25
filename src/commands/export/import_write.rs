@@ -48,7 +48,7 @@ impl Imported<'_> {
     pub(super) fn settle_ref_counts(&self, tx: &dyn DbConnection) -> Result<()> {
         let target = self.target;
 
-        query::ref_count::after_update(
+        query::ref_count::after_import(
             tx,
             target.slug,
             &self.id,

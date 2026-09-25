@@ -44,7 +44,7 @@ impl Operation for Count {
         // always agrees with the list it summarizes — on every surface.
         let mut filters = args.filters;
         normalize_filter_fields(&mut filters, &def.fields);
-        validate_user_filters(&filters).map_err(|e| ServiceError::HookError(e.to_string()))?;
+        validate_user_filters(&filters)?;
 
         let trash = args.trash && def.soft_delete;
 

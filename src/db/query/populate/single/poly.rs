@@ -30,7 +30,7 @@ enum PolyResolution {
 fn resolve_poly_item(
     ctx: &PopulateCtx<'_>,
     item: &str,
-    fetched_map: &mut HashMap<String, HashMap<String, Document>>,
+    fetched_map: &HashMap<String, HashMap<String, Document>>,
     views_by: &HashMap<String, TargetViews>,
     visited: &mut HashSet<(String, String)>,
 ) -> Result<PolyResolution> {
@@ -42,7 +42,7 @@ fn resolve_poly_item(
         return Ok(PolyResolution::KeepAsString(item.to_string()));
     }
 
-    let Some(col_map) = fetched_map.get_mut(&col) else {
+    let Some(col_map) = fetched_map.get(&col) else {
         return Ok(PolyResolution::KeepAsString(item.to_string()));
     };
 
@@ -51,8 +51,9 @@ fn resolve_poly_item(
     };
     let item_def = item_def.clone();
 
-    // DB miss (soft-deleted or truly missing): signal omission.
-    let Some(raw) = col_map.remove(&id) else {
+    // DB miss (soft-deleted or truly missing): signal omission. A copy, so a
+    // target referenced twice in one list is embedded twice.
+    let Some(raw) = col_map.get(&id).cloned() else {
         return Ok(PolyResolution::Missing);
     };
 
@@ -127,7 +128,7 @@ pub(super) fn populate_poly_has_many(
     // vanished / access-hidden targets do not leak as raw IDs into the output.
     let mut populated = Vec::new();
     for item in &items {
-        match resolve_poly_item(ctx, item, &mut fetched_map, &views_by, visited)? {
+        match resolve_poly_item(ctx, item, &fetched_map, &views_by, visited)? {
             PolyResolution::Populated(v) => populated.push(v),
             PolyResolution::KeepAsString(s) => populated.push(Value::String(s)),
             PolyResolution::Missing => {}
@@ -225,7 +226,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "entries",
-                def: &entries_def,
+                fields: &entries_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -275,7 +276,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "entries",
-                def: &entries_def,
+                fields: &entries_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -336,7 +337,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "entries",
-                def: &entries_def,
+                fields: &entries_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -392,7 +393,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "entries",
-                def: &entries_def,
+                fields: &entries_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -450,7 +451,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "entries",
-                def: &entries_def,
+                fields: &entries_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -501,7 +502,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "entries",
-                def: &entries_def,
+                fields: &entries_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -551,7 +552,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "entries",
-                def: &entries_def,
+                fields: &entries_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -605,7 +606,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "entries",
-                def: &entries_def,
+                fields: &entries_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -667,7 +668,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "entries",
-                def: &entries_def,
+                fields: &entries_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -720,7 +721,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "entries",
-                def: &entries_def,
+                fields: &entries_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -768,7 +769,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "entries",
-                def: &entries_def,
+                fields: &entries_def.fields,
             },
             &mut doc,
             &mut visited,

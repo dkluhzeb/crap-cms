@@ -638,3 +638,62 @@ async fn login_allowed_by_admin_access_gate() {
         .any(|v| v.to_str().unwrap_or("").contains("crap_session"));
     assert!(has_session, "Admin user should get a session cookie");
 }
+
+/// Regression: the login form accepted an email of any size, keyed a rate
+/// limiter with it and echoed it back into the page. An address longer than
+/// any deliverable one is refused as invalid credentials and never echoed.
+#[tokio::test]
+async fn login_with_an_overlong_email_is_refused_and_not_echoed() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+    let local = "x".repeat(300);
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/login")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Cookie", csrf_cookie())
+                .header("X-CSRF-Token", TEST_CSRF)
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from(format!(
+                    "collection=users&email={local}%40test.com&password=wrong"
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert!(
+        !body.contains(&local),
+        "the overlong address must not be reflected into the page"
+    );
+}
+
+/// Regression: the pre-auth routes inherited the upload-sized global body
+/// limit, so an anonymous login POST could make the server buffer tens of
+/// megabytes. They are capped at `[server] auth_body_limit` (64KB default).
+#[tokio::test]
+async fn login_body_over_the_auth_limit_is_refused_with_413() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+    let padding = "a".repeat(70 * 1024);
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/login")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Cookie", csrf_cookie())
+                .header("X-CSRF-Token", TEST_CSRF)
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from(format!(
+                    "collection=users&email=a%40test.com&password={padding}"
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}

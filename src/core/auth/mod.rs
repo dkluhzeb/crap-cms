@@ -24,7 +24,7 @@ pub mod totp;
 pub mod user;
 
 pub use claims::{Claims, ClaimsBuilder, TokenUse};
-pub use email::normalize_email;
+pub use email::{login_email_key, normalize_email};
 pub use hashed_password::HashedPassword;
 pub use jwt_secret::JwtSecret;
 pub use password::{

@@ -6,7 +6,6 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 
-use crate::core::collection::Auth;
 use crate::{
     admin::{
         AdminState,
@@ -19,8 +18,11 @@ use crate::{
         },
     },
     core::{
-        normalize_email,
-        rate_limit::{IP_RESEND_VERIFICATION_KEYSPACE, RESEND_VERIFICATION_KEYSPACE},
+        collection::Auth,
+        login_email_key,
+        rate_limit::{
+            AttemptBudget, IP_RESEND_VERIFICATION_KEYSPACE, RESEND_VERIFICATION_KEYSPACE,
+        },
     },
     service::ResendTarget,
 };
@@ -45,7 +47,14 @@ pub async fn resend_verification_action(
     }
 
     let collections = get_verifying_collections(&state);
-    let ip = client_ip(&headers, &addr, &state.config.server);
+    let client = client_ip(&headers, &addr, &state.config.server);
+
+    // The response is the same success page whatever happens, so refusing an
+    // address longer than any deliverable one — before it is keyed,
+    // throttled or looked up — leaks nothing.
+    let Some(email_key) = login_email_key(&form.email) else {
+        return render_resend_verification(&state, &collections, true);
+    };
 
     // Own keyspace, not the forgot-password limiters — matching what the
     // verify-email and reset-password routes already do. Sharing would let a
@@ -53,15 +62,11 @@ pub async fn resend_verification_action(
     // password reset, and would let one NAT'd office IP do it for everyone
     // behind it.
     //
-    // Recorded atomically against both limiters, and both are evaluated so
-    // each counter advances on every attempt. Returning the generic success
-    // on a block leaks nothing — the response is always the same. The
-    // per-email key is the address in its stored form because the account
-    // lookup compares that form, so spelling variants must share a bucket.
-    //
     // Derived from the forgot-password limiters with `rescoped`, exactly as
     // the gRPC twin does: the same thresholds and window, a separate budget.
     // Both surfaces build these the one way, so they cannot drift apart.
+    // Recorded atomically, IP budget first (see `AttemptBudget`); a block
+    // returns the same success page, so it leaks nothing.
     let email_limiter = state
         .forgot_password_limiter
         .rescoped(RESEND_VERIFICATION_KEYSPACE);
@@ -69,11 +74,7 @@ pub async fn resend_verification_action(
         .ip_forgot_password_limiter
         .rescoped(IP_RESEND_VERIFICATION_KEYSPACE);
 
-    let email_key = normalize_email(&form.email);
-
-    let email_blocked = email_limiter.check_and_block(&email_key);
-    let ip_blocked = ip_limiter.check_and_block(&ip);
-    if email_blocked || ip_blocked {
+    if AttemptBudget::new(&ip_limiter, &email_limiter).check_and_block(&client, &email_key) {
         return render_resend_verification(&state, &collections, true);
     }
 

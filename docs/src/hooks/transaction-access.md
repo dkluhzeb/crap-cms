@@ -49,6 +49,42 @@ This applies to **all write hooks**: `before_validate`, `before_change`, `after_
 
 If any hook (before or after) returns an error or throws a Lua error, the entire transaction is rolled back and the operation fails with an error message. This includes after-hooks — an `after_change` error will roll back the main DB operation too.
 
+### Each CRUD call is one atomic step
+
+Every `crap.*` CRUD call made on a shared transaction runs as one atomic step
+of it, backed by a database `SAVEPOINT`. A call that fails leaves nothing
+behind — none of its own writes, no live event, no pending verification, no
+upload-file deletion and no `crap.tx.on_commit` effect it registered (its
+`crap.tx.on_rollback` compensations are kept, and run whatever the
+transaction's outcome) — and the transaction stays usable. So a hook that
+catches a failed call with `pcall` and carries on commits exactly what the
+rest of it did:
+
+```lua
+function M.after_change(ctx)
+    local ok, err = pcall(crap.collections.audit_log.create, { action = "update" })
+    if not ok then
+        crap.log.warn("audit entry skipped: " .. tostring(err))
+    end
+    return ctx
+end
+```
+
+Both backends behave the same way. (Without the step, Postgres would abort
+the whole transaction at the failed statement and its commit would silently
+roll back the operation's own write too, while `SQLite` would keep the failed
+call's partial writes.) A `crap.transaction(fn)` block inside a hook is one
+such step as well: an error inside the block — even one the caller catches —
+rolls back the block's writes only.
+
+Should a commit find its transaction already aborted by the database, it
+fails with an error instead of reporting success. One failure is not a step's
+alone: on `SQLite`, a write statement interrupted for running past its time
+limit (`[database] statement_timeout`), or failing on a full disk or an I/O
+error, makes `SQLite` roll back the whole transaction. Every later call in it
+then fails, and so does its commit — catching the error with `pcall` cannot
+save the operation.
+
 ## Transaction-Outcome Effects
 
 A hook runs *inside* the write transaction, but its external side effects
@@ -217,9 +253,9 @@ Collection, global, and field-level access control functions run with CRUD acces
 
 ## Auth Strategies
 
-Custom auth strategy `authenticate` functions run with CRUD access **inside a transaction that commits only when the strategy authenticates someone**. A strategy that returns `nil` or raises rolls its writes back — failed attempts are unauthenticated, attacker-controlled input, so persisting their side effects would let anyone grow the database from the login endpoint. "Find or create user" flows work unchanged (the create commits with the successful login). For failed-attempt bookkeeping use the built-in rate limiters (counters) and `crap.log` (observability) — both live outside this transaction. The transaction is opened on the login's write connection at login, on the request's own read connection when a strategy authenticates a request, and — in an auth callback — on a write connection taken at the hook's first CRUD call, so the provider round trips before it hold none. See [Custom Strategies → CRUD Access](../authentication/custom-strategies.md#crud-access) for what that means for per-request writes.
+Custom auth strategy `authenticate` functions run with CRUD access **in a transaction that commits only when the strategy authenticates someone**. A strategy that returns `nil` or raises rolls its writes back — failed attempts are unauthenticated, attacker-controlled input, so persisting their side effects would let anyone grow the database from the login endpoint. "Find or create user" flows work unchanged (the create commits with the successful login). For failed-attempt bookkeeping use the built-in rate limiters (counters) and `crap.log` (observability) — both live outside this transaction. A strategy's reads run on the caller's connection — the login's, or the request's own read connection when a strategy authenticates a request — and only its first write takes a write connection and opens the transaction, which every later call shares. An auth callback's transaction opens on a write connection at the hook's first CRUD call, so the provider round trips before it hold none. Either way the transaction takes the write lock when it opens (on SQLite), and it has the full scope of every other write: the live events of what it wrote, populate-cache invalidation, account verification emails, upload-file cleanup and `crap.tx` effects, all delivered only after it commits — so a collection `after_change` hook using `crap.tx.on_commit` works when a callback provisions a user on first sign-in. See [Custom Strategies → CRUD Access](../authentication/custom-strategies.md#crud-access) for what that means for per-request writes.
 
 The `password_login` method's other hooks:
 
 - **`mfa_when`** is a predicate and runs **read-only**: reads work, every write raises an error naming the gate (which fails closed). It runs at login and on each request a session without the second factor authenticates.
-- **`mfa_deliver`** runs after the code is stored, holding no connection while it delivers. Its CRUD takes a write connection at its first call, in one transaction that commits when the hook returns and rolls back when it raises.
+- **`mfa_deliver`** runs after the code is stored, holding no connection while it delivers. Its CRUD takes a write connection at its first call, in one transaction — with the same full scope — that commits when the hook returns and rolls back when it raises.

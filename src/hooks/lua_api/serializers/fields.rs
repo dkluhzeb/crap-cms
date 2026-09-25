@@ -102,7 +102,7 @@ fn set_field_constraints(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResu
     Ok(())
 }
 
-/// Set the join field's top-level `collection`/`on` keys (required for
+/// Set the join field's top-level `collection`/`on` (and optional `limit`) keys (required for
 /// `type = "join"`; the strict parser rejects a join without them, so
 /// dropping them used to break every plugin re-define of a join-bearing
 /// collection).
@@ -113,6 +113,8 @@ fn set_field_join(tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
 
     tbl.set("collection", &*jc.collection)?;
     tbl.set("on", jc.on.as_str())?;
+    tbl.set("limit", jc.limit)?;
+
     Ok(())
 }
 

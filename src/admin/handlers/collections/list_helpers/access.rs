@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::{admin::handlers::shared::auto_label_from_name, core::FieldDefinition};
+use crate::core::FieldDefinition;
 
 /// The fields the list view may offer the viewer as a column, a sort, or a
 /// filter: never a `hidden` field, and never one the read refuses to sort or
@@ -27,36 +27,10 @@ impl ListFieldAccess {
     }
 }
 
-/// Get the display label for a field (admin label or auto-generated from name).
-pub(in crate::admin::handlers::collections) fn field_label(field: &FieldDefinition) -> String {
-    match &field.admin.label {
-        Some(label) => label.resolve_current().to_string(),
-        None => auto_label_from_name(&field.name),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FieldAdmin, FieldType, LocalizedString};
-
-    #[test]
-    fn field_label_uses_admin_label() {
-        let f = FieldDefinition::builder("my_field", FieldType::Text)
-            .admin(
-                FieldAdmin::builder()
-                    .label(LocalizedString::Plain("Custom Label".into()))
-                    .build(),
-            )
-            .build();
-        assert_eq!(field_label(&f), "Custom Label");
-    }
-
-    #[test]
-    fn field_label_falls_back_to_name() {
-        let f = FieldDefinition::builder("my_field", FieldType::Text).build();
-        assert_eq!(field_label(&f), "My Field");
-    }
+    use crate::core::FieldType;
 
     #[test]
     fn hidden_and_unreadable_fields_are_not_offered() {

@@ -64,7 +64,7 @@ fn type_specific_field_keys(field_type: &FieldType) -> &'static [&'static str] {
         FieldType::Group | FieldType::Row | FieldType::Collapsible => &["fields"],
         FieldType::Tabs => &["tabs"],
         FieldType::Blocks => &["blocks", "min_rows", "max_rows"],
-        FieldType::Join => &["collection", "on"],
+        FieldType::Join => &["collection", "on", "limit"],
     }
 }
 

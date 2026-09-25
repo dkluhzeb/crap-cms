@@ -3,24 +3,24 @@
 
 ---@class crap.data.2fa
 ---@field id? string
----@field type? string
----@field ["2fa"]? string
----@field ["end"]? string
----@field ["private"]? string
+---@field type? string|crap.Null
+---@field ["2fa"]? string|crap.Null
+---@field ["end"]? string|crap.Null
+---@field ["private"]? string|crap.Null
 ---@field created_at? string
 ---@field updated_at? string
 
 ---@class crap.input.2fa
 ---@field type string
----@field ["2fa"]? string
----@field ["end"]? string
----@field ["private"]? string
+---@field ["2fa"]? string|crap.Null
+---@field ["end"]? string|crap.Null
+---@field ["private"]? string|crap.Null
 
 ---@class crap.partial_many.2fa
----@field type? string
----@field ["2fa"]? string
----@field ["end"]? string
----@field ["private"]? string
+---@field type? string|crap.Null
+---@field ["2fa"]? string|crap.Null
+---@field ["end"]? string|crap.Null
+---@field ["private"]? string|crap.Null
 
 ---@class crap.partial.2fa : crap.partial_many.2fa
 
@@ -36,7 +36,7 @@
 
 ---@class crap.hook.2fa
 ---@field collection "2fa"
----@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id"
+---@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id" | "get"
 ---@field data crap.data.2fa
 ---@field id? string
 ---@field context table<string, any>
@@ -50,7 +50,7 @@
 
 ---@class crap.read_hook.2fa
 ---@field collection "2fa"
----@field operation "find" | "find_by_id" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
+---@field operation "find" | "find_by_id" | "get" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
 ---@field data crap.doc.2fa
 ---@field id? string
 ---@field context table<string, any>
@@ -82,7 +82,7 @@
 ---@field ui_locale? string
 ---@field options? table
 
----@class (exact) crap.where.2fa
+---@class (exact) crap.where_group.2fa
 ---@field id? crap.FilterValue
 ---@field type? crap.FilterValue
 ---@field ["2fa"]? crap.FilterValue
@@ -90,6 +90,9 @@
 ---@field ["private"]? crap.FilterValue
 ---@field created_at? crap.FilterValue
 ---@field updated_at? crap.FilterValue
+
+---@class (exact) crap.where.2fa : crap.where_group.2fa
+---@field ["or"]? crap.where_group.2fa[] Alternatives: a document matches when any one group matches
 
 ---@class (exact) crap.query.2fa : crap.FindQuery
 ---@field where? crap.where.2fa
@@ -256,31 +259,31 @@ function _coll_2fa.row_label(fn) end
 
 ---@class crap.data.Media
 ---@field id? string
----@field filename? string
----@field mime_type? string
----@field filesize? number
----@field width? number
----@field height? number
----@field url? string
----@field focal_x? number
----@field focal_y? number
----@field thumbnail_url? string
----@field thumbnail_width? number
----@field thumbnail_height? number
----@field thumbnail_webp_url? string
----@field alt? string
+---@field filename? string|crap.Null
+---@field mime_type? string|crap.Null
+---@field filesize? number|crap.Null
+---@field width? number|crap.Null
+---@field height? number|crap.Null
+---@field url? string|crap.Null
+---@field focal_x? number|crap.Null
+---@field focal_y? number|crap.Null
+---@field thumbnail_url? string|crap.Null
+---@field thumbnail_width? number|crap.Null
+---@field thumbnail_height? number|crap.Null
+---@field thumbnail_webp_url? string|crap.Null
+---@field alt? string|crap.Null
 ---@field created_at? string
 ---@field updated_at? string
 
 ---@class crap.input.Media
----@field focal_x? number
----@field focal_y? number
----@field alt? string
+---@field focal_x? number|crap.Null
+---@field focal_y? number|crap.Null
+---@field alt? string|crap.Null
 
 ---@class crap.partial_many.Media
----@field focal_x? number
----@field focal_y? number
----@field alt? string
+---@field focal_x? number|crap.Null
+---@field focal_y? number|crap.Null
+---@field alt? string|crap.Null
 
 ---@class crap.partial.Media : crap.partial_many.Media
 
@@ -302,7 +305,7 @@ function _coll_2fa.row_label(fn) end
 
 ---@class crap.hook.Media
 ---@field collection "media"
----@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id"
+---@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id" | "get"
 ---@field data crap.data.Media
 ---@field id? string
 ---@field context table<string, any>
@@ -316,7 +319,7 @@ function _coll_2fa.row_label(fn) end
 
 ---@class crap.read_hook.Media
 ---@field collection "media"
----@field operation "find" | "find_by_id" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
+---@field operation "find" | "find_by_id" | "get" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
 ---@field data crap.doc.Media
 ---@field id? string
 ---@field context table<string, any>
@@ -348,7 +351,7 @@ function _coll_2fa.row_label(fn) end
 ---@field ui_locale? string
 ---@field options? table
 
----@class (exact) crap.where.Media
+---@class (exact) crap.where_group.Media
 ---@field id? crap.FilterValue
 ---@field filename? crap.FilterValue
 ---@field mime_type? crap.FilterValue
@@ -365,6 +368,9 @@ function _coll_2fa.row_label(fn) end
 ---@field alt? crap.FilterValue
 ---@field created_at? crap.FilterValue
 ---@field updated_at? crap.FilterValue
+
+---@class (exact) crap.where.Media : crap.where_group.Media
+---@field ["or"]? crap.where_group.Media[] Alternatives: a document matches when any one group matches
 
 ---@class (exact) crap.query.Media : crap.FindQuery
 ---@field where? crap.where.Media
@@ -525,20 +531,24 @@ function _coll_media.row_label(fn) end
 
 ---@class crap.group.PostsSeo
 ---@field meta_title string
----@field meta_desc? string
+---@field meta_desc? string|crap.Null
 
 ---@class crap.array_row.PostsItems
 ---@field id? string
 ---@field label string
 ---@field meta? crap.group.PostsItemsMeta
----@field notes? crap.array_row.PostsItemsNotes[]
----@field secret? string
+---@field notes? crap.array_row.PostsItemsNotes[]|crap.Null
+---@field secret? string|crap.Null
 
 ---@class crap.group.PostsItemsMeta
 ---@field key string
 
 ---@class crap.array_row.PostsItemsNotes
----@field body? string
+---@field body? string|crap.Null
+
+---@class crap.group_partial.PostsSeo
+---@field meta_title? string|crap.Null
+---@field meta_desc? string|crap.Null
 
 ---@class crap.doc_group.PostsSeo
 ---@field meta_title? string
@@ -558,105 +568,105 @@ function _coll_media.row_label(fn) end
 
 ---@class crap.data.Posts
 ---@field id? string
----@field title? string
----@field summary? string
----@field published_at? string
----@field published_at_tz? string
----@field snippet? string
----@field snippet_lang? string
----@field body? string|table
----@field teaser? string
----@field scores? number[]
----@field keywords? string[]
----@field active? boolean
----@field data? any
----@field internal_note? string
----@field status? "draft" | "published"
----@field layout? "grid" | "list"
----@field categories? ("news" | "guides"|string)[]
----@field author? string
----@field tags? string[]
----@field cover? string
+---@field title? string|crap.Null
+---@field summary? string|crap.Null
+---@field published_at? string|crap.Null
+---@field published_at_tz? string|crap.Null
+---@field snippet? string|crap.Null
+---@field snippet_lang? string|crap.Null
+---@field body? string|table|crap.Null
+---@field teaser? string|crap.Null
+---@field scores? number[]|crap.Null
+---@field keywords? string[]|crap.Null
+---@field active? boolean|crap.Null
+---@field data? any|crap.Null
+---@field internal_note? string|crap.Null
+---@field status? "draft" | "published"|crap.Null
+---@field layout? "grid" | "list"|crap.Null
+---@field categories? ("news" | "guides"|string)[]|crap.Null
+---@field author? string|crap.Null
+---@field tags? string[]|crap.Null
+---@field cover? string|crap.Null
 --- Polymorphic relationship — targets: users, tags
----@field related? string[]
+---@field related? string[]|crap.Null
 --- Polymorphic relationship — targets: users, tags
----@field featured? string
----@field seo? crap.group.PostsSeo
----@field items? crap.array_row.PostsItems[]
----@field content? table[]
+---@field featured? string|crap.Null
+---@field seo? crap.group_partial.PostsSeo
+---@field items? crap.array_row.PostsItems[]|crap.Null
+---@field content? table[]|crap.Null
 ---@field extra? table
----@field raw_rows? table[]
----@field byline? string
----@field aside? string
----@field tab_note? string
+---@field raw_rows? table[]|crap.Null
+---@field byline? string|crap.Null
+---@field aside? string|crap.Null
+---@field tab_note? string|crap.Null
 ---@field created_at? string
 ---@field updated_at? string
 
 ---@class crap.input.Posts
 ---@field title string
----@field summary? string
----@field published_at? string
----@field published_at_tz? string
----@field snippet? string
----@field snippet_lang? string
----@field body? string|table
----@field teaser? string
----@field scores? number[]
----@field keywords? string[]
----@field active? boolean
----@field data? any
----@field internal_note? string
+---@field summary? string|crap.Null
+---@field published_at? string|crap.Null
+---@field published_at_tz? string|crap.Null
+---@field snippet? string|crap.Null
+---@field snippet_lang? string|crap.Null
+---@field body? string|table|crap.Null
+---@field teaser? string|crap.Null
+---@field scores? number[]|crap.Null
+---@field keywords? string[]|crap.Null
+---@field active? boolean|crap.Null
+---@field data? any|crap.Null
+---@field internal_note? string|crap.Null
 ---@field status "draft" | "published"
----@field layout? "grid" | "list"
----@field categories? ("news" | "guides"|string)[]
+---@field layout? "grid" | "list"|crap.Null
+---@field categories? ("news" | "guides"|string)[]|crap.Null
 ---@field author string
----@field tags? string[]
----@field cover? string
+---@field tags? string[]|crap.Null
+---@field cover? string|crap.Null
 --- Polymorphic relationship — targets: users, tags
----@field related? string[]
+---@field related? string[]|crap.Null
 --- Polymorphic relationship — targets: users, tags
----@field featured? string
+---@field featured? string|crap.Null
 ---@field seo? crap.group.PostsSeo
----@field items? crap.array_row.PostsItems[]
----@field content? table[]
+---@field items? crap.array_row.PostsItems[]|crap.Null
+---@field content? table[]|crap.Null
 ---@field extra? table
----@field raw_rows? table[]
----@field byline? string
----@field aside? string
+---@field raw_rows? table[]|crap.Null
+---@field byline? string|crap.Null
+---@field aside? string|crap.Null
 ---@field tab_note string
 
 ---@class crap.partial_many.Posts
----@field title? string
----@field summary? string
----@field published_at? string
----@field published_at_tz? string
----@field snippet? string
----@field snippet_lang? string
----@field body? string|table
----@field teaser? string
----@field scores? number[]
----@field keywords? string[]
----@field active? boolean
----@field data? any
----@field internal_note? string
----@field status? "draft" | "published"
----@field layout? "grid" | "list"
----@field categories? ("news" | "guides"|string)[]
----@field author? string
----@field tags? string[]
----@field cover? string
+---@field title? string|crap.Null
+---@field summary? string|crap.Null
+---@field published_at? string|crap.Null
+---@field published_at_tz? string|crap.Null
+---@field snippet? string|crap.Null
+---@field snippet_lang? string|crap.Null
+---@field body? string|table|crap.Null
+---@field teaser? string|crap.Null
+---@field scores? number[]|crap.Null
+---@field keywords? string[]|crap.Null
+---@field active? boolean|crap.Null
+---@field data? any|crap.Null
+---@field internal_note? string|crap.Null
+---@field status? "draft" | "published"|crap.Null
+---@field layout? "grid" | "list"|crap.Null
+---@field categories? ("news" | "guides"|string)[]|crap.Null
+---@field author? string|crap.Null
+---@field tags? string[]|crap.Null
+---@field cover? string|crap.Null
 --- Polymorphic relationship — targets: users, tags
----@field related? string[]
+---@field related? string[]|crap.Null
 --- Polymorphic relationship — targets: users, tags
----@field featured? string
----@field seo? crap.group.PostsSeo
----@field items? crap.array_row.PostsItems[]
----@field content? table[]
+---@field featured? string|crap.Null
+---@field seo? crap.group_partial.PostsSeo
+---@field items? crap.array_row.PostsItems[]|crap.Null
+---@field content? table[]|crap.Null
 ---@field extra? table
----@field raw_rows? table[]
----@field byline? string
----@field aside? string
----@field tab_note? string
+---@field raw_rows? table[]|crap.Null
+---@field byline? string|crap.Null
+---@field aside? string|crap.Null
+---@field tab_note? string|crap.Null
 
 ---@class crap.partial.Posts : crap.partial_many.Posts
 
@@ -698,9 +708,57 @@ function _coll_media.row_label(fn) end
 ---@field created_at? string
 ---@field updated_at? string
 
+---@class crap.doc_group_localized.PostsSeo
+---@field meta_title? table<string, string>
+---@field meta_desc? table<string, string>
+
+---@class crap.doc_localized.Posts : crap.Document
+---@field id string
+---@field title? string
+---@field summary? table<string, string>
+---@field published_at? string
+---@field published_at_tz? string
+---@field snippet? string
+---@field snippet_lang? string
+---@field body? table
+---@field teaser? string
+---@field scores? number[]
+---@field keywords? string[]
+---@field active? boolean
+---@field data? any
+---@field status? "draft" | "published"
+---@field layout? "grid" | "list"
+---@field categories? ("news" | "guides"|string)[]
+---@field author? string|crap.doc.Users
+---@field tags? (string|crap.doc.Tags)[]
+---@field cover? string|crap.doc.Media
+--- Polymorphic relationship — targets: users, tags
+---@field related? (string|crap.doc.Users|crap.doc.Tags)[]
+--- Polymorphic relationship — targets: users, tags
+---@field featured? string|crap.doc.Users|crap.doc.Tags
+---@field seo? crap.doc_group_localized.PostsSeo
+---@field items? crap.doc_row.PostsItems[]
+---@field content? table[]
+---@field extra? table
+---@field raw_rows? table[]
+---@field byline? string
+---@field aside? string
+---@field tab_note? string
+---@field _status? "draft" | "published"
+---@field _deleted_at? string
+---@field collection? "posts" Set when embedded as a populated relationship
+---@field created_at? string
+---@field updated_at? string
+
+---@class crap.find_result_localized.Posts : crap.FindResult
+---@field documents crap.doc_localized.Posts[]
+
+---@class crap.query_all_locales.Posts : crap.query.Posts
+---@field locale "all" Every locale at once
+
 ---@class crap.hook.Posts
 ---@field collection "posts"
----@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id"
+---@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id" | "get"
 ---@field data crap.data.Posts
 ---@field id? string
 ---@field context table<string, any>
@@ -714,7 +772,7 @@ function _coll_media.row_label(fn) end
 
 ---@class crap.read_hook.Posts
 ---@field collection "posts"
----@field operation "find" | "find_by_id" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
+---@field operation "find" | "find_by_id" | "get" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
 ---@field data crap.doc.Posts
 ---@field id? string
 ---@field context table<string, any>
@@ -746,7 +804,7 @@ function _coll_media.row_label(fn) end
 ---@field ui_locale? string
 ---@field options? table
 
----@class (exact) crap.where.Posts
+---@class (exact) crap.where_group.Posts
 ---@field id? crap.FilterValue
 ---@field title? crap.FilterValue
 ---@field summary? crap.FilterValue
@@ -765,16 +823,31 @@ function _coll_media.row_label(fn) end
 ---@field cover? crap.FilterValue
 ---@field featured? crap.FilterValue
 ---@field seo__meta_title? crap.FilterValue
+---@field ["seo.meta_title"]? crap.FilterValue
 ---@field seo__meta_desc? crap.FilterValue
+---@field ["seo.meta_desc"]? crap.FilterValue
 ---@field byline? crap.FilterValue
 ---@field aside? crap.FilterValue
 ---@field tab_note? crap.FilterValue
 ---@field created_at? crap.FilterValue
 ---@field updated_at? crap.FilterValue
+---@field ["tags.id"]? crap.FilterValue
+---@field ["related.id"]? crap.FilterValue
+---@field ["items.id"]? crap.FilterValue
+---@field ["items.label"]? crap.FilterValue
+---@field ["items.meta.key"]? crap.FilterValue
+---@field ["items.notes.body"]? crap.FilterValue
+---@field ["content.id"]? crap.FilterValue
+---@field ["content._block_type"]? crap.FilterValue
+---@field ["content.body"]? crap.FilterValue
+---@field ["raw_rows.id"]? crap.FilterValue
+
+---@class (exact) crap.where.Posts : crap.where_group.Posts
+---@field ["or"]? crap.where_group.Posts[] Alternatives: a document matches when any one group matches
 
 ---@class (exact) crap.query.Posts : crap.FindQuery
 ---@field where? crap.where.Posts
----@field order_by? "id"|"-id"|"title"|"-title"|"summary"|"-summary"|"published_at"|"-published_at"|"snippet"|"-snippet"|"body"|"-body"|"teaser"|"-teaser"|"active"|"-active"|"data"|"-data"|"status"|"-status"|"layout"|"-layout"|"author"|"-author"|"cover"|"-cover"|"featured"|"-featured"|"seo__meta_title"|"-seo__meta_title"|"seo__meta_desc"|"-seo__meta_desc"|"byline"|"-byline"|"aside"|"-aside"|"tab_note"|"-tab_note"|"_status"|"-_status"|"_deleted_at"|"-_deleted_at"|"created_at"|"-created_at"|"updated_at"|"-updated_at"|"_rank"
+---@field order_by? "id"|"-id"|"title"|"-title"|"summary"|"-summary"|"published_at"|"-published_at"|"snippet"|"-snippet"|"body"|"-body"|"teaser"|"-teaser"|"active"|"-active"|"data"|"-data"|"status"|"-status"|"layout"|"-layout"|"author"|"-author"|"cover"|"-cover"|"featured"|"-featured"|"seo__meta_title"|"-seo__meta_title"|"seo.meta_title"|"-seo.meta_title"|"seo__meta_desc"|"-seo__meta_desc"|"seo.meta_desc"|"-seo.meta_desc"|"byline"|"-byline"|"aside"|"-aside"|"tab_note"|"-tab_note"|"_status"|"-_status"|"_deleted_at"|"-_deleted_at"|"created_at"|"-created_at"|"updated_at"|"-updated_at"|"_rank"
 ---@field limit? integer
 ---@field offset? integer
 ---@field locale? string
@@ -784,16 +857,19 @@ local _coll_posts = {}
 
 ---@param query? crap.query.Posts
 ---@return crap.find_result.Posts
+---@overload fun(query: crap.query_all_locales.Posts): crap.find_result_localized.Posts
 function _coll_posts.find(query) end
 
 ---@param id string
 ---@param opts? crap.FindByIdOptions
 ---@return crap.doc.Posts?
+---@overload fun(id: string, opts: crap.AllLocalesFindByIdOptions): crap.doc_localized.Posts?
 function _coll_posts.find_by_id(id, opts) end
 
 ---@param data crap.input.Posts
 ---@param opts? crap.CreateOptions
 ---@return crap.doc.Posts
+---@overload fun(data: crap.partial.Posts, opts: crap.DraftCreateOptions): crap.doc.Posts
 function _coll_posts.create(data, opts) end
 
 ---@param id string
@@ -820,6 +896,7 @@ function _coll_posts.undelete(id, opts) end
 ---@param data crap.input.Posts
 ---@param opts? crap.ValidateOptions
 ---@return crap.ValidateResult
+---@overload fun(data: crap.partial.Posts, opts: crap.DraftValidateOptions): crap.ValidateResult
 function _coll_posts.validate(data, opts) end
 
 ---@param query? crap.CountQuery
@@ -829,6 +906,7 @@ function _coll_posts.count(query) end
 ---@param items crap.input.Posts[]
 ---@param opts? crap.CreateOptions
 ---@return crap.CreateManyResult
+---@overload fun(items: crap.partial.Posts[], opts: crap.DraftCreateOptions): crap.CreateManyResult
 function _coll_posts.create_many(items, opts) end
 
 ---@param query crap.UpdateManyQuery
@@ -937,7 +1015,7 @@ function _coll_posts.row_label(fn) end
 
 ---@class crap.data.Tags
 ---@field id? string
----@field name? string
+---@field name? string|crap.Null
 ---@field created_at? string
 ---@field updated_at? string
 
@@ -945,7 +1023,7 @@ function _coll_posts.row_label(fn) end
 ---@field name string
 
 ---@class crap.partial_many.Tags
----@field name? string
+---@field name? string|crap.Null
 
 ---@class crap.partial.Tags : crap.partial_many.Tags
 
@@ -958,7 +1036,7 @@ function _coll_posts.row_label(fn) end
 
 ---@class crap.hook.Tags
 ---@field collection "tags"
----@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id"
+---@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id" | "get"
 ---@field data crap.data.Tags
 ---@field id? string
 ---@field context table<string, any>
@@ -972,7 +1050,7 @@ function _coll_posts.row_label(fn) end
 
 ---@class crap.read_hook.Tags
 ---@field collection "tags"
----@field operation "find" | "find_by_id" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
+---@field operation "find" | "find_by_id" | "get" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
 ---@field data crap.doc.Tags
 ---@field id? string
 ---@field context table<string, any>
@@ -1004,11 +1082,14 @@ function _coll_posts.row_label(fn) end
 ---@field ui_locale? string
 ---@field options? table
 
----@class (exact) crap.where.Tags
+---@class (exact) crap.where_group.Tags
 ---@field id? crap.FilterValue
 ---@field name? crap.FilterValue
 ---@field created_at? crap.FilterValue
 ---@field updated_at? crap.FilterValue
+
+---@class (exact) crap.where.Tags : crap.where_group.Tags
+---@field ["or"]? crap.where_group.Tags[] Alternatives: a document matches when any one group matches
 
 ---@class (exact) crap.query.Tags : crap.FindQuery
 ---@field where? crap.where.Tags
@@ -1157,9 +1238,8 @@ function _coll_tags.row_label(fn) end
 
 ---@class crap.data.Users
 ---@field id? string
----@field email? string
----@field name? string
----@field authored? table[]
+---@field email? string|crap.Null
+---@field name? string|crap.Null
 ---@field created_at? string
 ---@field updated_at? string
 
@@ -1169,8 +1249,8 @@ function _coll_tags.row_label(fn) end
 ---@field password? string Hashed on write, never read back
 
 ---@class crap.partial_many.Users
----@field email? string
----@field name? string
+---@field email? string|crap.Null
+---@field name? string|crap.Null
 
 ---@class crap.partial.Users : crap.partial_many.Users
 ---@field password? string Replaces the stored password (empty keeps it)
@@ -1186,7 +1266,7 @@ function _coll_tags.row_label(fn) end
 
 ---@class crap.hook.Users
 ---@field collection "users"
----@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id"
+---@field operation "create" | "update" | "undelete" | "delete" | "find" | "find_by_id" | "get"
 ---@field data crap.data.Users
 ---@field id? string
 ---@field context table<string, any>
@@ -1200,7 +1280,7 @@ function _coll_tags.row_label(fn) end
 
 ---@class crap.read_hook.Users
 ---@field collection "users"
----@field operation "find" | "find_by_id" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
+---@field operation "find" | "find_by_id" | "get" | "create" | "update" | "delete" | "undelete" | "unpublish" | "restore"
 ---@field data crap.doc.Users
 ---@field id? string
 ---@field context table<string, any>
@@ -1232,12 +1312,15 @@ function _coll_tags.row_label(fn) end
 ---@field ui_locale? string
 ---@field options? table
 
----@class (exact) crap.where.Users
+---@class (exact) crap.where_group.Users
 ---@field id? crap.FilterValue
 ---@field email? crap.FilterValue
 ---@field name? crap.FilterValue
 ---@field created_at? crap.FilterValue
 ---@field updated_at? crap.FilterValue
+
+---@class (exact) crap.where.Users : crap.where_group.Users
+---@field ["or"]? crap.where_group.Users[] Alternatives: a document matches when any one group matches
 
 ---@class (exact) crap.query.Users : crap.FindQuery
 ---@field where? crap.where.Users
@@ -1397,18 +1480,26 @@ function _coll_users.row_label(fn) end
 
 ---@class crap.global_data.Settings
 ---@field id? string
----@field site_name? string
----@field nav? crap.array_row.SettingsNav[]
+---@field site_name? string|crap.Null
+---@field nav? crap.array_row.SettingsNav[]|crap.Null
 ---@field created_at? string
 ---@field updated_at? string
 
 ---@class crap.global_partial.Settings
----@field site_name? string
----@field nav? crap.array_row.SettingsNav[]
+---@field site_name? string|crap.Null
+---@field nav? crap.array_row.SettingsNav[]|crap.Null
 
 ---@class crap.global_doc.Settings : crap.Document
 ---@field id string
 ---@field site_name? string
+---@field nav? crap.doc_row.SettingsNav[]
+---@field _status? "draft" | "published"
+---@field created_at? string
+---@field updated_at? string
+
+---@class crap.global_doc_localized.Settings : crap.Document
+---@field id string
+---@field site_name? table<string, string>
 ---@field nav? crap.doc_row.SettingsNav[]
 ---@field _status? "draft" | "published"
 ---@field created_at? string
@@ -1464,6 +1555,7 @@ local _glob_settings = {}
 
 ---@param opts? crap.GlobalGetOptions
 ---@return crap.global_doc.Settings
+---@overload fun(opts: crap.AllLocalesGlobalGetOptions): crap.global_doc_localized.Settings
 function _glob_settings.get(opts) end
 
 ---@param data crap.global_partial.Settings

@@ -1,19 +1,28 @@
 //! Path jail for the Lua `io` library.
 //!
 //! Hook code keeps `io` file access (custom storage backends map to the
-//! filesystem), but only below the allowed roots: the config directory plus
-//! the operator's `[hooks] io_roots`. Inside them the process's own secrets
-//! stay out of reach — the config file, the data directory (generated auth
-//! secret, `SQLite` database, PID files), backups, logs and the database
-//! file wherever it lives — and so do the kernel's process views (`/proc`,
-//! `/sys`, `/dev`), which would otherwise hand out the environment
-//! (`CRAP_SECRET_*` included) regardless of any root.
+//! filesystem), but only below the allowed roots. It may READ under the
+//! config directory and the operator's `[hooks] io_roots`, and WRITE only
+//! under `io_roots`: the config directory is read-only, so a hook can never
+//! rewrite the code, templates or translations the server runs — nor write a
+//! `.lua` file and `require` it, which would be dynamic code loading. An
+//! `io_roots` entry may therefore not overlap the config directory's code
+//! directories, and `require` never loads a module from an `io_roots` entry
+//! or a protected path.
+//!
+//! Inside the roots the process's own secrets stay out of reach — the config
+//! file, the data directory (generated auth secret, `SQLite` database, PID
+//! files), backups, logs and the database file wherever it lives — and so do
+//! the kernel's process views (`/proc`, `/sys`, `/dev`), which would
+//! otherwise hand out the environment (`CRAP_SECRET_*` included) regardless
+//! of any root.
 //!
 //! Every path-taking `io` function (`open`, `lines`, `input`, `output`) is
 //! wrapped: the path is resolved to its canonical form (symlinks followed;
 //! for a file that does not exist yet, its deepest existing ancestor), the
-//! resolved path is checked, and the original function then opens exactly
-//! that resolved path.
+//! resolved path is checked for the access the call asks for (`io.output`
+//! and an `io.open` mode other than `"r"`/`"rb"` write), and the original
+//! function then opens exactly that resolved path.
 
 use std::{
     env, fs,
@@ -26,10 +35,7 @@ use std::{
 use anyhow::{Context as _, Result, anyhow, bail};
 use mlua::{Function, Lua, String as LuaString, Table};
 
-use crate::config::CrapConfig;
-
-/// The `io` functions whose first argument may be a file path.
-const PATH_FUNCTIONS: [&str; 4] = ["open", "lines", "input", "output"];
+use crate::{config::CrapConfig, scaffold::paths::CODE_DIRS};
 
 /// Kernel views that expose the process (its environment, memory, open
 /// files) — refused under any root.
@@ -45,12 +51,36 @@ const SYSTEM_VIEWS: [&str; 0] = [];
 /// regard to case.
 const FOLD_CASE: bool = cfg!(any(target_os = "macos", target_os = "windows"));
 
+/// How each path-taking `io` function uses its file: `"mode"` — as its
+/// mode argument says (`io.open`); `"write"` — always writes (`io.output`
+/// opens in `"w"`); `"read"` — only reads.
+const PATH_ACCESS: [(&str, &str); 4] = [
+    ("open", "mode"),
+    ("lines", "read"),
+    ("input", "read"),
+    ("output", "write"),
+];
+
 /// Wraps one `io` function: a string (or number, which Lua's `io` coerces)
-/// path goes through `resolve`; anything else (`nil` = default file, a file
-/// handle) passes through untouched. A refusal is raised at the caller's
-/// line.
+/// path goes through `resolve`, for writing unless the call only reads (an
+/// `io.open` mode other than `"r"`/`"rb"` — anything `io.open` would refuse
+/// included — counts as a write); anything else (`nil` = default file, a
+/// file handle) passes through untouched. A refusal is raised at the
+/// caller's line.
 const WRAPPER: &str = r#"
-local original, resolve, name = ...
+local original, resolve, name, access = ...
+
+local function writes(mode)
+    if access ~= "mode" then
+        return access == "write"
+    end
+
+    if mode == nil then
+        return false
+    end
+
+    return not (type(mode) == "string" and (mode == "r" or mode == "rb"))
+end
 
 return function(path, ...)
     if type(path) == "number" then
@@ -58,7 +88,7 @@ return function(path, ...)
     end
 
     if type(path) == "string" then
-        local resolved, err = resolve(path)
+        local resolved, err = resolve(path, writes((...)))
 
         if not resolved then
             error(name .. ": " .. err, 2)
@@ -75,8 +105,10 @@ end
 /// per process from the config and shared by every VM.
 #[derive(Debug)]
 pub(crate) struct IoJail {
-    /// Canonical roots a path must lie under.
-    roots: Vec<PathBuf>,
+    /// The canonical config directory — readable, never writable.
+    config_root: PathBuf,
+    /// The canonical `[hooks] io_roots` — readable and writable.
+    write_roots: Vec<PathBuf>,
     /// Paths refused even under a root (and everything below them).
     protected: Vec<PathBuf>,
 }
@@ -87,14 +119,15 @@ impl IoJail {
     /// # Errors
     ///
     /// An `io_roots` entry that does not exist, is not a directory, is a
-    /// filesystem root, or lies inside a kernel view (`/proc`, `/sys`,
-    /// `/dev`) or a protected path.
+    /// filesystem root, lies inside a kernel view (`/proc`, `/sys`, `/dev`)
+    /// or a protected path, or overlaps the config directory's code (see
+    /// [`check_code_overlap`]).
     pub(crate) fn new(config_dir: &Path, config: &CrapConfig) -> Result<Self> {
         let config_root = resolve_path(config_dir)
             .map_err(|e| anyhow!("config directory {}: {e}", config_dir.display()))?;
 
         let protected = protected_paths(&config_root, config);
-        let mut roots = vec![config_root.clone()];
+        let mut write_roots = Vec::new();
 
         for entry in &config.hooks.io_roots {
             let root = extra_root(&config_root, entry)?;
@@ -108,35 +141,66 @@ impl IoJail {
                 );
             }
 
-            roots.push(root);
+            check_code_overlap(&config_root, &root, entry)?;
+            write_roots.push(root);
         }
 
-        Ok(Self { roots, protected })
+        Ok(Self {
+            config_root,
+            write_roots,
+            protected,
+        })
     }
 
-    /// The canonical path `raw` may be opened as, or why it is refused.
-    fn resolve(&self, raw: &str) -> StdResult<String, String> {
+    /// Whether `require` may load the module file at `path`: it lies under
+    /// the config directory, and neither in a protected path nor under an
+    /// `io_roots` entry — a directory Lua itself writes to is never a source
+    /// of code.
+    pub(crate) fn may_load_module(&self, path: &Path) -> bool {
+        let Ok(path) = resolve_path(path) else {
+            return false;
+        };
+
+        path.starts_with(&self.config_root)
+            && !self.is_protected(&path)
+            && !self.write_roots.iter().any(|r| path.starts_with(r))
+    }
+
+    fn is_protected(&self, path: &Path) -> bool {
+        self.protected
+            .iter()
+            .any(|p| lies_under(path, p, FOLD_CASE))
+    }
+
+    /// The canonical path `raw` may be opened as — for writing when `write`
+    /// — or why it is refused.
+    fn resolve(&self, raw: &str, write: bool) -> StdResult<String, String> {
         if raw.contains('\0') {
             return Err("the path contains a NUL byte".to_string());
         }
 
         let path = resolve_path(Path::new(raw)).map_err(|e| format!("'{raw}' {e}"))?;
 
-        if self
-            .protected
-            .iter()
-            .any(|p| lies_under(&path, p, FOLD_CASE))
-        {
+        if self.is_protected(&path) {
             return Err(format!(
                 "'{raw}' is a protected path — the config file, data directory, database, \
                  backups, logs and system views are never reachable from Lua"
             ));
         }
 
-        if !self.roots.iter().any(|r| path.starts_with(r)) {
+        let writable = self.write_roots.iter().any(|r| path.starts_with(r));
+
+        if write && !writable && path.starts_with(&self.config_root) {
             return Err(format!(
-                "'{raw}' is outside the allowed roots (the config directory and \
-                 `[hooks] io_roots` in crap.toml)"
+                "'{raw}' is not writable — the config directory is read-only to Lua; \
+                 writes go under a `[hooks] io_roots` directory in crap.toml"
+            ));
+        }
+
+        if !writable && (write || !path.starts_with(&self.config_root)) {
+            return Err(format!(
+                "'{raw}' is outside the allowed roots (reads: the config directory and \
+                 `[hooks] io_roots`; writes: `[hooks] io_roots` only, in crap.toml)"
             ));
         }
 
@@ -162,6 +226,34 @@ fn lies_under(path: &Path, prefix: &Path, fold_case: bool) -> bool {
                 .eq_ignore_ascii_case(&want.as_os_str().to_string_lossy())
         })
     })
+}
+
+/// Refuse an `io_roots` entry that overlaps what the config directory runs
+/// or renders: one that is the config directory or contains it, or lies
+/// inside one of its code directories ([`CODE_DIRS`]) — Lua would write the
+/// code, templates or translations the server loads.
+fn check_code_overlap(config_root: &Path, root: &Path, entry: &str) -> Result<()> {
+    if lies_under(config_root, root, FOLD_CASE) {
+        bail!(
+            "hooks.io_roots entry '{entry}' contains the config directory, whose code, \
+             templates and translations Lua may not write — name a directory for Lua's \
+             files instead (e.g. `uploads`)"
+        );
+    }
+
+    for dir in CODE_DIRS {
+        let code = config_root.join(dir);
+        let resolved = resolve_path(&code).unwrap_or_else(|_| code.clone());
+
+        if lies_under(root, &code, FOLD_CASE) || lies_under(root, &resolved, FOLD_CASE) {
+            bail!(
+                "hooks.io_roots entry '{entry}' lies inside the config directory's \
+                 `{dir}/`, which Lua may not write"
+            );
+        }
+    }
+
+    Ok(())
 }
 
 /// One `[hooks] io_roots` entry, relative to the config directory unless
@@ -284,9 +376,9 @@ pub(crate) fn install_io_jail(lua: &Lua, jail: &Arc<IoJail>) -> Result<()> {
     let io: Table = lua.globals().get("io")?;
 
     let jail = Arc::clone(jail);
-    let resolve = lua.create_function(move |_, raw: LuaString| {
+    let resolve = lua.create_function(move |_, (raw, write): (LuaString, bool)| {
         let resolved = match raw.to_str() {
-            Ok(raw) => jail.resolve(&raw),
+            Ok(raw) => jail.resolve(&raw, write),
             Err(_) => Err("the path is not valid UTF-8".to_string()),
         };
 
@@ -296,13 +388,13 @@ pub(crate) fn install_io_jail(lua: &Lua, jail: &Arc<IoJail>) -> Result<()> {
         })
     })?;
 
-    for name in PATH_FUNCTIONS {
+    for (name, access) in PATH_ACCESS {
         let original: Function = io.get(name)?;
 
         let wrapped: Function = lua
             .load(WRAPPER)
             .set_name("=io_jail")
-            .call((original, resolve.clone(), format!("io.{name}")))
+            .call((original, resolve.clone(), format!("io.{name}"), access))
             .with_context(|| format!("Failed to wrap io.{name}"))?;
 
         io.set(name, wrapped)?;
@@ -345,36 +437,128 @@ mod tests {
             .unwrap();
     }
 
+    /// Write `contents` to `path` through Lua's `io`, then read it back.
+    const WRITE_THEN_READ: &str = r#"
+        local f = assert(io.open(path, "w"))
+        f:write("hello")
+        f:close()
+
+        local lines = {}
+        for line in io.lines(path) do
+            lines[#lines + 1] = line
+        end
+
+        return table.concat(lines)
+    "#;
+
+    /// Lua reads and writes under an `io_roots` entry.
     #[test]
-    fn reads_and_writes_under_the_config_dir() {
+    fn reads_and_writes_under_an_io_root() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join("uploads/sub")).unwrap();
-        let lua = jailed_lua(tmp.path(), &[]);
+        let lua = jailed_lua(tmp.path(), &["uploads"]);
         set_path(&lua, &tmp.path().join("uploads/sub/new.txt"));
 
-        let read: String = lua
-            .load(
-                r#"
-                local f = assert(io.open(path, "w"))
-                f:write("hello")
-                f:close()
-
-                local lines = {}
-                for line in io.lines(path) do
-                    lines[#lines + 1] = line
-                end
-
-                return table.concat(lines)
-                "#,
-            )
-            .eval()
-            .unwrap();
+        let read: String = lua.load(WRITE_THEN_READ).eval().unwrap();
 
         assert_eq!(read, "hello");
         assert_eq!(
             fs::read_to_string(tmp.path().join("uploads/sub/new.txt")).unwrap(),
             "hello"
         );
+    }
+
+    /// Regression: the config directory was writable, so a hook could rewrite
+    /// the code, templates and translations the server runs — or write a
+    /// `.lua` file and `require` it. It is read-only now: reads work, and
+    /// every way of opening a file for writing is refused, without creating
+    /// or truncating anything.
+    #[test]
+    fn the_config_dir_is_read_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("hooks")).unwrap();
+        fs::write(tmp.path().join("hooks/posts.lua"), "return {}").unwrap();
+        let lua = jailed_lua(tmp.path(), &[]);
+
+        set_path(&lua, &tmp.path().join("hooks/posts.lua"));
+        let read: String = lua
+            .load("local f = assert(io.open(path)); local s = f:read('a'); f:close(); return s")
+            .eval()
+            .unwrap();
+        assert_eq!(read, "return {}");
+
+        for code in [
+            "io.open(path, 'w')",
+            "io.open(path, 'a')",
+            "io.open(path, 'r+')",
+            "io.open(path, 'wb')",
+            "io.output(path)",
+        ] {
+            let err = refused(&lua, code, &tmp.path().join("hooks/posts.lua"));
+            assert!(err.contains("not writable"), "{code}: {err}");
+
+            let err = refused(&lua, code, &tmp.path().join("uploads-new.txt"));
+            assert!(err.contains("not writable"), "{code}: {err}");
+        }
+
+        assert_eq!(
+            fs::read_to_string(tmp.path().join("hooks/posts.lua")).unwrap(),
+            "return {}",
+            "a refused write must not truncate the file"
+        );
+        assert!(!tmp.path().join("uploads-new.txt").exists());
+    }
+
+    /// An `io_roots` entry may not overlap what the config directory runs:
+    /// the config directory itself (or an ancestor), or its code directories.
+    #[test]
+    fn io_roots_may_not_overlap_the_config_code() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tmp.path().join("config");
+        for dir in ["hooks", "templates/fields", "translations", "uploads"] {
+            fs::create_dir_all(config.join(dir)).unwrap();
+        }
+
+        let build = |entry: &str| {
+            let mut crap = CrapConfig::default();
+            crap.hooks.io_roots = vec![entry.to_string()];
+            IoJail::new(&config, &crap).map_err(|e| e.to_string())
+        };
+
+        for entry in [".", ".."] {
+            let err = build(entry).unwrap_err();
+            assert!(
+                err.contains("contains the config directory"),
+                "{entry}: {err}"
+            );
+        }
+
+        for entry in ["hooks", "templates/fields", "translations"] {
+            let err = build(entry).unwrap_err();
+            assert!(err.contains("which Lua may not write"), "{entry}: {err}");
+        }
+
+        assert!(build("uploads").is_ok());
+    }
+
+    /// `require` loads modules from the config directory only — never from
+    /// a directory Lua writes to, nor from a protected path.
+    #[test]
+    fn modules_load_only_from_the_read_only_config_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        for dir in ["hooks", "data", "uploads"] {
+            fs::create_dir_all(tmp.path().join(dir)).unwrap();
+        }
+        let outside = tempfile::tempdir().unwrap();
+
+        let mut config = CrapConfig::default();
+        config.hooks.io_roots = vec!["uploads".to_string()];
+        let jail = IoJail::new(tmp.path(), &config).unwrap();
+
+        assert!(jail.may_load_module(&tmp.path().join("hooks/posts.lua")));
+        assert!(!jail.may_load_module(&tmp.path().join("uploads/evil.lua")));
+        assert!(!jail.may_load_module(&tmp.path().join("data/evil.lua")));
+        assert!(!jail.may_load_module(&outside.path().join("evil.lua")));
     }
 
     /// A missing file under a root keeps `io.open`'s `nil, message`

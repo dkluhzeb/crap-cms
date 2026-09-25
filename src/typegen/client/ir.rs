@@ -101,6 +101,10 @@ pub(in crate::typegen) struct Field<'a> {
     pub name: Cow<'a, str>,
     pub ty: FieldTy,
     pub optional: bool,
+    /// A write takes an explicit `null` for it — clearing the stored value,
+    /// where an absent key keeps it. Every optional key of the input shape
+    /// but an auth collection's `password`; never a read key.
+    pub nullable: bool,
 }
 
 /// A named sub-type generated from a non-empty Array or Group field.
@@ -144,6 +148,9 @@ pub(in crate::typegen) struct Document<'a> {
     /// Whether to emit `created_at`/`updated_at` (globals always do).
     pub timestamps: bool,
     pub is_global: bool,
+    /// Drafts are enabled: a draft create (`draft: true`) skips the required
+    /// checks, so it accepts any subset of the input.
+    pub drafts: bool,
     /// The `locale = "all"` read shape: localized fields are per-locale maps, and
     /// a printer emits only a read type for it.
     pub localized: bool,

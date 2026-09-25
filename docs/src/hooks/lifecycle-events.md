@@ -79,6 +79,25 @@ Every **write** hook context (and `after_read`, which runs per document) exposes
 > field `access.read`, not in `after_read`; if you need strict transform
 > behavior, handle errors inside your hook. Every other event aborts on error.
 
+### Populated relationships and joins
+
+Documents embedded in a read — populated relationship and upload targets and
+join results, at any `depth` — run their **own** collection's read hooks:
+
+- the target collection's `before_read` runs **once per collection per read**
+  (not once per embedded document). A `before_read` that aborts hides that
+  collection's embedded documents; the embedding read itself still succeeds.
+- the target's field and collection `after_read` hooks run for every embedded
+  document, **at every depth** — deepest first, so a document's hooks see its
+  own embedded documents already processed. They run in batches: one call
+  (one Lua VM) per target collection per embedding level across the whole
+  read, each document with its own instruction budget and the collection's
+  shared `ctx.context`, as the documents of a list read do. A read whose
+  embedded collections have no `after_read` hooks runs none.
+
+Both see the embedding read's operation (`find` or `find_by_id`, or `get`
+when a global read embeds the document) as `ctx.operation`.
+
 ## Delete Lifecycle
 
 ```

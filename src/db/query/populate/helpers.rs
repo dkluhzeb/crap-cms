@@ -1,18 +1,23 @@
 //! Helper functions for the populate subsystem.
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::core::{
-    CollectionDefinition, Document, DocumentFields, FieldDefinition, cache::CacheBackend,
+    Builder, CollectionDefinition, Document, DocumentFields, FieldDefinition, cache::CacheBackend,
+    document::VersionSnapshot, upload,
 };
+use crate::db::ops::snapshot_read_document;
 use crate::db::query::AccessResult;
 use crate::db::query::filter::memory::matches_document;
 use crate::db::query::populate::JoinAccessCheck;
 use crate::db::query::populate::PopulateCtx;
 use crate::db::query::populate::{CachedDoc, Singleflight};
 use crate::db::query::read::{find_by_id, find_by_ids};
+use crate::db::query::versions::find_latest_draft_versions;
 
 /// Fetch a single **raw** relationship target by id. The result is the
 /// unfiltered document content — draft visibility and access are applied per
@@ -73,10 +78,9 @@ pub(super) fn resolve_target_views(
 }
 
 /// Resolve a target collection's view access from a raw `(join_access, user)`
-/// pair — shared by the relationship path ([`resolve_target_views`], via
-/// `PopulateCtx`) and the join path (which carries `PopulateOpts`). `read` gates
-/// published rows; `draft` (`access.draft ?? access.update`) gates draft rows.
-pub(super) fn resolve_views(
+/// pair. `read` gates published rows; `draft` (`access.draft ?? access.update`)
+/// gates draft rows.
+fn resolve_views(
     join_access: Option<&dyn JoinAccessCheck>,
     user: Option<&Document>,
     slug: &str,
@@ -124,6 +128,118 @@ pub(super) fn target_row_visible(
     view_allows(&views.read, raw, &def.fields)
 }
 
+/// One target collection of a populate step: its slug, definition, and the
+/// reader's resolved view access to it.
+#[derive(Builder)]
+pub(super) struct TargetCollection<'a> {
+    #[builder(required)]
+    pub slug: &'a str,
+    #[builder(required)]
+    pub def: &'a CollectionDefinition,
+    #[builder(required)]
+    pub views: &'a TargetViews,
+}
+
+/// The documents of `raws` a populate embeds, as this reader sees each one —
+/// the ONE visibility step every populated target and join child goes through:
+///
+/// - with drafts requested and the target's `draft` view granted, a document
+///   whose latest version is a pending draft shows that draft (bounded by the
+///   `draft` view's row constraint), as a draft read of it by id does;
+/// - otherwise its stored row, when [`target_row_visible`];
+/// - hidden documents are dropped.
+///
+/// Upload sizes are folded in on the way out. `raws` are raw, user-independent
+/// documents (possibly from the shared cache); nothing here is cached.
+///
+/// # Errors
+///
+/// Returns a backend error if the pending-draft lookup fails.
+pub(super) fn visible_targets(
+    ctx: &PopulateCtx<'_>,
+    target: &TargetCollection<'_>,
+    raws: Vec<Document>,
+) -> Result<Vec<Document>> {
+    let mut drafts = pending_drafts(ctx, target, &raws)?;
+
+    let visible = raws.into_iter().filter_map(|raw| {
+        let mut doc = match drafts.remove(raw.id.as_ref()) {
+            Some(draft) => draft,
+            None if target_row_visible(target.views, &raw, ctx.published_only, target.def) => raw,
+            None => return None,
+        };
+
+        upload::shape_read_document(target.def, &mut doc);
+
+        Some(doc)
+    });
+
+    Ok(visible.collect())
+}
+
+/// The pending draft each of `raws` shows this reader in place of its stored
+/// row, keyed by id. Empty unless drafts are requested and the target has a
+/// draft view the reader is not denied.
+fn pending_drafts(
+    ctx: &PopulateCtx<'_>,
+    target: &TargetCollection<'_>,
+    raws: &[Document],
+) -> Result<HashMap<String, Document>> {
+    let drafts_shown = !ctx.published_only
+        && target.def.has_drafts()
+        && !matches!(target.views.draft, AccessResult::Denied);
+
+    if !drafts_shown || raws.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let ids: Vec<String> = raws.iter().map(|raw| raw.id.to_string()).collect();
+    let versions = find_latest_draft_versions(ctx.conn, target.slug, &ids)?;
+
+    let mut drafts = HashMap::new();
+
+    for raw in raws {
+        let Some(version) = versions.get(raw.id.as_ref()) else {
+            continue;
+        };
+
+        if let Some(draft) = draft_view(ctx, target, raw, version)? {
+            drafts.insert(raw.id.to_string(), draft);
+        }
+    }
+
+    Ok(drafts)
+}
+
+/// `raw`'s pending draft `version` as the draft view shows it: the snapshot
+/// read for the reading locale, when it satisfies the `draft` view's row
+/// constraint. `_status` stays the row's — the document's workflow status —
+/// exactly as a draft read by id reports it.
+fn draft_view(
+    ctx: &PopulateCtx<'_>,
+    target: &TargetCollection<'_>,
+    raw: &Document,
+    version: &VersionSnapshot,
+) -> Result<Option<Document>> {
+    let fields = &target.def.fields;
+
+    let Some(mut draft) =
+        snapshot_read_document(raw.id.as_ref(), &version.snapshot, fields, ctx.locale_ctx)?
+    else {
+        return Ok(None);
+    };
+
+    if !view_allows(&target.views.draft, &draft, fields) {
+        return Ok(None);
+    }
+
+    if let Some(status) = raw.fields.get("_status") {
+        draft.fields.insert("_status".to_string(), status.clone());
+    }
+
+    Ok(Some(draft))
+}
+
 /// Whether a raw target document passes one resolved view decision. `fields` is
 /// the target collection's schema, so a `Constrained` filter on a Checkbox /
 /// Number field is coerced the same way SQL binds it (not a blind string match).
@@ -141,16 +257,16 @@ fn view_allows(access: &AccessResult, raw: &Document, fields: &[FieldDefinition]
 /// populated relationship (where it disambiguates a polymorphic target); a
 /// top-level document read omits it (the caller already knows the collection).
 ///
-/// Wire-format equivalent to the previous manual `Map::new() + insert` loop —
-/// `#[serde(flatten)]` over `DocumentFields` (transparent over `HashMap`)
-/// reproduces the same key set in the same order.
+/// The envelope keys are serialized AFTER the flattened fields, so a same-named
+/// entry in the field map can never replace them: the tag is the server's, always.
+/// (`collection` is also a reserved field name, rejected at definition load.)
 #[derive(Serialize)]
 struct DocumentEnvelope<'a> {
     id: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    collection: Option<&'a str>,
     #[serde(flatten)]
     fields: &'a DocumentFields,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    collection: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     created_at: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -514,6 +630,24 @@ mod tests {
             obj.get("updated_at").and_then(|v| v.as_str()),
             Some("2024-01-02T00:00:00Z")
         );
+    }
+
+    /// Regression: a `collection` entry in the document's own field map
+    /// replaced the envelope tag (the flattened fields were serialized after
+    /// it), so embedded-document processing read the target collection from
+    /// document data. The server's tag must win.
+    #[test]
+    fn document_to_json_tag_wins_over_a_same_named_field() {
+        let mut doc = Document::new("p1".to_string());
+        doc.fields
+            .insert("collection".to_string(), json!("secrets"));
+        doc.fields.insert("title".to_string(), json!("Hat"));
+
+        let json = document_to_json(&doc, Some("products"));
+
+        assert_eq!(json["collection"], json!("products"));
+        assert_eq!(json["title"], json!("Hat"));
+        assert_eq!(json["id"], json!("p1"));
     }
 
     #[test]

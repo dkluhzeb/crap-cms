@@ -32,10 +32,6 @@ pub fn persist_create(
     // validation) put anywhere in the document is refused here.
     reject_nul_characters(data, &def.fields)?;
 
-    // Lock referenced target rows before INSERT to prevent concurrent deletes
-    // from creating dangling references (Postgres only; SQLite serializes via IMMEDIATE).
-    query::ref_count::lock_ref_targets_from_data(conn, &def.fields, data, &locale_cfg)?;
-
     // `doc` here carries FLAT `group__sub` columns: `query::create` re-reads via
     // `find_by_id_raw`, which does NOT hydrate groups (only the read-path
     // `hydrate_document` nests them). The version snapshot's own
@@ -65,7 +61,9 @@ pub fn persist_create(
     // Ref count UPDATE is last: it acquires a row-level lock on the target
     // (e.g. the referenced author), and that lock is held until COMMIT.
     // Doing it last minimizes lock hold time under concurrent writes.
-    query::ref_count::after_create_from_data(conn, &def.fields, data, &locale_cfg)?;
+    // A refused reference is reported on the field holding it.
+    query::ref_count::after_create_from_data(conn, &def.fields, data, &locale_cfg)
+        .map_err(|e| query::ref_count::anchor_to_fields(e, &def.fields, data))?;
 
     Ok(doc)
 }

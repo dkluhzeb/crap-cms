@@ -13,7 +13,7 @@ use crate::{
         },
     },
     db::{
-        BoxedConnection, BoxedTransaction, DbConnection, DbPool,
+        BoxedConnection, BoxedTransaction, DbConnection, DbPool, UnboundedStatements,
         query::{
             fts::{FtsIndex, sync_fts_table},
             helpers::global_table,
@@ -43,6 +43,11 @@ use super::{
 /// Returns an error if the connection, transaction, or any of the
 /// per-collection/global schema-sync steps fails.
 pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig) -> Result<()> {
+    // A schema sync rebuilds tables and backfills columns over every row:
+    // maintenance whose statements may legitimately outlast the statement
+    // timeout a request's query runs under.
+    let _unbounded = UnboundedStatements::lift();
+
     let mut conn = pool.write().context("Failed to get DB connection")?;
 
     // A constraint change (turning on `soft_delete`, relaxing an old NOT NULL)
@@ -205,6 +210,9 @@ pub fn recreate_all(
     registry: &Registry,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
+    // The schema sync's maintenance, like `sync_all`.
+    let _unbounded = UnboundedStatements::lift();
+
     let mut conn = pool.write().context("Failed to get DB connection")?;
     let tx = open_schema_transaction(&mut conn)?;
 
@@ -306,17 +314,20 @@ fn run_conversions(
     // read from now.
     reference_cardinality::carry_if_needed(tx, registry, locale_config)?;
 
+    // Filters expand every stored has-many list, so a value a definition change
+    // left behind is stored as a list before anything reads it — and a
+    // reference inside a row that turned has-one holds its single id again. It
+    // runs before the recount, which counts a row's reference in the shape its
+    // field declares, and before the nested values are typed: typing a nested
+    // value that isn't a list yet would drop what doesn't fit the field's type
+    // instead of refusing it.
+    has_many_lists::normalize_if_needed(tx, registry, locale_config)?;
+
     // The one-time conversions run in this order on purpose: nested values
     // are typed before text is canonicalized, since both rewrite the same
     // JSON-stored rows and the canonical form applies to the typed value.
     backfill_ref_counts::backfill_if_needed(tx, registry, locale_config)?;
     legacy_timestamps::normalize_if_needed(tx, registry)?;
-
-    // Filters expand every stored has-many list, so a value a definition change
-    // left behind is stored as a list before anything reads it. It runs before
-    // the nested values are typed: typing a nested value that isn't a list yet
-    // would drop what doesn't fit the field's type instead of refusing it.
-    has_many_lists::normalize_if_needed(tx, registry, locale_config)?;
     nested_values::convert_if_needed(tx, registry)?;
     canonical_text::canonicalize_if_needed(tx, registry, locale_config)?;
 

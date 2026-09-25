@@ -66,7 +66,7 @@ pub struct HookContext {
     /// The operation being performed.
     // The typed union is `operation::hook_context_operations`, pinned by a test.
     #[lua(
-        ty = "\"create\"|\"update\"|\"undelete\"|\"delete\"|\"find\"|\"find_by_id\"|\"unpublish\"|\"restore\"|\"get\"|\"init\""
+        ty = "\"create\"|\"update\"|\"undelete\"|\"delete\"|\"find\"|\"find_by_id\"|\"get\"|\"unpublish\"|\"restore\"|\"init\""
     )]
     pub operation: String,
     /// Document data. For read hooks, contains document fields including

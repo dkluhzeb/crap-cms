@@ -2,6 +2,7 @@
 
 mod cleanup_guard;
 mod collection_upload;
+mod decode;
 mod exif;
 mod format;
 mod image_fit;
@@ -23,6 +24,7 @@ mod validate;
 
 pub use cleanup_guard::CleanupGuard;
 pub use collection_upload::CollectionUpload;
+pub use decode::{ImageProcessingBusy, set_image_concurrency};
 pub use format::{FormatOptions, FormatQuality, FormatResult};
 pub use image_fit::ImageFit;
 pub use image_size::{ImageSize, ImageSizeBuilder};

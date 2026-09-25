@@ -129,6 +129,27 @@ crap.fields.relationship({
 - Without `picker`: inline search autocomplete only (default behavior)
 - With `picker = "drawer"`: inline search + browse button that opens a drawer with a scrollable list
 
+## Referencing a Document
+
+A write may only add a reference to a document that exists and is not in the
+trash; a missing and a trashed target are refused alike, so the answer says
+nothing about a document the writer cannot see. The refusal is a validation
+error on the field holding the reference (`validation.reference_unavailable`,
+keyed like every field error — `author`, `seo__author`, `items[0][author]`);
+a reference no field of the write carries (a version restore) fails with
+`cannot reference {collection}/{id}: no such document`. A reference a write
+keeps unchanged is not judged again — a document whose target was trashed
+later still saves.
+
+## Changing `has_many`
+
+Turning `has_many` on or off carries the stored values: a document's own
+reference moves between its column and its junction table, and a reference
+inside an array or blocks row (at any depth) is rewritten in place — a single
+id becomes a one-element list, a one-element list its id. A row or document
+holding several ids cannot turn has-one without losing some, so startup stops
+and names them.
+
 ## Population Depth
 
-See [Population Depth](../relationships/population-depth.md) for details on controlling how deeply relationships are resolved.
+See [Population Depth](../relationships/population-depth.md) for details on controlling how deeply relationships are resolved, and what a populated document contains.

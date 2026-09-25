@@ -64,6 +64,11 @@ impl ClientPrinter for TsPrinter {
         self.w
             .line("export type Localized<T> = { [locale: string]: T | null };");
         self.w.blank();
+
+        for line in UPDATE_TYPE {
+            self.w.line(line);
+        }
+        self.w.blank();
     }
 
     /// A write-shape sub-type is its input variant (`…Data`, required fields
@@ -100,14 +105,7 @@ impl ClientPrinter for TsPrinter {
             return;
         }
 
-        let data_doc = if def.is_global {
-            format!("/** Input data for the {pascal} global; an update accepts any subset */")
-        } else {
-            format!(
-                "/** Input data for creating a {pascal}; an update accepts any subset (`Partial<{pascal}Data>`) */"
-            )
-        };
-        self.w.line(&data_doc);
+        self.w.line(&data_doc_comment(&pascal, def));
         let fields = &def.input;
         self.interface(&format!("{pascal}Data"), |w| {
             for f in fields {
@@ -147,6 +145,47 @@ impl ClientPrinter for TsPrinter {
     fn finish(self: Box<Self>) -> String {
         self.w.finish()
     }
+}
+
+/// The prelude's `Update<T>`: what an update or a draft save of a `…Data`
+/// input takes — any subset of its keys and, since a group's sub-fields are
+/// the owner's own columns, of each group's; an array or blocks row is written
+/// whole, so it keeps its required keys. `Partial<…Data>` would demand a
+/// group's required sub-fields. The name is one word, which no generated type
+/// is (each joins at least two `PascalCase` words).
+const UPDATE_TYPE: [&str; 10] = [
+    "/** An update (or draft save) payload for a `…Data` input `T`: any subset of its keys and of each group's sub-fields; a key not sent keeps its stored value. An array or blocks row is sent whole. */",
+    "export type Update<T> = {",
+    "  [K in keyof T]?: T[K] extends infer V",
+    "    ? V extends readonly unknown[]",
+    "      ? V",
+    "      : V extends object",
+    "        ? Update<V>",
+    "        : V",
+    "    : never;",
+    "};",
+];
+
+/// The doc comment of a `…Data` input interface: which writes take it whole,
+/// and which any subset (`Update<…Data>`) — an update, and on a drafts owner
+/// a draft save, which skips the required checks. An optional key takes
+/// `null` to clear the stored value.
+fn data_doc_comment(pascal: &str, def: &Document) -> String {
+    let subset = if def.drafts {
+        "an update or a draft save (`draft: true`, required fields not enforced)"
+    } else {
+        "an update"
+    };
+
+    if def.is_global {
+        return format!(
+            "/** Input data for the {pascal} global; {subset} accepts any subset (`Update<{pascal}Data>`). `null` clears an optional field */"
+        );
+    }
+
+    format!(
+        "/** Input data for creating a {pascal}; {subset} accepts any subset (`Update<{pascal}Data>`). `null` clears an optional field */"
+    )
 }
 
 #[cfg(test)]
@@ -193,6 +232,126 @@ mod tests {
         assert!(seo_input.contains("  meta_title: string;"), "{seo_input}");
     }
 
+    /// Regression: the `…Data` input rejected `null`, the only way to clear a
+    /// stored value, so `update(id, { summary: null })` did not type-check
+    /// under `strictNullChecks`. An optional input key (and nested ones) takes
+    /// `null`; a required create key does not.
+    #[test]
+    fn optional_input_keys_accept_null() {
+        let col = make_col(
+            "posts",
+            vec![
+                text_field("title", true),
+                text_field("summary", false),
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![text_field("meta_desc", false)])
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+
+        let data = interface_block(&out, "export interface PostsData {");
+        assert!(data.contains("  title: string;"), "{data}");
+        assert!(data.contains("  summary?: string | null;"), "{data}");
+
+        let seo = interface_block(&out, "export interface PostsSeoData {");
+        assert!(seo.contains("  meta_desc?: string | null;"), "{seo}");
+        assert!(out.contains("`null` clears an optional field"), "{out}");
+    }
+
+    /// Regression: a group input key took `null`, though a null group clears
+    /// nothing (it has no column of its own; its sub-fields are the values).
+    /// Its sub-fields take `null`; the group itself — top level or in a
+    /// row — does not.
+    #[test]
+    fn a_group_input_key_takes_no_null() {
+        let col = make_col(
+            "posts",
+            vec![
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![text_field("meta_desc", false)])
+                    .build(),
+                FieldDefinition::builder("items", FieldType::Array)
+                    .fields(vec![
+                        FieldDefinition::builder("meta", FieldType::Group)
+                            .fields(vec![text_field("key", false)])
+                            .build(),
+                    ])
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+
+        let data = interface_block(&out, "export interface PostsData {");
+        assert!(data.contains("  seo?: PostsSeoData;"), "{data}");
+        assert!(
+            data.contains("  items?: PostsItemsData[] | null;"),
+            "{data}"
+        );
+
+        let row = interface_block(&out, "export interface PostsItemsData {");
+        assert!(row.contains("  meta?: PostsItemsMetaData;"), "{row}");
+    }
+
+    /// Regression: an update was documented as `Partial<…Data>`, which is
+    /// shallow — a partial group (`{ seo: { meta_desc } }`, valid at runtime:
+    /// the unsent sub-fields keep their values) failed on the group's
+    /// required keys. The prelude's `Update<T>` makes group sub-fields
+    /// optional too and keeps array rows whole; every `…Data` names it.
+    #[test]
+    fn updates_are_typed_with_the_deep_group_update() {
+        let col = make_col(
+            "posts",
+            vec![
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![text_field("meta_title", true)])
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+
+        assert!(
+            out.contains(&UPDATE_TYPE.join("\n")),
+            "the prelude declares Update<T>: {out}"
+        );
+        assert!(
+            out.contains("accepts any subset (`Update<PostsData>`)"),
+            "{out}"
+        );
+        assert!(!out.contains("Partial<"), "{out}");
+    }
+
+    /// Regression: a draft create (required fields not enforced) was
+    /// documented as needing the full create input. A drafts collection's
+    /// `…Data` says a draft save takes any subset.
+    #[test]
+    fn a_drafts_collection_documents_the_partial_draft_create() {
+        let mut col = make_col("posts", vec![text_field("title", true)]);
+        col.versions = Some(VersionsConfig::new(true, 0));
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(
+            out.contains("an update or a draft save (`draft: true`, required fields not enforced) accepts any subset (`Update<PostsData>`)"),
+            "{out}"
+        );
+
+        // The shared `Update<T>` prelude mentions draft saves; only the
+        // `…Data` doc comment of a collection without drafts must not.
+        let plain = make_col("tags", vec![text_field("name", true)]);
+        let mut out = String::new();
+        render_collection(&mut out, &plain);
+        assert!(
+            out.contains(
+                "/** Input data for creating a Tags; an update accepts any subset (`Update<TagsData>`)."
+            ),
+            "{out}"
+        );
+        assert!(!out.contains("`draft: true`"), "{out}");
+    }
+
     /// A read document carries the stored system keys its collection has, and
     /// a timezone date's `<name>_tz` companion (also accepted as input).
     #[test]
@@ -219,7 +378,7 @@ mod tests {
         assert!(doc.contains("  starts_tz?: string | null;"), "{doc}");
 
         let data = interface_block(&out, "export interface EventsData {");
-        assert!(data.contains("  starts_tz?: string;"), "{data}");
+        assert!(data.contains("  starts_tz?: string | null;"), "{data}");
         assert!(!data.contains("_status"), "{data}");
     }
 
@@ -301,7 +460,7 @@ mod tests {
 
         assert!(out.contains("export interface PostsData {"));
         assert!(out.contains("  title: string;"));
-        assert!(out.contains("  content?: string;"));
+        assert!(out.contains("  content?: string | null;"));
         assert!(out.contains("  status: \"draft\" | \"published\";"));
         assert!(out.contains("export interface PostsDocument {"));
         assert!(out.contains("  id: string;"));
@@ -498,14 +657,17 @@ mod tests {
             "row sub promoted: {out}"
         );
         assert!(
-            out.contains("  last_name?: string;"),
+            out.contains("  last_name?: string | null;"),
             "row optional sub: {out}"
         );
         assert!(
             !out.contains("details:"),
             "collapsible name not a key: {out}"
         );
-        assert!(out.contains("  bio?: string;"), "collapsible sub: {out}");
+        assert!(
+            out.contains("  bio?: string | null;"),
+            "collapsible sub: {out}"
+        );
         assert!(!out.contains("sections:"), "tabs name not a key: {out}");
         assert!(out.contains("  tab_field: string;"), "tabs sub: {out}");
     }

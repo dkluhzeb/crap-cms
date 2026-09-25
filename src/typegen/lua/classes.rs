@@ -5,13 +5,16 @@
 //! [`super::global_classes`].
 
 use crate::{
-    core::FieldDefinition,
+    core::{FieldChildren, FieldDefinition, field_children},
     typegen::helpers::{
         DRAFT_STATUS_VALUES, SubTypeKind, collect_sub_type_fields, to_pascal_case, w,
     },
 };
 
-use super::field::{LuaShape, write_field};
+use super::field::{
+    LOCALIZED_GROUP_NAMESPACE, LuaShape, PARTIAL_GROUP_NAMESPACE, holds_localized_columns,
+    write_field,
+};
 
 /// A Lua union of string literals: `"a" | "b"`.
 pub(super) fn literal_union(values: &[&str]) -> String {
@@ -61,6 +64,75 @@ pub(super) fn render_sub_type_classes(
             write_field(out, sf, &sub_pascal, shape);
         }
         out.push('\n');
+    }
+}
+
+/// Emit the partial-write classes (`crap.group_partial.*`) of every group in
+/// `fields` held on the owner's own row, nested groups included — named like
+/// the group's write class, so a reference from a partial class resolves. A
+/// partial update writes the sub-fields it sends and keeps the rest, so each
+/// is optional. A group inside an array or blocks row is written whole with
+/// its row and keeps its `crap.group.*` class.
+pub(super) fn render_partial_group_classes(
+    out: &mut String,
+    fields: &[FieldDefinition],
+    pascal: &str,
+) {
+    for field in fields {
+        match field_children(field) {
+            FieldChildren::Wrapper(sub) => render_partial_group_classes(out, sub, pascal),
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
+                    render_partial_group_classes(out, &tab.fields, pascal);
+                }
+            }
+            FieldChildren::Group(sub) if !sub.is_empty() => {
+                let sub_pascal = format!("{pascal}{}", to_pascal_case(&field.name));
+
+                w!(out, "---@class crap.{PARTIAL_GROUP_NAMESPACE}.{sub_pascal}");
+                write_fields(out, sub, &sub_pascal, LuaShape::Partial);
+                out.push('\n');
+
+                render_partial_group_classes(out, sub, &sub_pascal);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Emit the `locale = "all"` read classes (`crap.doc_group_localized.*`) of
+/// every group in `fields` holding a per-locale column, nested groups
+/// included — named like the group's read class, so a reference from its
+/// parent resolves.
+pub(super) fn render_localized_group_classes(
+    out: &mut String,
+    fields: &[FieldDefinition],
+    pascal: &str,
+    shape: LuaShape,
+) {
+    for field in fields {
+        match field_children(field) {
+            FieldChildren::Wrapper(sub) => render_localized_group_classes(out, sub, pascal, shape),
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
+                    render_localized_group_classes(out, &tab.fields, pascal, shape);
+                }
+            }
+            FieldChildren::Group(sub) if holds_localized_columns(field, shape) => {
+                let sub_pascal = format!("{pascal}{}", to_pascal_case(&field.name));
+                let inner = shape.inside(field);
+
+                w!(
+                    out,
+                    "---@class crap.{LOCALIZED_GROUP_NAMESPACE}.{sub_pascal}"
+                );
+                write_fields(out, sub, &sub_pascal, inner);
+                out.push('\n');
+
+                render_localized_group_classes(out, sub, &sub_pascal, inner);
+            }
+            _ => {}
+        }
     }
 }
 

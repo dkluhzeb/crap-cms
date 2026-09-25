@@ -3,7 +3,7 @@
 
 use std::time::Instant;
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Error, Result};
 use serde_json::from_str;
 use tracing::{info, warn};
 
@@ -11,13 +11,15 @@ use crate::{
     core::{
         JobRun,
         event::EventOperation,
-        upload::{self, ImageConvertJobData, SharedStorage, served_url},
+        upload::{self, ImageConvertJobData, ImageProcessingBusy, SharedStorage, served_url},
     },
     db::{
         DbConnection, DbPool, DbValue, LocaleContext, query,
         query::{helpers::utc_now, jobs as job_query},
     },
-    scheduler::runner::failure::{record_job_failure, record_permanent_job_failure},
+    scheduler::runner::failure::{
+        record_job_deferral, record_job_failure, record_permanent_job_failure,
+    },
     service::{AppInfra, ServiceContext},
 };
 
@@ -34,7 +36,9 @@ pub(super) struct ImageConvertRun<'a> {
 /// Execute a `_system_image_convert` job: encode the source image,
 /// write the converted bytes to storage, update the target document's
 /// URL column, and mark the job completed. On encode / storage / DB
-/// failure, defer to the job runner's standard `fail_job` retry path.
+/// failure, defer to the job runner's standard `fail_job` retry path; when
+/// image processing is at capacity the job is rescheduled without spending an
+/// attempt (see [`record_job_deferral`]).
 ///
 /// Mirrors the shape of
 /// [`execute_system_email`](crate::scheduler::runner::execute::execute_system_email)
@@ -110,12 +114,21 @@ pub(super) fn execute_system_image_convert(
                 data.target_path
             );
         }
-        Err(e) => {
-            record_job_failure(pool, job_run, &label, &e)?;
-        }
+        Err(e) => record_encode_failure(pool, job_run, &label, &e)?,
     }
 
     Ok(())
+}
+
+/// Record a failed encode. Every processing slot staying taken says nothing is
+/// wrong with the job, so it waits its turn again without spending an attempt;
+/// any other failure takes the standard retry path.
+fn record_encode_failure(pool: &DbPool, job_run: &JobRun, label: &str, err: &Error) -> Result<()> {
+    if err.is::<ImageProcessingBusy>() {
+        return record_job_deferral(pool, job_run, label, err);
+    }
+
+    record_job_failure(pool, job_run, label, err)
 }
 
 /// The `SET` clauses of the completion write and their parameters. A
@@ -283,6 +296,7 @@ fn report_conversion(infra: &AppInfra, data: &ImageConvertJobData) {
 mod tests {
     use std::collections::HashMap;
 
+    use anyhow::anyhow;
     use rusqlite::Connection;
     use serde_json::{Value, json};
 
@@ -294,7 +308,9 @@ mod tests {
             CollectionDefinition, FieldDefinition, FieldType, LiveMode,
             upload::{CollectionUpload, ImageSize, create_storage},
         },
-        scheduler::runner::test_support::convert_job,
+        core::{JobStatus, ScheduledBy},
+        db::query::jobs as job_query,
+        scheduler::runner::test_support::{convert_job, make_test_pool},
     };
 
     /// Local storage in a temp dir holding the conversion's target object.
@@ -540,5 +556,48 @@ mod tests {
             "the array rows must be hydrated: {:?}",
             event.data
         );
+    }
+
+    /// A conversion claimed once: running at attempt 1 of 3.
+    fn claimed_conversion(pool: &DbPool) -> JobRun {
+        let conn = pool.get().unwrap();
+        let job =
+            job_query::insert_job(&conn, "convert", "{}", ScheduledBy::System, 3, "default", 0)
+                .unwrap();
+        conn.execute_batch("UPDATE _crap_jobs SET status = 'running', attempt = 1")
+            .unwrap();
+
+        job_query::get_job_run(&conn, &job.id).unwrap().unwrap()
+    }
+
+    /// Regression: a conversion that found image processing at capacity spent
+    /// an attempt like a broken image, so a burst of uploads could fail
+    /// conversions for good.
+    #[test]
+    fn a_busy_encode_is_rescheduled_without_spending_an_attempt() {
+        let pool = make_test_pool();
+        let job = claimed_conversion(&pool);
+
+        record_encode_failure(&pool, &job, "convert", &ImageProcessingBusy.into()).unwrap();
+
+        let row = job_query::get_job_run(&pool.get().unwrap(), &job.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.status, JobStatus::Pending);
+        assert_eq!(row.attempt, 0);
+    }
+
+    #[test]
+    fn any_other_encode_failure_spends_the_attempt() {
+        let pool = make_test_pool();
+        let job = claimed_conversion(&pool);
+
+        let err = anyhow!("corrupt image");
+        record_encode_failure(&pool, &job, "convert", &err).unwrap();
+
+        let row = job_query::get_job_run(&pool.get().unwrap(), &job.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.attempt, 1);
     }
 }

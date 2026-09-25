@@ -1,12 +1,17 @@
 use std::collections::HashSet;
 
+use anyhow::Result as AnyResult;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use crate::core::cache::NoneCache;
-use crate::core::{CollectionDefinition, Document, FieldType, Registry, RelationshipConfig};
+use crate::core::{
+    CollectionDefinition, Document, FieldType, HookRef, Registry, RelationshipConfig,
+    VersionsConfig,
+};
+use crate::db::AccessResult;
 use crate::db::query::populate::{
-    PopulateContext, PopulateOpts, populate_relationships_batch,
+    JoinAccessCheck, PopulateContext, PopulateOpts, populate_relationships_batch,
     populate_relationships_batch_cached, populate_relationships_cached, test_helpers::*,
 };
 
@@ -24,7 +29,7 @@ fn batch_depth_zero_noop() {
             conn: &conn,
             registry: &registry,
             collection_slug: "posts",
-            def: &posts_def,
+            fields: &posts_def.fields,
         },
         &mut docs,
         &PopulateOpts {
@@ -53,7 +58,7 @@ fn batch_empty_docs_noop() {
             conn: &conn,
             registry: &registry,
             collection_slug: "posts",
-            def: &posts_def,
+            fields: &posts_def.fields,
         },
         &mut docs,
         &PopulateOpts {
@@ -110,7 +115,7 @@ fn batch_select_filters_fields() {
             conn: &conn,
             registry: &registry,
             collection_slug: "posts",
-            def: &posts_def,
+            fields: &posts_def.fields,
         },
         &mut docs,
         &PopulateOpts {
@@ -160,7 +165,7 @@ fn batch_max_depth_zero_stays_as_id() {
             conn: &conn,
             registry: &registry,
             collection_slug: "posts",
-            def: &posts_def,
+            fields: &posts_def.fields,
         },
         &mut docs,
         &PopulateOpts {
@@ -204,7 +209,7 @@ fn batch_missing_related_has_one_becomes_null() {
             conn: &conn,
             registry: &registry,
             collection_slug: "posts",
-            def: &posts_def,
+            fields: &posts_def.fields,
         },
         &mut docs,
         &PopulateOpts {
@@ -245,7 +250,7 @@ fn batch_with_join_field() {
             conn: &conn,
             registry: &registry,
             collection_slug: "authors",
-            def: &authors_def,
+            fields: &authors_def.fields,
         },
         &mut docs,
         &PopulateOpts {
@@ -288,7 +293,7 @@ fn populate_relationships_batch_wrapper_creates_fresh_cache() {
             conn: &conn,
             registry: &registry,
             collection_slug: "posts",
-            def: &posts_def,
+            fields: &posts_def.fields,
         },
         &mut docs,
         &PopulateOpts {
@@ -373,7 +378,7 @@ fn batch_mutual_has_one_stops_at_the_first_repeat() {
         conn: &conn,
         registry: &registry,
         collection_slug: "posts",
-        def: &posts_def,
+        fields: &posts_def.fields,
     };
 
     let mut docs = vec![seed()];
@@ -423,7 +428,7 @@ fn batch_cycle_guard_holds_at_every_depth() {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "posts",
-                def: &posts_def,
+                fields: &posts_def.fields,
             },
             &mut docs,
             &PopulateOpts {
@@ -446,4 +451,226 @@ fn batch_cycle_guard_holds_at_every_depth() {
             "depth {depth}: the ancestor was expanded a second time: {best}"
         );
     }
+}
+
+// ── Shape parity with the single-document path ────────────────────────────
+
+/// `posts` (`author`/`editor` → `users`, `related` → `posts`) holding `p1`
+/// and `p2`, each authored and edited by `u1` and related to the other.
+fn parity_fixture() -> (Connection, Registry, CollectionDefinition) {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
+         CREATE TABLE posts (
+             id TEXT PRIMARY KEY, title TEXT, author TEXT, editor TEXT, related TEXT,
+             created_at TEXT, updated_at TEXT
+         );
+         INSERT INTO users VALUES ('u1', 'Ada', '2024-01-01', '2024-01-01');
+         INSERT INTO posts VALUES ('p1', 'One', 'u1', 'u1', 'p2', '2024-01-01', '2024-01-01');
+         INSERT INTO posts VALUES ('p2', 'Two', 'u1', 'u1', 'p1', '2024-01-01', '2024-01-01');",
+    )
+    .unwrap();
+
+    let rel = |name: &str, target: &str| {
+        let mut field = make_field(name, FieldType::Relationship);
+        field.relationship = Some(RelationshipConfig::new(target, false));
+        field
+    };
+
+    let posts_def = make_collection_def(
+        "posts",
+        vec![
+            make_field("title", FieldType::Text),
+            rel("author", "users"),
+            rel("editor", "users"),
+            rel("related", "posts"),
+        ],
+    );
+
+    let mut registry = Registry::new();
+    registry.register_collection(posts_def.clone());
+    registry.register_collection(make_collection_def(
+        "users",
+        vec![make_field("name", FieldType::Text)],
+    ));
+
+    (conn, registry, posts_def)
+}
+
+fn parity_seed(id: &str, related: &str) -> Document {
+    let mut doc = Document::new(id.to_string());
+    doc.fields.insert("title".to_string(), json!(id));
+    doc.fields.insert("author".to_string(), json!("u1"));
+    doc.fields.insert("editor".to_string(), json!("u1"));
+    doc.fields.insert("related".to_string(), json!(related));
+    doc
+}
+
+/// Regression: the single-document path's cycle guard was tree-global, so a
+/// document populated in one branch stayed a bare id in a sibling branch
+/// (`editor` after `author`), while the list path expanded it — `find` and
+/// `find_by_id` returned different shapes for the same document. Both now
+/// guard the ancestor path only: a document is expanded wherever it appears,
+/// except as a reference back to one of its own ancestors.
+#[test]
+fn batch_and_single_paths_produce_the_same_shape_at_depth_two() {
+    let (conn, registry, posts_def) = parity_fixture();
+    let ctx = PopulateContext {
+        conn: &conn,
+        registry: &registry,
+        collection_slug: "posts",
+        fields: &posts_def.fields,
+    };
+    let opts = PopulateOpts {
+        depth: 2,
+        select: None,
+        locale_ctx: None,
+        published_only: false,
+        join_access: None,
+        user: None,
+    };
+
+    let mut batch = vec![parity_seed("p1", "p2"), parity_seed("p2", "p1")];
+    populate_relationships_batch_cached(&ctx, &mut batch, &opts, &NoneCache).unwrap();
+
+    for (i, (id, related)) in [("p1", "p2"), ("p2", "p1")].into_iter().enumerate() {
+        let mut single = parity_seed(id, related);
+        populate_relationships_cached(&ctx, &mut single, &mut HashSet::new(), &opts, &NoneCache)
+            .unwrap();
+
+        assert_eq!(
+            single.fields, batch[i].fields,
+            "{id}: list and by-id shapes differ"
+        );
+    }
+
+    let p1 = &batch[0].fields;
+    assert_eq!(p1["author"]["name"], json!("Ada"));
+    assert_eq!(
+        p1["editor"]["name"],
+        json!("Ada"),
+        "a sibling branch expands the same target"
+    );
+    assert_eq!(
+        p1["related"]["id"],
+        json!("p2"),
+        "another document of the batch is not an ancestor"
+    );
+    assert_eq!(
+        p1["related"]["related"],
+        json!("p1"),
+        "the way back to an ancestor stays an id"
+    );
+    assert_eq!(p1["related"]["author"]["name"], json!("Ada"));
+}
+
+// ── Draft reads show the target's pending draft ───────────────────────────
+
+/// `read` allowed; `draft` (`draft_fn`) allowed only when `.0`.
+struct DraftGate(bool);
+
+impl JoinAccessCheck for DraftGate {
+    fn check(
+        &self,
+        access: Option<&HookRef>,
+        _: Option<&Document>,
+        _: &str,
+    ) -> AnyResult<AccessResult> {
+        let is_draft = access.map(HookRef::reference) == Some("draft_fn");
+
+        Ok(if is_draft && !self.0 {
+            AccessResult::Denied
+        } else {
+            AccessResult::Allowed
+        })
+    }
+}
+
+/// A published `authors/a1` ("Published") with a pending draft edit ("Draft
+/// edit"), referenced by `posts/p1`.
+fn pending_draft_fixture() -> (Connection, Registry, CollectionDefinition) {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(&versions_table_sql("authors")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE authors (
+             id TEXT PRIMARY KEY, name TEXT,
+             _status TEXT NOT NULL DEFAULT 'published', created_at TEXT, updated_at TEXT
+         );
+         CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, author TEXT, created_at TEXT, updated_at TEXT);
+         INSERT INTO authors VALUES ('a1', 'Published', 'published', '2024-01-01', '2024-01-01');
+         INSERT INTO _versions_authors VALUES
+             ('v1', 'a1', 1, 'published', 0, '{\"name\":\"Published\"}', '2024-01-01'),
+             ('v2', 'a1', 2, 'draft', 1, '{\"name\":\"Draft edit\",\"_status\":\"draft\"}', '2024-01-02');
+         INSERT INTO posts VALUES ('p1', 'Hello', 'a1', '2024-01-01', '2024-01-01');",
+    )
+    .unwrap();
+
+    let mut authors_def = make_authors_def();
+    authors_def.versions = Some(VersionsConfig::new(true, 0));
+    authors_def.access.draft = Some(HookRef::new("draft_fn"));
+
+    let posts_def = make_posts_def();
+    let mut registry = Registry::new();
+    registry.register_collection(posts_def.clone());
+    registry.register_collection(authors_def);
+
+    (conn, registry, posts_def)
+}
+
+/// The populated author as a read with `published_only` and `draft_allowed`
+/// embeds it — through the list path, checked equal to the by-id path.
+fn embedded_author(published_only: bool, draft_allowed: bool) -> Value {
+    let (conn, registry, posts_def) = pending_draft_fixture();
+    let gate = DraftGate(draft_allowed);
+    let ctx = PopulateContext {
+        conn: &conn,
+        registry: &registry,
+        collection_slug: "posts",
+        fields: &posts_def.fields,
+    };
+    let opts = PopulateOpts {
+        depth: 1,
+        select: None,
+        locale_ctx: None,
+        published_only,
+        join_access: Some(&gate),
+        user: None,
+    };
+    let seed = || {
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("author".to_string(), json!("a1"));
+        doc
+    };
+
+    let mut batch = vec![seed()];
+    populate_relationships_batch_cached(&ctx, &mut batch, &opts, &NoneCache).unwrap();
+
+    let mut single = seed();
+    populate_relationships_cached(&ctx, &mut single, &mut HashSet::new(), &opts, &NoneCache)
+        .unwrap();
+
+    assert_eq!(batch[0].fields, single.fields, "list and by-id agree");
+
+    batch[0].fields["author"].clone()
+}
+
+/// A draft read embeds a target's pending draft where the reader may read
+/// the target's drafts — as a draft read of the target by id shows it — and
+/// its published row otherwise. The embedded `_status` stays the document's.
+#[test]
+fn draft_read_embeds_the_targets_pending_draft() {
+    let draft = embedded_author(false, true);
+    assert_eq!(draft["name"], json!("Draft edit"));
+    assert_eq!(draft["_status"], json!("published"));
+
+    assert_eq!(
+        embedded_author(false, false)["name"],
+        json!("Published"),
+        "without the target's draft access, the published row"
+    );
+    assert_eq!(
+        embedded_author(true, true)["name"],
+        json!("Published"),
+        "a published-only read never shows a draft"
+    );
 }

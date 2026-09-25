@@ -1,7 +1,7 @@
 //! Type-scoped and optional config tables on a field: `join`'s target,
 //! `mcp` metadata, `required_locales`.
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use mlua::{Result as LuaResult, Table, Value};
 
 use crate::{
@@ -42,7 +42,28 @@ pub(super) fn parse_join(
     let collection = required("collection")?;
     let on = required("on")?;
 
-    Ok(Some(JoinConfig::new(collection, on)))
+    let mut join = JoinConfig::new(collection, on);
+    join.limit = parse_join_limit(field_tbl, name)?;
+
+    Ok(Some(join))
+}
+
+/// A join's optional `limit`: a whole number of at least 1. The upper bound —
+/// `[pagination] max_limit` — is config, checked once definitions are loaded.
+fn parse_join_limit(field_tbl: &Table, name: &str) -> Result<Option<u32>> {
+    match field_tbl.get::<Value>("limit")? {
+        Value::Nil => Ok(None),
+        Value::Integer(n) if n >= 1 => u32::try_from(n)
+            .map(Some)
+            .map_err(|_| anyhow!("join field '{name}': 'limit' {n} is too large")),
+        Value::Integer(n) => {
+            bail!("join field '{name}': 'limit' must be at least 1, got {n}")
+        }
+        other => bail!(
+            "join field '{name}': 'limit' must be an integer, got {}",
+            other.type_name()
+        ),
+    }
 }
 
 /// Parse the optional `mcp` sub-table for MCP introspection metadata.

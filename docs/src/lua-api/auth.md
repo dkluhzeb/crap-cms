@@ -39,8 +39,9 @@ end
 
 Return the currently authenticated user document for the in-flight request, or `nil`.
 
-**Returns:** `crap.Document?` — The user document (a Lua table containing the user's
-fields, including `id`, `email`, and any custom fields), or `nil` if no user is set.
+**Returns:** `crap.AuthUser?` — The user document (a Lua table containing the user's
+fields, including `id`, `email`, and any custom fields — typed like
+`crap.AccessContext.user`, so `user.role` needs no cast), or `nil` if no user is set.
 
 The function returns `nil` in any of these cases:
 

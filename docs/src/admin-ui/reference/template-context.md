@@ -1279,6 +1279,7 @@ Read-only inverse-reference field. The `readonly` flag on
 - **`join_on`** (Option&lt;string&gt;) _(optional)_
 - **`join_items`** (Option&lt;Vec&lt;[JoinItem](#joinitem)&gt;&gt;) _(optional)_ — Reverse-lookup items resolved by enrichment for the join target.
 - **`join_count`** (Option&lt;integer&gt;) _(optional)_ — Convenience count of `join_items`. Templates branch on this with `{{#if join_count}}…{{/if}}`.
+- **`join_total`** (Option&lt;integer&gt;) _(optional)_ — How many visible documents reference this one, set only when more exist than `join_items` lists (a join lists at most its `limit`). Templates render "`join_count` of `join_total`" with it.
 
 ### JoinItem
 

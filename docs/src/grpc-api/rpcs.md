@@ -439,6 +439,7 @@ message GetGlobalRequest {
   string slug = 1;
   optional string locale = 2;           // locale code for localized fields
   optional bool draft = 3;              // read the unpublished draft (drafts-enabled globals)
+  optional int32 depth = 4;             // relationship population depth (default: [depth] default_depth)
 }
 
 message GetGlobalResponse {

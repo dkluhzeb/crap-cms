@@ -3,9 +3,18 @@
 
 #![cfg(all(test, feature = "postgres"))]
 
+use serde_json::json;
+
 use super::support::*;
 use super::{pg_test_pool, unique_slug};
-use crate::db::{DbConnection, migrate::sync_all};
+use crate::{
+    core::{CollectionDefinition, DocumentFields, ValidationError},
+    db::{
+        DbConnection,
+        migrate::sync_all,
+        query::ref_count::{UnavailableReferences, after_create_from_data, anchor_to_fields},
+    },
+};
 
 /// Postgres drops a collection's inline UNIQUE constraints in place, so a
 /// `soft_delete` transition never rebuilds the table. The junction table
@@ -86,4 +95,51 @@ async fn pg_the_soft_delete_transition_keeps_child_rows_and_their_foreign_keys()
 
     drop_tables_matching(&conn, &posts);
     drop_tables_matching(&conn, &tags);
+}
+
+/// A NEW reference to a trashed document is refused on Postgres exactly as on
+/// `SQLite` — the check reads the target under `FOR UPDATE`, so it cannot move
+/// to the trash before the count lands — and the refusal is reported on the
+/// field holding the reference.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pg_a_new_reference_to_a_trashed_document_is_a_field_error() {
+    let Some(pool) = pg_test_pool() else {
+        eprintln!("skipping: TEST_DATABASE_URL not set");
+        return;
+    };
+
+    let posts = unique_slug("rtposts");
+    let tags = unique_slug("rttags");
+
+    let mut registry = soft_delete_registry(&posts, &tags, false);
+    let mut tag_def = CollectionDefinition::new(tags.as_str());
+    tag_def.soft_delete = true;
+    registry.register_collection(tag_def);
+
+    sync_all(&pool, &registry, &no_locale()).expect("sync");
+
+    let conn = pool.get().expect("conn");
+    conn.execute(
+        &format!(
+            "INSERT INTO \"{tags}\" (id, _deleted_at) VALUES ('t1', '2026-01-01T00:00:00.000Z')"
+        ),
+        &[],
+    )
+    .unwrap();
+
+    let fields = registry.get_collection(&posts).unwrap().fields.clone();
+    let data: DocumentFields = [("tags".to_string(), json!(["t1"]))].into_iter().collect();
+
+    let err = after_create_from_data(&conn, &fields, &data, &no_locale())
+        .expect_err("a trashed target is refused");
+    assert!(
+        err.downcast_ref::<UnavailableReferences>().is_some(),
+        "{err:#}"
+    );
+
+    let anchored = anchor_to_fields(err, &fields, &data);
+    let ve = anchored
+        .downcast_ref::<ValidationError>()
+        .expect("reported on the field");
+    assert_eq!(ve.errors[0].field, "tags");
 }

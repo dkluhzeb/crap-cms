@@ -7,15 +7,19 @@ use tracing::warn;
 
 use crate::{
     core::{
-        Builder, CollectionDefinition, Document, FieldDefinition, Registry, ReqContext,
+        Builder, CollectionDefinition, Document, FieldDefinition, Hooks, ReqContext,
         cache::{CacheBackend, NoneCache},
         upload,
     },
-    db::{CachedDoc, DbConnection, LocaleContext, SharedPopulateSingleflight, Singleflight, query},
+    db::{
+        CachedDoc, DbConnection, LocaleContext, SharedPopulateSingleflight, Singleflight, query,
+        query::helpers::global_table,
+    },
     hooks::lifecycle::AfterReadCtx,
     service::{
-        ReadHooks, ReadStripArgs, ServiceContext, helpers, hooks::ReadHooksJoinGuard,
-        read::populated_strip::EmbeddedDocStripper,
+        ReadHooks, ReadStripArgs, ServiceContext, helpers,
+        hooks::ReadHooksJoinGuard,
+        read::populated_strip::{EmbeddedDocPass, EmbeddedReader},
     },
 };
 
@@ -57,36 +61,72 @@ pub(crate) fn post_process_single<O: PostProcessOpts>(
     let (Some(hooks), Ok(def)) = (ctx.read_hooks, ctx.collection_def()) else {
         return;
     };
-    let opts = call.opts;
-    let access_locale = opts.locale_ctx().map(LocaleContext::access_locale);
 
-    populate_one(ctx, conn, doc, opts);
-    shape_for_read(def, opts, slice::from_mut(doc));
+    populate_one(ctx, conn, doc, (ctx.slug, &def.fields), call.opts);
+    shape_for_read(def, call.opts, slice::from_mut(doc));
+
+    finish_one(ctx, hooks, doc, (&def.hooks, &def.fields), call);
+}
+
+/// Post-process a global document: populate its relationships to the read's
+/// depth, then strip, process its populated targets and run `after_read` —
+/// the collection read's pipeline, for a global's one document. Its populate
+/// path is keyed by the global's table, so it can't be taken for a
+/// same-slugged collection's document.
+pub(crate) fn post_process_global<O: PostProcessOpts>(
+    ctx: &ServiceContext,
+    conn: &dyn DbConnection,
+    doc: &mut Document,
+    call: PostProcessCall<'_, O>,
+) {
+    let (Some(hooks), Ok(def)) = (ctx.read_hooks, ctx.global_def()) else {
+        return;
+    };
+
+    let table = global_table(ctx.slug);
+
+    populate_one(ctx, conn, doc, (&table, &def.fields), call.opts);
+
+    finish_one(ctx, hooks, doc, (&def.hooks, &def.fields), call);
+}
+
+/// The last steps of a single-document read: the document's own field-read
+/// strip, its populated targets' processing, then its `after_read` hooks.
+/// `schema` is the document's hooks and field definitions.
+fn finish_one<O: PostProcessOpts>(
+    ctx: &ServiceContext,
+    hooks: &dyn ReadHooks,
+    doc: &mut Document,
+    schema: (&Hooks, &[FieldDefinition]),
+    call: PostProcessCall<'_, O>,
+) {
+    let fields = schema.1;
+    let access_locale = call.opts.locale_ctx().map(LocaleContext::access_locale);
 
     // Data-aware field-read strip (per-row `ctx.data`, full-doc `ctx.document`),
     // then the document-independent API-hidden strip.
     helpers::strip_unreadable(
         hooks,
-        &ReadStripArgs::builder(&def.fields, ctx.slug)
+        &ReadStripArgs::builder(fields, ctx.slug)
             .user(ctx.user)
             .locale(access_locale)
             .build(),
         doc,
     );
 
-    // Strip field-read-denied fields from populated relationship targets — each
-    // embedded doc belongs to another collection with its own field access.
-    if let Some(registry) = ctx.registry {
-        EmbeddedDocStripper::new(registry, hooks, ctx.user, access_locale).strip(doc, &def.fields);
+    // Populated relationship targets — each embedded doc belongs to another
+    // collection with its own field access and read hooks.
+    if let Some(pass) = embedded_pass(ctx, hooks, &call) {
+        pass.process(doc, fields);
     }
 
-    let ar_ctx = after_read_ctx(ctx, def, call);
+    let ar_ctx = after_read_ctx(ctx, schema, call);
     let owned = mem::replace(doc, Document::new(String::new()));
     *doc = hooks.after_read_one(&ar_ctx, owned);
 }
 
 /// Who and what a batch read strip evaluates field-read access for.
-/// `registry` is `None` when populated relationship targets need no strip.
+/// `embedded` is `None` when the read populated nothing.
 #[derive(Builder)]
 struct ReadStrip<'a> {
     #[builder(required)]
@@ -97,14 +137,15 @@ struct ReadStrip<'a> {
     collection: &'a str,
     user: Option<&'a Document>,
     locale: Option<&'a str>,
-    registry: Option<&'a Registry>,
+    embedded: Option<EmbeddedDocPass<'a>>,
 }
 
 impl ReadStrip<'_> {
     /// Strip read-denied + API-hidden fields from a batch of documents: first
-    /// the documents' own fields, then the field-access-denied fields of any
-    /// populated relationship targets (via [`EmbeddedDocStripper`], which
-    /// memoizes per-target denials across the batch).
+    /// the documents' own fields, then their populated relationship targets
+    /// (via [`EmbeddedDocPass`], which memoizes per-target work across the
+    /// batch and runs the targets' `after_read` hooks one batch per collection
+    /// per level).
     fn strip_docs(&self, docs: &mut [Document]) {
         // Field-read access is data-aware (per-doc, per-row), so evaluate it on
         // each document — but in ONE batch so the Lua VM is acquired once for
@@ -118,12 +159,11 @@ impl ReadStrip<'_> {
             docs,
         );
 
-        if let Some(registry) = self.registry {
-            let stripper = EmbeddedDocStripper::new(registry, self.hooks, self.user, self.locale);
-            for doc in docs.iter_mut() {
-                stripper.strip(doc, self.fields);
-            }
-        }
+        let Some(pass) = &self.embedded else {
+            return;
+        };
+
+        pass.process_many(docs, self.fields);
     }
 }
 
@@ -147,12 +187,37 @@ pub(crate) fn post_process_docs<O: PostProcessOpts>(
     ReadStrip::builder(&def.fields, hooks, ctx.slug)
         .user(ctx.user)
         .locale(opts.locale_ctx().map(LocaleContext::access_locale))
-        .registry(ctx.registry)
+        .embedded(embedded_pass(ctx, hooks, &call))
         .build()
         .strip_docs(docs);
 
-    let ar_ctx = after_read_ctx(ctx, def, call);
+    let ar_ctx = after_read_ctx(ctx, (&def.hooks, &def.fields), call);
     *docs = hooks.after_read_many(&ar_ctx, mem::take(docs));
+}
+
+/// The embedded-document pass over a read's populated targets, run with the
+/// reader's user and locales and the read's operation. `None` when the read
+/// populates nothing (`depth` 0) or has no registry to resolve targets in.
+fn embedded_pass<'a, O: PostProcessOpts>(
+    ctx: &'a ServiceContext,
+    hooks: &'a dyn ReadHooks,
+    call: &PostProcessCall<'a, O>,
+) -> Option<EmbeddedDocPass<'a>> {
+    let registry = ctx.registry?;
+
+    if call.opts.depth() <= 0 {
+        return None;
+    }
+
+    let locale_ctx = call.opts.locale_ctx();
+    let reader = EmbeddedReader::builder(registry, hooks, call.operation)
+        .user(ctx.user)
+        .access_locale(locale_ctx.map(LocaleContext::access_locale))
+        .hook_locale(locale_ctx.and_then(LocaleContext::hook_locale))
+        .ui_locale(ctx.ui_locale.as_deref())
+        .build();
+
+    Some(EmbeddedDocPass::new(reader))
 }
 
 /// Batched plural-doc hydrate: one `WHERE parent_id IN (…)` SELECT per
@@ -183,16 +248,16 @@ fn hydrate_many<O: PostProcessOpts>(
     }
 }
 
-/// Populate one document's relationships to the read's depth.
+/// Populate one document's relationships to the read's depth. `target` is
+/// the slug its populate path knows it by and its field definitions.
 fn populate_one<O: PostProcessOpts>(
     ctx: &ServiceContext,
     conn: &dyn DbConnection,
     doc: &mut Document,
+    (slug, fields): (&str, &[FieldDefinition]),
     opts: &O,
 ) {
-    let (Some(hooks), Ok(def), Some(registry)) =
-        (ctx.read_hooks, ctx.collection_def(), ctx.registry)
-    else {
+    let (Some(hooks), Some(registry)) = (ctx.read_hooks, ctx.registry) else {
         return;
     };
 
@@ -200,7 +265,7 @@ fn populate_one<O: PostProcessOpts>(
         return;
     }
 
-    let pop_ctx = query::PopulateContext::new(conn, registry, ctx.slug, def);
+    let pop_ctx = query::PopulateContext::new(conn, registry, slug, fields);
     let guard = ReadHooksJoinGuard::new(hooks);
     let pop_opts = populate_opts(opts, &guard, ctx.user);
     let mut visited = HashSet::new();
@@ -217,7 +282,7 @@ fn populate_one<O: PostProcessOpts>(
     });
 
     if let Err(e) = populated {
-        warn!("populate error for {}/{}: {e:#}", ctx.slug, doc.id);
+        warn!("populate error for {slug}/{}: {e:#}", doc.id);
     }
 }
 
@@ -238,7 +303,7 @@ fn populate_many<O: PostProcessOpts>(
         return;
     }
 
-    let pop_ctx = query::PopulateContext::new(conn, registry, ctx.slug, def);
+    let pop_ctx = query::PopulateContext::new(conn, registry, ctx.slug, &def.fields);
     let guard = ReadHooksJoinGuard::new(hooks);
     let pop_opts = populate_opts(opts, &guard, ctx.user);
 
@@ -312,15 +377,16 @@ fn shape_for_read<O: PostProcessOpts>(def: &CollectionDefinition, opts: &O, docs
     }
 }
 
-/// The `after_read` context of a post-processing pass.
+/// The `after_read` context of a post-processing pass over documents with
+/// `schema`'s hooks and field definitions.
 fn after_read_ctx<'a, O: PostProcessOpts>(
     ctx: &'a ServiceContext,
-    def: &'a CollectionDefinition,
+    (hooks, fields): (&'a Hooks, &'a [FieldDefinition]),
     call: PostProcessCall<'a, O>,
 ) -> AfterReadCtx<'a> {
     AfterReadCtx {
-        hooks: &def.hooks,
-        fields: &def.fields,
+        hooks,
+        fields,
         collection: ctx.slug,
         operation: call.operation,
         // `hook_locale` (not `access_locale`): in All-locale mode the value is

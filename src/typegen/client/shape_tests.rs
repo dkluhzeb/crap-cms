@@ -114,7 +114,7 @@ fn rust_folds_upload_sizes() {
     assert_folds_sizes(Language::Rust);
 }
 
-/// A rich text field with `admin.richtext_format = "json"` and a default
+/// A rich text field with `admin.format = "json"` and a default
 /// (HTML) one beside it.
 fn richtext_registry() -> Registry {
     let mut pages = CollectionDefinition::new("pages");
@@ -230,8 +230,8 @@ fn typescript_input_omits_server_derived_upload_columns() {
     for derived in ["filename", "mime_type", "url", "thumbnail", "sizes"] {
         assert!(!data.contains(derived), "{derived}: {data}");
     }
-    assert!(data.contains("  focal_x?: number;"), "{data}");
-    assert!(data.contains("  alt?: string;"), "{data}");
+    assert!(data.contains("  focal_x?: number | null;"), "{data}");
+    assert!(data.contains("  alt?: string | null;"), "{data}");
 
     let doc = ts_block(&out, "export interface MediaDocument {");
     assert!(doc.contains("  url?: string | null;"), "{doc}");
@@ -297,30 +297,25 @@ fn hidden_fields_are_input_only() {
     let ts = generate(&reg, Language::Typescript).expect("generate");
     assert!(!ts_block(&ts, "export interface PostsDocument {").contains("secret"));
     assert!(!ts_block(&ts, "export interface PostsSeo {").contains("secret"));
-    assert!(ts_block(&ts, "export interface PostsData {").contains("  secret?: string;"));
-    assert!(ts_block(&ts, "export interface PostsSeoData {").contains("  secret?: string;"));
+    assert!(ts_block(&ts, "export interface PostsData {").contains("  secret?: string | null;"));
+    assert!(ts_block(&ts, "export interface PostsSeoData {").contains("  secret?: string | null;"));
 }
 
 /// Regression: a document populated into a relationship carries its
 /// `collection` key, but no read type declared it — so a polymorphic union
-/// of documents could not be narrowed. A global is never populated, and a
-/// collection's own `collection` field keeps the key.
+/// of documents could not be narrowed. A global is never populated.
+/// (`collection` is a reserved field name, so no field can claim the key.)
 #[test]
 fn populated_documents_declare_their_collection_tag() {
     let mut tags = CollectionDefinition::new("tags");
     tags.fields = vec![FieldDefinition::builder("name", FieldType::Text).build()];
-    let mut shadowed = CollectionDefinition::new("links");
-    shadowed.fields = vec![FieldDefinition::builder("collection", FieldType::Text).build()];
     let mut reg = Registry::new();
     reg.register_collection(tags);
-    reg.register_collection(shadowed);
     reg.register_global(GlobalDefinition::new("settings"));
 
     let ts = generate(&reg, Language::Typescript).expect("generate");
     let doc = ts_block(&ts, "export interface TagsDocument {");
     assert!(doc.contains("  collection?: \"tags\";"), "{doc}");
-    let links = ts_block(&ts, "export interface LinksDocument {");
-    assert_eq!(links.matches("collection?").count(), 1, "{links}");
     assert!(!ts_block(&ts, "export interface TagsData {").contains("collection"));
     assert!(!ts_block(&ts, "export interface SettingsDocument {").contains("collection"));
 
@@ -342,6 +337,37 @@ fn populated_documents_declare_their_collection_tag() {
     let tags = &rs[start..];
     let tags = &tags[..tags.find("\n}").expect("struct end")];
     assert!(!tags.contains("collection"), "{tags}");
+}
+
+/// A global read populates its relationships to `depth` like a collection
+/// read, so a global's reference is typed as its id or the populated document.
+#[test]
+fn a_global_reference_is_typed_as_id_or_document() {
+    let mut tags = CollectionDefinition::new("tags");
+    tags.fields = vec![FieldDefinition::builder("name", FieldType::Text).build()];
+    let mut settings = GlobalDefinition::new("settings");
+    settings.fields = vec![
+        FieldDefinition::builder("featured", FieldType::Relationship)
+            .relationship(RelationshipConfig::new("tags", false))
+            .build(),
+        FieldDefinition::builder("pinned", FieldType::Relationship)
+            .relationship(RelationshipConfig::new("tags", true))
+            .build(),
+    ];
+    let mut reg = Registry::new();
+    reg.register_collection(tags);
+    reg.register_global(settings);
+
+    let ts = generate(&reg, Language::Typescript).expect("generate");
+    let doc = ts_block(&ts, "export interface SettingsDocument {");
+    assert!(
+        doc.contains("  featured?: string | TagsDocument | null;"),
+        "{doc}"
+    );
+    assert!(
+        doc.contains("  pinned?: (string | TagsDocument)[] | null;"),
+        "{doc}"
+    );
 }
 
 /// Regression: `_status` was typed as any string in every client language
@@ -400,7 +426,7 @@ fn typescript_input_references_are_ids() {
     let ts = generate(&reg, Language::Typescript).expect("generate");
 
     let data = ts_block(&ts, "export interface PostsData {");
-    assert!(data.contains("  related?: string[];"), "{data}");
+    assert!(data.contains("  related?: string[] | null;"), "{data}");
     let row = ts_block(&ts, "export interface PostsItemsData {");
     assert!(row.contains("  owner: string;"), "{row}");
 

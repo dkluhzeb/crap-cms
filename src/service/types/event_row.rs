@@ -1,6 +1,36 @@
 //! The stored row a write's live event is built from.
 
-use crate::core::{Document, EventGateSnapshot, EventViewPlacement};
+use crate::core::{Document, EventGateSnapshot, EventViewMeta, EventViewPlacement};
+
+/// The stored row as a write found it: where it sat across the content views,
+/// and — when the write can move it out of that view with changed content — a
+/// gating snapshot of what it held there. Read under the write's row lock,
+/// before the write persists, in the default locale the event is judged in.
+#[derive(Clone)]
+pub(crate) struct RowBefore {
+    placement: EventViewPlacement,
+    gate: Option<EventGateSnapshot>,
+}
+
+impl RowBefore {
+    /// Capture `doc`, the row as stored before the write.
+    pub(crate) fn of(doc: &Document) -> Self {
+        Self {
+            placement: EventViewPlacement::from_fields(&doc.fields),
+            gate: Some(EventGateSnapshot::of(doc)),
+        }
+    }
+
+    /// Only where the row sat — for a write that leaves it in that view, or
+    /// moves it with its content unchanged, so no view is judged against the
+    /// content it held.
+    pub(crate) fn placed(placement: EventViewPlacement) -> Self {
+        Self {
+            placement,
+            gate: None,
+        }
+    }
+}
 
 /// The row a write stored, as read back — hydrated, but neither shaped nor
 /// stripped for anyone. A write's live event derives both of its row-dependent
@@ -16,6 +46,8 @@ use crate::core::{Document, EventGateSnapshot, EventViewPlacement};
 pub(crate) struct EventRow {
     doc: Document,
     prior: Option<EventViewPlacement>,
+    prior_gate: Option<EventGateSnapshot>,
+    stored: Option<EventViewPlacement>,
 }
 
 impl EventRow {
@@ -24,6 +56,8 @@ impl EventRow {
         Self {
             doc: doc.clone(),
             prior: None,
+            prior_gate: None,
+            stored: None,
         }
     }
 
@@ -38,25 +72,52 @@ impl EventRow {
         self
     }
 
-    /// Record the `_status` the row had before a write that moves it only
-    /// along the status axis — an update, which never moves a row into or out
-    /// of the trash, so it sat where it still is on that axis. `None`: nothing
-    /// was read, and no move is recorded.
+    /// Record the content the row had in the view it left, for a move that
+    /// changed it (a version restore): the left view's row constraint is
+    /// judged against it (see [`EventViewMeta::left_as`]).
     #[must_use]
-    pub(crate) fn status_moved_from(self, status: Option<String>) -> Self {
-        let Some(status) = status else {
+    pub(crate) fn left_as(mut self, before: Option<RowBefore>) -> Self {
+        self.prior_gate = before.and_then(|before| before.gate);
+
+        self
+    }
+
+    /// Record the row as an update found it (`None`: nothing was read). A
+    /// published write moves the row from where it sat, content and all — a
+    /// publish of a draft leaves the draft view. A draft save (`draft`)
+    /// leaves the stored row where it is: its event describes the pending
+    /// draft, and records where the stored row stays (see
+    /// [`EventViewMeta::stored_at`]).
+    #[must_use]
+    pub(crate) fn before_write(mut self, before: Option<RowBefore>, draft: bool) -> Self {
+        let Some(before) = before else {
             return self;
         };
 
-        let prior = EventViewPlacement {
-            status: Some(status),
-            ..EventViewPlacement::from_fields(&self.doc.fields)
-        };
+        if draft {
+            self.stored = Some(before.placement);
 
-        self.moved_from(Some(prior))
+            return self;
+        }
+
+        self.prior = Some(before.placement);
+        self.prior_gate = before.gate;
+
+        self
+    }
+
+    /// The event's view metadata: where the row is now, the move recorded,
+    /// the content it left, and where the stored row stays when the event
+    /// describes a pending draft.
+    pub(crate) fn view(&self) -> EventViewMeta {
+        EventViewMeta::from_fields(&self.doc.fields)
+            .moved_from(self.prior.clone())
+            .left_as(self.prior_gate.clone())
+            .stored_at(self.stored.clone())
     }
 
     /// Where the row sat before the write, when recorded.
+    #[cfg(test)]
     pub(crate) fn prior(&self) -> Option<EventViewPlacement> {
         self.prior.clone()
     }
@@ -99,32 +160,72 @@ mod tests {
         );
     }
 
-    /// A status-only move keeps the row's own trash state: an update of a
-    /// trashed draft that publishes it moved from the trashed draft, not from
-    /// the live draft view.
-    #[test]
-    fn status_moved_from_keeps_the_trash_state() {
+    fn row(status: &str, owner: &str) -> Document {
         let mut doc = Document::new("doc-1");
-        doc.fields.insert("_status".into(), json!("published"));
-        doc.fields
-            .insert("_deleted_at".into(), json!("2026-01-01T00:00:00Z"));
+        doc.fields.insert("_status".into(), json!(status));
+        doc.fields.insert("owner".into(), json!(owner));
 
-        let moved = EventRow::new(&doc).status_moved_from(Some("draft".into()));
+        doc
+    }
+
+    fn owner_is(owner: &str) -> [FilterClause; 1] {
+        [FilterClause::Single(Filter {
+            field: "owner".into(),
+            op: FilterOp::Equals(owner.into()),
+        })]
+    }
+
+    /// A published write records where the row was and what it held there:
+    /// a publish that also changed the content is judged, in the view it
+    /// left, against the old content.
+    #[test]
+    fn a_published_write_records_the_row_it_moved_from() {
+        let before = RowBefore::of(&row("draft", "u1"));
+        let after = row("published", "u2");
+
+        let event_row = EventRow::new(&after).before_write(Some(before), false);
+        let view = event_row.view();
+
+        assert_eq!(view.prior.and_then(|p| p.status).as_deref(), Some("draft"));
+        let left = view.prior_gate.expect("the content it left");
+        assert!(left.matches(&owner_is("u1"), &[]));
+        assert!(view.stored.is_none());
+    }
+
+    /// Regression: a draft save's event read its pending draft's placement
+    /// as the stored row's. It now records where the stored row stays, and
+    /// no move.
+    #[test]
+    fn a_draft_save_records_where_the_stored_row_stays() {
+        let before = RowBefore::of(&row("published", "u1"));
+        let draft = row("draft", "u1");
+
+        let view = EventRow::new(&draft)
+            .before_write(Some(before), true)
+            .view();
+
+        assert!(view.prior.is_none(), "a draft save moves nothing");
+        assert!(view.prior_gate.is_none());
+        assert!(view.describes_pending_draft());
         assert_eq!(
-            moved.prior(),
-            Some(EventViewPlacement {
-                status: Some("draft".into()),
-                trashed: true,
-            })
+            view.stored.and_then(|p| p.status).as_deref(),
+            Some("published")
         );
+    }
 
-        assert!(
-            EventRow::new(&doc)
-                .status_moved_from(None)
-                .prior()
-                .is_none(),
-            "nothing read, nothing recorded"
-        );
+    /// Nothing read, nothing recorded; a write that stayed in its view
+    /// records no move and no left content.
+    #[test]
+    fn an_unmoved_row_records_nothing() {
+        let doc = row("published", "u1");
+
+        let view = EventRow::new(&doc).before_write(None, false).view();
+        assert_eq!(view, EventViewMeta::from_fields(&doc.fields));
+
+        let before = RowBefore::of(&row("published", "u0"));
+        let view = EventRow::new(&doc).before_write(Some(before), false).view();
+        assert!(view.prior.is_none());
+        assert!(view.prior_gate.is_none(), "no move, no left content");
     }
 
     /// The row carries the placement it moved from, and nothing unless one is

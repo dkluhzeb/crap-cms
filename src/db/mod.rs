@@ -40,6 +40,7 @@
 
 pub mod backend;
 pub mod connection;
+pub mod deadline;
 pub mod document;
 pub mod error;
 pub mod migrate;
@@ -50,7 +51,10 @@ pub mod pool;
 pub mod query;
 pub mod types;
 
-pub use connection::{BoxedConnection, BoxedTransaction, DbConnection, UpsertSpec};
+pub use connection::{
+    BoxedConnection, BoxedTransaction, DbConnection, InPlaceTransaction, UpsertSpec, with_savepoint,
+};
+pub use deadline::{StatementDeadlineScope, StatementTimedOut, UnboundedStatements};
 pub use error::{ConstraintKind, constraint_kind, is_transient};
 pub use pool::DbPool;
 pub use query::{

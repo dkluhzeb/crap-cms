@@ -28,7 +28,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::common::production_code;
+use crate::common::{is_test_module_file, production_code};
 
 /// The primitives that materialize a write into the database.
 const PERSIST_FNS: &[&str] = &[
@@ -59,7 +59,8 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[(
 /// unpublish. A scan that finds fewer has stopped seeing write paths.
 const MIN_PERSIST_CALLERS: usize = 4;
 
-/// Recursively collect every `.rs` file under `dir`.
+/// Recursively collect every production `.rs` file under `dir` — an
+/// out-of-line test module is test code.
 fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -70,7 +71,7 @@ fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
         if path.is_dir() {
             rs_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
+        } else if path.extension().is_some_and(|e| e == "rs") && !is_test_module_file(&path) {
             out.push(path);
         }
     }

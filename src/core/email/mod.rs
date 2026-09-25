@@ -13,6 +13,7 @@ mod log;
 pub mod queue;
 mod renderer;
 mod smtp;
+mod subject;
 mod validation;
 mod webhook;
 
@@ -22,4 +23,5 @@ pub use custom::CustomEmailProvider;
 pub use factory::{create_email_provider, create_email_provider_with_lease, is_configured};
 pub use queue::{EmailJobData, SYSTEM_EMAIL_JOB, SYSTEM_EMAIL_QUEUE, queue_email};
 pub use renderer::EmailRenderer;
+pub use subject::SystemEmail;
 pub use validation::validate_no_crlf;

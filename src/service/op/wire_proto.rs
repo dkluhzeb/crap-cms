@@ -112,7 +112,7 @@ pub static PROTO_MESSAGES: &[ProtoMessage] = &[
                 name: "search",
                 ty: "optional string",
                 tag: 12,
-                doc: "Full-text search query string. When set, results are ranked by relevance\nagainst the collection's full-text search index.",
+                doc: "Full-text search query string. When set, only documents whose indexed text\ncontains every search word (as a word prefix) are returned, in the requested\norder — set order_by = \"_rank\" to sort by relevance instead. Searches the\nrequested locale's text (every locale with locale = \"all\").",
             },
             ProtoField {
                 name: "trash",
@@ -605,6 +605,12 @@ pub static PROTO_MESSAGES: &[ProtoMessage] = &[
                 ty: "optional bool",
                 tag: 3,
                 doc: "When true, reads unpublished (draft) content for a global that has drafts\nenabled and has been unpublished. Default false reads an unpublished global as\nempty (no field content). Subject to the global's read access.",
+            },
+            ProtoField {
+                name: "depth",
+                ty: "optional int32",
+                tag: 4,
+                doc: "Relationship population depth. 0 = IDs only.\nDefaults to the server's default_depth config (1 unless changed) — the\nsame default as FindByID.",
             },
         ],
     },

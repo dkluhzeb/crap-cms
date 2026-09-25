@@ -4,11 +4,9 @@ use anyhow::Result;
 use std::collections::HashSet;
 
 use crate::core::cache::CacheBackend;
-use crate::core::{
-    CollectionDefinition, Document, FieldType, field::flatten_array_sub_fields, upload,
-};
+use crate::core::{CollectionDefinition, Document, FieldType, field::flatten_array_sub_fields};
 use crate::db::query::populate::helpers::{
-    TargetViews, cache_or_fetch_doc, fetch_target, target_row_visible,
+    TargetCollection, TargetViews, cache_or_fetch_doc, fetch_target, visible_targets,
 };
 use crate::db::query::populate::{
     CachedDoc, PopulateContext, PopulateCtx, PopulateOpts, Singleflight, locale_cache_key,
@@ -18,14 +16,13 @@ use crate::db::query::populate::{
 use super::{join, nested, nonpoly, poly};
 
 /// Apply the per-request filters to a RAW target document and populate it,
-/// returning `None` when the target is hidden by draft visibility or the
-/// `read` access decision.
+/// returning `None` when the target is hidden from this reader.
 ///
-/// The shared cache holds only RAW docs (user-independent); draft visibility,
-/// the `read` decision, upload sizes, and recursive population are all applied
-/// here, per request, so a cached raw doc can never leak one user's filtered
-/// view to another. Access constraints are matched against the RAW fields,
-/// before population turns relationship fields into objects.
+/// The shared cache holds only RAW docs (user-independent); the reader's view
+/// of the target (its pending draft where the reader's draft read shows it,
+/// else its row when visible — see [`visible_targets`]), upload sizes, and
+/// recursive population are all applied here, per request, so a cached raw doc
+/// can never leak one user's filtered view to another.
 ///
 /// `views` is the target collection's resolved view access (`read` + `draft`),
 /// resolved once by the caller for the whole field (it is collection-level, not
@@ -33,21 +30,22 @@ use super::{join, nested, nonpoly, poly};
 ///
 /// # Errors
 ///
-/// Propagates a backend error from the recursive population step.
+/// Propagates a backend error from the draft lookup or the recursive
+/// population step.
 pub(super) fn finalize_target(
     ctx: &PopulateCtx<'_>,
     collection: &str,
     def: &CollectionDefinition,
-    mut raw: Document,
+    raw: Document,
     views: &TargetViews,
     effective_depth: i32,
     visited: &mut HashSet<(String, String)>,
 ) -> Result<Option<Document>> {
-    if !target_row_visible(views, &raw, ctx.published_only, def) {
-        return Ok(None);
-    }
+    let target = TargetCollection::builder(collection, def, views).build();
 
-    upload::shape_read_document(def, &mut raw);
+    let Some(mut raw) = visible_targets(ctx, &target, vec![raw])?.pop() else {
+        return Ok(None);
+    };
 
     // Recurse, forwarding the access checker + user so nested targets are gated
     // too, and the shared singleflight so nested raw fetches dedup across requests.
@@ -57,7 +55,7 @@ pub(super) fn finalize_target(
             conn: ctx.conn,
             registry: ctx.registry,
             collection_slug: collection,
-            def,
+            fields: &def.fields,
         },
         &mut raw,
         visited,
@@ -108,8 +106,10 @@ pub(super) fn resolve_single_target(
 
 /// Recursively populate relationship fields with full document objects.
 ///
-/// depth=0 is a no-op. Tracks visited (collection, id) pairs to break cycles.
-/// Uses a shared `cache` to avoid redundant fetches within the same request.
+/// depth=0 is a no-op. `visited` is the current path's cycle guard (see
+/// [`Visited`](crate::db::query::populate::Visited)): a reference back to a
+/// document on the path stays an id. Uses a shared `cache` to avoid redundant
+/// fetches within the same request.
 pub(crate) fn populate_relationships_cached(
     ctx: &PopulateContext<'_>,
     doc: &mut Document,
@@ -164,14 +164,34 @@ pub(crate) fn populate_relationships_cached_inner(
         return Ok(());
     }
 
-    visited.insert(visit_key);
+    // The guard is the current PATH: the document is on it while its own
+    // references populate, and off it again once they have — a sibling branch
+    // referencing the same document expands it too, exactly as the batch path
+    // does.
+    visited.insert(visit_key.clone());
 
+    let populated = populate_doc(ctx, doc, visited, opts, (cache, singleflight));
+
+    visited.remove(&visit_key);
+
+    populated
+}
+
+/// Populate one document already on the path: its relationship/upload fields,
+/// those in its containers, then its document-level joins.
+fn populate_doc(
+    ctx: &PopulateContext<'_>,
+    doc: &mut Document,
+    visited: &mut HashSet<(String, String)>,
+    opts: &PopulateOpts<'_>,
+    (cache, singleflight): (&dyn CacheBackend, &Singleflight<CachedDoc>),
+) -> Result<()> {
     populate_flat_relationships(ctx, doc, opts, cache, singleflight, visited)?;
 
-    // The doc's own id anchors any reverse-lookup join nested in its containers;
-    // clone it to a local so the context can hold it while `doc` is borrowed mut.
+    // The doc's own id anchors any reverse-lookup join; clone it to a local so
+    // the context can hold it while `doc` is borrowed mut.
     let root_id = doc.id.to_string();
-    let nested_pctx = PopulateCtx {
+    let doc_pctx = PopulateCtx {
         conn: ctx.conn,
         registry: ctx.registry,
         effective_depth: opts.depth,
@@ -184,11 +204,9 @@ pub(crate) fn populate_relationships_cached_inner(
         user: opts.user,
     };
 
-    nested::populate_containers_in_doc(&nested_pctx, doc, &ctx.def.fields, visited)?;
+    nested::populate_containers_in_doc(&doc_pctx, doc, ctx.fields, visited)?;
 
-    join::populate_join_fields(ctx, doc, visited, opts, cache)?;
-
-    Ok(())
+    join::populate_join_fields(ctx.fields, doc, visited, &doc_pctx, opts.select)
 }
 
 /// Populate non-join relationship/upload fields on a single document.
@@ -204,7 +222,7 @@ fn populate_flat_relationships(
     // the flat relationship/upload paths themselves.
     let root_id = doc.id.to_string();
 
-    for field in flatten_array_sub_fields(&ctx.def.fields) {
+    for field in flatten_array_sub_fields(ctx.fields) {
         if field.field_type != FieldType::Relationship && field.field_type != FieldType::Upload {
             continue;
         }

@@ -10,7 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::{
     admin::{AdminState, FormParseError, server::evaluate_admin_request},
@@ -196,8 +196,9 @@ fn db_error_response(e: anyhow::Error, db_kind: &str) -> Response {
 /// text is user-facing and kept sanitized by the service layer.
 ///
 /// `Transient` and `Internal` wrap raw backend / pool errors whose `Display`
-/// can leak DB identifiers or driver vocabulary. Those are logged at `error`
-/// and the client receives a generic phrase only.
+/// can leak DB identifiers or driver vocabulary. Those are logged — a
+/// transient (retryable, expected under load) at `warn`, an internal at
+/// `error` — and the client receives a generic phrase only.
 pub fn service_error_to_response(err: &ServiceError) -> Response {
     let (status, message) = match err {
         ServiceError::AccessDenied(_) => (StatusCode::FORBIDDEN, err.to_string()),
@@ -215,7 +216,7 @@ pub fn service_error_to_response(err: &ServiceError) -> Response {
         | ServiceError::InvalidCredentials
         | ServiceError::InvalidToken { .. } => (StatusCode::UNAUTHORIZED, err.to_string()),
         ServiceError::Transient(_) => {
-            error!("Upload service transient error: {}", err);
+            warn!("Upload service transient error: {}", err);
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Service temporarily unavailable".to_string(),

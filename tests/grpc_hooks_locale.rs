@@ -699,6 +699,7 @@ async fn update_global_with_nested_fields() {
             slug: "site_config".to_string(),
             locale: None,
             draft: None,
+            depth: None,
         }))
         .await
         .unwrap()

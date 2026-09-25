@@ -22,7 +22,7 @@ use crap_cms::{
     admin::{AdminState, server::build_router, templates, translations::Translations},
     config::{CrapConfig, LocaleConfig},
     core::{
-        DocumentFields, JwtSecret, Registry, auth,
+        DocumentFields, JwtSecret, LiveSlots, Registry, auth,
         collection::{Auth, CollectionDefinition, GlobalDefinition, Labels, VersionsConfig},
         field::{FieldDefinition, FieldType, LocalizedString},
     },
@@ -241,8 +241,7 @@ fn build_app(
         )),
         has_auth,
         translations,
-        sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        max_sse_connections: 0,
+        sse_slots: LiveSlots::new(0, 0),
         shutdown: tokio_util::sync::CancellationToken::new(),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,

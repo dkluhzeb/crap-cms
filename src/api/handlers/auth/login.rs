@@ -5,8 +5,7 @@
 //! equalization, MFA gate) is shared with the admin login. This surface owns
 //! rate limiting and the JWT response shape.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use tokio::task;
 use tonic::{Request, Response, Status};
@@ -19,11 +18,13 @@ use crate::{
             ContentService, auth::user_response::prepare_user_document,
             content_service::pool_error_status, proto::document_to_proto,
         },
+        request_client_ip,
     },
     core::{
         CollectionDefinition, Document, SharedPasswordProvider,
         collection::{Auth, MfaMode, Surface},
-        normalize_email,
+        login_email_key,
+        rate_limit::AttemptBudget,
     },
     service::{
         AppInfra,
@@ -108,26 +109,24 @@ impl ContentService {
         &self,
         request: Request<content::LoginRequest>,
     ) -> Result<Response<content::LoginResponse>, Status> {
-        let ip = request
-            .remote_addr()
-            .map_or_else(|| "unknown".to_string(), |a| a.ip().to_string());
+        let client = request_client_ip(&request, &self.server_config);
         let headers = self.metadata_headers(request.metadata());
         let req = request.into_inner();
 
-        // Key the per-email limiter on the address in its stored form (trimmed,
-        // lowercased, NFC-composed). `find_by_email` compares that form, so
-        // keying the limiter on the raw address would let an attacker rotate
-        // casing/whitespace to get a fresh lockout bucket per spelling of one
-        // account. Mirrors the admin login twin (`login_action.rs`).
-        let email_key = normalize_email(&req.email);
+        // An address longer than any deliverable one cannot name an account:
+        // it is refused before it is keyed, throttled or looked up. Otherwise
+        // the per-email limiter is keyed on the address in its stored form
+        // (trimmed, lowercased, NFC-composed) — the form `find_by_email`
+        // compares — so spelling variants of one account share a bucket.
+        // Mirrors the admin login twin (`login_action.rs`).
+        let Some(email_key) = login_email_key(&req.email) else {
+            return Err(Status::unauthenticated("Invalid email or password"));
+        };
 
-        // Atomically record this attempt against both limiters and reject if
-        // either is now over threshold — one operation per limiter, closing the
-        // burst race the old is_blocked + later record_failure split left open.
-        // Both are evaluated (not short-circuited) so each counter advances.
-        let email_blocked = self.login_limiter.check_and_block(&email_key);
-        let ip_blocked = self.ip_login_limiter.check_and_block(&ip);
-        if email_blocked || ip_blocked {
+        // Atomically record this attempt, IP budget first (see
+        // `AttemptBudget`), and reject if either budget is spent.
+        let budget = AttemptBudget::new(&self.ip_login_limiter, &self.login_limiter);
+        if budget.check_and_block(&client, &email_key) {
             return Err(Status::resource_exhausted(
                 "Too many login attempts. Please try again later.",
             ));
@@ -159,7 +158,7 @@ impl ContentService {
             def: def.clone(),
             password_provider: self.password_provider.clone(),
             headers,
-            remote_addr: ip.clone(),
+            remote_addr: client.to_string(),
         };
 
         let outcome = task::spawn_blocking(move || login_blocking(&input))
@@ -179,8 +178,7 @@ impl ContentService {
             // counter, refund the shared per-IP attempt. Code issuance has its
             // own per-user limiter (see `issue_mfa_challenge`).
             LoginOutcome::MfaRequired(v) => {
-                self.login_limiter.clear(&email_key);
-                self.ip_login_limiter.refund(&ip);
+                budget.settle_success(&client, &email_key);
 
                 return self
                     .issue_mfa_challenge(&req.collection, &req.email, &v)
@@ -222,14 +220,11 @@ impl ContentService {
             .map_err(|_| Status::internal("Internal error"))?
             .token;
 
-        // Clear the per-email limiter (this account just proved its
-        // identity). For the SHARED per-IP limiter, only REFUND this one
-        // attempt: a success must not wipe other accounts' failures from the
-        // same IP — that would let one valid account on a shared IP mask a
-        // brute-force of others. Mirrors the admin login (which got this fix
-        // first; the gRPC twin had kept the full clear).
-        self.login_limiter.clear(&email_key);
-        self.ip_login_limiter.refund(&ip);
+        // Clear the per-email budget (this account just proved its identity)
+        // and only REFUND the shared per-IP attempt: a success must not wipe
+        // other accounts' failures from the same IP — that would let one valid
+        // account on a shared IP mask a brute-force of others.
+        budget.settle_success(&client, &email_key);
 
         Ok(Response::new(content::LoginResponse {
             token,

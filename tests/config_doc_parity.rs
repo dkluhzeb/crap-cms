@@ -102,6 +102,7 @@ fn section_map() -> Vec<(&'static str, Vec<&'static str>)> {
         ("routes", RoutesConfig::config_keys()),
         ("access", AccessConfig::config_keys()),
         ("pagination", PaginationConfig::config_keys()),
+        ("query", QueryConfig::config_keys()),
         ("mcp", McpConfig::config_keys()),
         ("cache", CacheConfig::config_keys()),
         ("logging", LoggingConfig::config_keys()),
@@ -493,6 +494,10 @@ const EXEMPT: &[(&str, &str)] = &[
         "0 is the documented unlimited sentinel",
     ),
     (
+        "max_connections_per_client",
+        "0 is the documented unlimited sentinel",
+    ),
+    (
         "grpc_rate_limit_requests",
         "0 is the documented disabled sentinel",
     ),
@@ -556,7 +561,11 @@ const EXEMPT: &[(&str, &str)] = &[
     ),
     (
         "request_timeout",
-        "validated (grpc_timeout sibling) — matched by pattern via _timeout",
+        "0 is the documented no-deadline sentinel",
+    ),
+    (
+        "upload_timeout",
+        "0 (the default) is the documented no-deadline sentinel",
     ),
     (
         "busy_timeout",
@@ -588,6 +597,18 @@ const EXEMPT: &[(&str, &str)] = &[
         "max_age",
         "CORS preflight cache; 0 = no caching, self-evident",
     ),
+    (
+        "statement_timeout",
+        "duration parser; 0 is the documented unbounded sentinel",
+    ),
+    (
+        "max_concurrent_image_processing",
+        "NonZeroUsize: parse rejects 0; absent = half the CPUs",
+    ),
+    ("max_filter_terms", "NonZeroUsize: parse rejects 0"),
+    ("max_filter_values", "NonZeroUsize: parse rejects 0"),
+    ("max_search_length", "NonZeroUsize: parse rejects 0"),
+    ("max_search_terms", "NonZeroUsize: parse rejects 0"),
 ];
 
 /// Pattern false-positives: names that match a numeric pattern but

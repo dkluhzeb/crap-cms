@@ -1,163 +1,96 @@
-//! Join field (virtual reverse lookup) population.
+//! Join field (virtual reverse lookup) population for one document.
 
 use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashSet;
 
-use tracing::warn;
-
 use super::populate_relationships_cached;
-use crate::core::cache::CacheBackend;
-use crate::db::query::populate::helpers::{resolve_views, target_row_visible};
-use crate::db::query::populate::{PopulateContext, PopulateOpts, document_to_json};
-use crate::{
-    core::{CollectionDefinition, Document, FieldType, JoinConfig, Registry, upload},
-    db::{
-        DbConnection, Filter, FilterClause, FilterOp, FindQuery,
-        query::{hydrate_document, read::find},
-    },
+use crate::core::{CollectionDefinition, Document, FieldDefinition, JoinConfig};
+use crate::db::query::populate::{
+    PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
+    join::{document_join_fields, fetch_join_children},
 };
 
-/// Populate join fields (virtual reverse lookups).
+/// Populate `doc`'s document-level join fields — top level and in layout
+/// wrappers (`fields` are its collection's); a join in a group is populated by
+/// the container walker through [`populate_join_docs`].
+///
+/// # Errors
+///
+/// Propagates an access-hook or backend error.
 pub(super) fn populate_join_fields(
-    ctx: &PopulateContext<'_>,
+    fields: &[FieldDefinition],
     doc: &mut Document,
     visited: &mut HashSet<(String, String)>,
-    opts: &PopulateOpts<'_>,
-    cache: &dyn CacheBackend,
+    pctx: &PopulateCtx<'_>,
+    select: Option<&[String]>,
 ) -> Result<()> {
-    for field in &ctx.def.fields {
-        if field.field_type != FieldType::Join {
-            continue;
-        }
-
-        if let Some(sel) = opts.select
-            && !sel.iter().any(|s| s == &field.name)
-        {
-            continue;
-        }
-
-        let Some(jc) = &field.join else {
+    for field in document_join_fields(fields, select) {
+        let Some(join) = &field.join else {
             continue;
         };
 
-        let Some(target_def) = ctx.registry.get_collection(&jc.collection).cloned() else {
+        let Some(target_def) = pctx.registry.get_collection(&join.collection) else {
             continue;
         };
 
-        let populated = populate_join_docs(
-            &JoinDocsCtx {
-                conn: ctx.conn,
-                registry: ctx.registry,
-                cache,
-            },
-            &doc.id,
-            jc,
-            &target_def,
-            visited,
-            opts,
-        )?;
+        let children = populate_join_docs(pctx, &doc.id, join, target_def, visited)?;
+
         doc.fields
-            .insert(field.name.clone(), Value::Array(populated));
+            .insert(field.name.clone(), Value::Array(children));
     }
 
     Ok(())
 }
 
-/// Infrastructure refs the join populate path needs, bundled so the call site
-/// stays under the parameter limit (the per-field args — `doc_id`, `jc`,
-/// `target_def`, `visited`, `opts` — stay explicit).
-pub(super) struct JoinDocsCtx<'a> {
-    pub conn: &'a dyn DbConnection,
-    pub registry: &'a Registry,
-    pub cache: &'a dyn CacheBackend,
-}
-
-/// Find, hydrate, and recursively populate the target documents a join field
-/// reverse-looks-up for the document `doc_id`. Reusable from the top-level join
-/// pass and the nested-container walker — both pass the id of the document the
-/// join's `on` column references (the join is anchored to that id regardless of
-/// how deeply the field is nested). Applies the target's read/draft view access
-/// and per-row visibility, so a nested join is gated exactly like a top-level one.
+/// The children `join` lists for the document `doc_id` (see
+/// [`fetch_join_children`]), each populated one level deeper along the current
+/// path. The join is anchored to the document's id however deeply the field
+/// sits in groups.
+///
+/// # Errors
+///
+/// Propagates an access-hook or backend error — a failed lookup never reads
+/// as an empty join.
 pub(super) fn populate_join_docs(
-    jctx: &JoinDocsCtx<'_>,
+    pctx: &PopulateCtx<'_>,
     doc_id: &str,
-    jc: &JoinConfig,
+    join: &JoinConfig,
     target_def: &CollectionDefinition,
     visited: &mut HashSet<(String, String)>,
-    opts: &PopulateOpts<'_>,
 ) -> Result<Vec<Value>> {
-    let conn = jctx.conn;
-    let registry = jctx.registry;
-    let cache = jctx.cache;
+    let mut buckets = fetch_join_children(pctx, join, target_def, vec![doc_id.to_string()])?;
+    let children = buckets.remove(doc_id).unwrap_or_default();
 
-    let filters = vec![FilterClause::Single(Filter {
-        field: jc.on.clone(),
-        op: FilterOp::Equals(doc_id.to_string()),
-    })];
-
-    // Resolve the target collection's view access (read + draft). The matched
-    // children are filtered per row below by the same independent-views model
-    // used for relationships — a published child needs `read`, a draft child
-    // needs drafts requested (`!published_only`) AND the target's `draft`
-    // access. (`find` already excludes trashed rows.)
-    let views = resolve_views(opts.join_access, opts.user, &target_def.slug, target_def)?;
-
-    let fq = FindQuery::builder().filters(filters).build();
-
-    let matched_docs = match find(conn, &jc.collection, target_def, &fq, opts.locale_ctx) {
-        Ok(docs) => docs,
-        Err(e) => {
-            warn!("join populate find error for {}: {e:#}", jc.collection);
-            return Ok(Vec::new());
-        }
+    let child_ctx = PopulateContext {
+        conn: pctx.conn,
+        registry: pctx.registry,
+        collection_slug: &join.collection,
+        fields: &target_def.fields,
+    };
+    let child_opts = PopulateOpts {
+        depth: pctx.effective_depth - 1,
+        select: None,
+        locale_ctx: pctx.locale_ctx,
+        published_only: pctx.published_only,
+        join_access: pctx.join_access,
+        user: pctx.user,
     };
 
-    let mut populated = Vec::new();
+    children
+        .into_iter()
+        .map(|mut child| {
+            populate_relationships_cached(
+                &child_ctx,
+                &mut child,
+                visited,
+                &child_opts,
+                pctx.cache,
+            )?;
 
-    for mut matched_doc in matched_docs {
-        // Per-row visibility: drop children the viewer may not see (a draft
-        // child without target draft access, or a row failing a view's
-        // row-constraints), matched against the RAW fields before hydration.
-        if !target_row_visible(&views, &matched_doc, opts.published_only, target_def) {
-            continue;
-        }
-
-        hydrate_document(
-            conn,
-            &jc.collection,
-            &target_def.fields,
-            &mut matched_doc,
-            None,
-            opts.locale_ctx,
-        )?;
-
-        upload::shape_read_document(target_def, &mut matched_doc);
-
-        populate_relationships_cached(
-            &PopulateContext {
-                conn,
-                registry,
-                collection_slug: &jc.collection,
-                def: target_def,
-            },
-            &mut matched_doc,
-            visited,
-            &PopulateOpts {
-                depth: opts.depth - 1,
-                select: None,
-                locale_ctx: opts.locale_ctx,
-                published_only: opts.published_only,
-                join_access: opts.join_access,
-                user: opts.user,
-            },
-            cache,
-        )?;
-
-        populated.push(document_to_json(&matched_doc, Some(&jc.collection)));
-    }
-
-    Ok(populated)
+            Ok(document_to_json(&child, Some(&join.collection)))
+        })
+        .collect()
 }
 
 #[cfg(all(test, feature = "sqlite"))]
@@ -167,10 +100,11 @@ mod tests {
 
     use super::populate_relationships_cached;
     use crate::core::cache::NoneCache;
-    use crate::core::{Document, HookRef, Registry};
+    use crate::core::{Document, HookRef, Registry, VersionsConfig};
     use crate::db::query::populate::test_helpers::*;
     use crate::db::query::populate::{JoinAccessCheck, PopulateContext, PopulateOpts};
     use crate::db::{AccessResult, Filter, FilterClause, FilterOp};
+    use rusqlite::Connection;
     use std::collections::HashSet;
 
     /// Fixture check: Denied for every call.
@@ -236,7 +170,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "authors",
-                def: &authors_def,
+                fields: &authors_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -289,7 +223,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "authors",
-                def: &authors_def,
+                fields: &authors_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -325,9 +259,6 @@ mod tests {
     /// so any reader with `read` saw every collection's draft rows through a join.
     #[test]
     fn join_draft_child_gated_by_target_draft_access() {
-        use crate::core::VersionsConfig;
-        use rusqlite::Connection;
-
         // read → Allowed; draft (`draft_fn`) → configurable.
         struct DraftGate(bool);
         impl JoinAccessCheck for DraftGate {
@@ -347,6 +278,7 @@ mod tests {
         }
 
         let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&versions_table_sql("posts")).unwrap();
         conn.execute_batch(
             "CREATE TABLE authors (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
              CREATE TABLE posts (
@@ -382,7 +314,7 @@ mod tests {
                     conn: &conn,
                     registry: &registry,
                     collection_slug: "authors",
-                    def: &authors_def,
+                    fields: &authors_def.fields,
                 },
                 &mut doc,
                 &mut visited,
@@ -448,7 +380,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "authors",
-                def: &authors_def,
+                fields: &authors_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -490,7 +422,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "authors",
-                def: &authors_def,
+                fields: &authors_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -537,7 +469,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "authors",
-                def: &authors_def,
+                fields: &authors_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -582,7 +514,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "authors",
-                def: &authors_def,
+                fields: &authors_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -631,7 +563,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "authors",
-                def: &authors_def,
+                fields: &authors_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -681,7 +613,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "authors",
-                def: &authors_def,
+                fields: &authors_def.fields,
             },
             &mut doc,
             &mut visited,
@@ -726,7 +658,7 @@ mod tests {
                 conn: &conn,
                 registry: &registry,
                 collection_slug: "authors",
-                def: &authors_def,
+                fields: &authors_def.fields,
             },
             &mut doc,
             &mut visited,

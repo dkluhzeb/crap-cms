@@ -23,7 +23,7 @@ use crap_cms::{
         handlers::{ContentService, ContentServiceDeps},
         rate_limit::GrpcRateLimitLayer,
     },
-    config::{CrapConfig, UploadConfig},
+    config::{CrapConfig, ServerConfig, UploadConfig},
     core::{
         JwtSecret, Registry,
         auth::{Argon2PasswordProvider, JwtTokenProvider},
@@ -136,13 +136,14 @@ pub async fn spawn_grpc_server_with_rate_limit(
         collections,
         globals,
         Vec::new(),
-        Some(GrpcRateLimitLayer::new(Arc::new(
-            GrpcRateLimiter::with_backend(
+        Some(GrpcRateLimitLayer::new(
+            Arc::new(GrpcRateLimiter::with_backend(
                 Arc::new(MemoryRateLimitBackend::new()),
                 max_requests,
                 window_secs,
-            ),
-        ))),
+            )),
+            Arc::new(ServerConfig::default()),
+        )),
         &[],
     )
     .await

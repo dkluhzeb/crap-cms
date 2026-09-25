@@ -2475,6 +2475,315 @@ naming the container and the sub-field.
 **Action:** remove `position` from nested fields (and node attrs); to place a
 nested field in the sidebar, set `position` on its top-level container instead.
 
+### 102. `list_searchable_fields` entries are checked at load
+
+Every `admin.list_searchable_fields` entry must now name a field stored on the
+document row (a group sub-field as `group__field`) whose type holds text —
+text, textarea, richtext, email, code, select or radio — and that is not
+`hidden`. A typo, an array / blocks / group name, a hidden field, or a number,
+checkbox, date, JSON, relationship, upload or join field used to be dropped
+(with at most a warning; a list with no valid entry left the collection
+without a search index, so every search returned everything — and a number or
+checkbox entry stopped a Postgres server from starting). It is now a load
+error naming the entry.
+
+**Action:** fix or remove the named entry. Filter numbers, dates and
+references with `where` instead of `search`.
+
+### 103. Full-text search matches the requested locale
+
+On a localized collection, `search` used to match every locale's text. It now
+matches the requested content locale's localized fields (through the default
+locale's text while a field is empty in that locale and `[locale] fallback` is
+on) plus the non-localized fields. No locale = the default locale;
+`locale = "all"` = every locale. The index is rebuilt at startup — nothing to
+migrate.
+
+**Action:** a client that relied on a search at one locale finding text of
+another must send `locale = "all"` (or the locale the text is in). See
+[Full-Text Search](../query-and-filters/overview.md#full-text-search).
+
+### 104. User queries are size-limited (`[query]`)
+
+Every user `where` and `search` — admin list filters, gRPC, MCP, Lua CRUD,
+queued bulk operations — is checked before any SQL runs: at most 100 filter
+conditions (counted across every `or` group), 1000 `in` / `not_in` elements in
+total, and a `search` of at most 1000 characters and 32 words. Over a limit is
+an invalid-query error (`InvalidArgument` / 400) naming `where` or `search`.
+Access-rule row constraints are not counted. A search word with no letter or
+digit (`-`, `@`) is now ignored on both backends, so a search of only such
+words applies no filter (Postgres used to return everything, SQLite nothing).
+
+**Action:** none for ordinary clients. Code that builds very wide queries —
+a hook selecting thousands of ids with `in`, say — should raise the limit in a
+new `[query]` section of `crap.toml` (`max_filter_terms`,
+`max_filter_values`, `max_search_length`, `max_search_terms`). See
+[Query size limits](../query-and-filters/overview.md#query-size-limits).
+
+### 105. Image processing is bounded process-wide
+
+Uploads and queued WebP/AVIF conversions now share a fixed number of image
+processing slots — `[upload] max_concurrent_image_processing`, default half
+the CPUs (at least 1). Further image work waits; an upload that waits more
+than 60 seconds is answered with a retryable busy error (HTTP 503) and
+stores nothing, and a waiting conversion job goes back to the queue
+without spending an attempt (for up to six hours after it was queued; past
+that a busy wait counts as a failed attempt). Decoding also runs under an explicit memory limit, so
+a 16-bit or floating-point image near the 100-megapixel cap is refused.
+
+**Action:** none usually. A host that processes many images in parallel on
+purpose can raise `max_concurrent_image_processing`; clients uploading in
+bulk should retry a 503 answer. See
+[Image processing → Concurrency](../uploads/image-processing.md#concurrency).
+
+### 106. System email subjects are translated
+
+The subjects of the verification, password-reset and MFA-code emails are now
+translation keys (`email.subject.verify_email`, `email.subject.password_reset`,
+`email.subject.mfa_code`; English and German built in). Each email is written
+in the recipient's admin UI language, or `default_locale` for a user who never
+chose one — so a German-speaking user (or a `default_locale = "de"` install)
+now receives German subjects.
+
+**Action:** none usually. To keep or change a subject, override its key in
+`<config_dir>/translations/<locale>.json`; a subject must be a single line (a
+multi-line one fails the start). See [System email subjects](../locale/overview.md#system-email-subjects).
+
+### 107. Generated client and Lua types: renamed reserved type names, new shapes
+
+- A collection, global, sub-type or select whose `PascalCase` name the
+  generated file already binds is renamed with a `_` suffix: Rust `Rel`,
+  `Option`, `Some`, `None`, `Result`, `Ok`, `Err`, `String`, `Vec`, `Box`,
+  `From`, `Serialize`, `Deserialize` and — shared with `typegen proto` —
+  `Document`, `DataMap`, `FieldValue`, `Kind`, `FromDocument`; Go `Rel`;
+  Python `None`, `True`, `False`, `Optional`, `Any`, `Literal`. Such output did
+  not compile before. A Go select or slug constant that met a type name gets a
+  `_2` suffix. A Python field named `str`, `float`, `bool`, `list`, `dict`,
+  `Optional`, `Any` or `Literal` becomes `<name>_` (wire name unchanged).
+- TypeScript `…Data` inputs type every optional key as `T | null` (`null`
+  clears the value); Lua write classes (`crap.input`, `crap.partial`,
+  `crap.partial_many`, `crap.data`, rows and groups) type it `T|crap.Null`.
+  A group key itself stays non-null: a group has no value of its own, so its
+  sub-fields are cleared one by one (a write setting a group to `null` is
+  refused — see below).
+- A TypeScript update is typed `Update<…Data>` (a new prelude type: any
+  subset, a group's sub-fields included; rows whole) instead of the shallow
+  `Partial<…Data>`, which demanded a group's required sub-fields. The Lua
+  partial-write classes type a group as the new `crap.group_partial.<Type>`
+  (every sub-field optional) instead of `crap.group.<Type>`.
+- Lua `crap.where.<Slug>` is now `crap.where_group.<Slug>` (the conditions:
+  flat columns, `["seo.title"]` group spellings, array/blocks/has-many row
+  paths) plus `["or"]`; `order_by` accepts both group spellings. Drafts
+  collections get draft `create` / `create_many` / `validate` overloads, and
+  collections/globals with localized fields `crap.doc_localized.<Slug>` /
+  `crap.global_doc_localized.<Slug>` with `locale = "all"` overloads.
+
+**Action:** regenerate (`crap-cms typegen client`, `typegen proto`,
+`typegen lua`) and follow any renamed type. Code annotated with
+`---@type crap.where.<Slug>` keeps working. See
+[Type safety](../grpc-api/type-safety.md).
+
+### 108. Admin validation messages name fields by their label
+
+A translated validation message named the field by its schema name
+(`title ist erforderlich`, `seo__title ist in der Sprache 'de' erforderlich`).
+The admin now names it by its label in the viewer's UI language, prefixed by
+its groups', arrays' and blocks' labels (`SEO › Titel ist erforderlich`). API
+messages are unchanged.
+
+**Action:** none. A translation override that reworded a `validation.*` key
+around a raw field name may read differently.
+
+### 109. Unused admin translation keys removed
+
+`confirm_delete_sidebar`, `collapse_all`, `expand_all`,
+`error_account_locked` and `error_verify_email` were never shown and are
+removed from the built-in translations; `success_logout` and
+`validation.reference_unavailable` are added.
+
+**Action:** none — overrides of the removed keys are simply unused.
+
+### 110. A field named `collection` fails the load
+
+Every populated relationship target carries a `collection` key naming its
+collection. A field of that name overwrote the key, so the read processing of
+populated documents chose its rules from document data (see the security
+entry in the changelog), and polymorphic targets could not be told apart.
+`collection` is now reserved like `id` — at any depth.
+
+**Action:** rename any field named `collection` (for example to `category` or
+`product_line`), then carry its values: add the new field, copy the column
+(`UPDATE products SET product_line = collection`), and remove the old one with
+`crap-cms db cleanup` once nothing reads it.
+
+### 111. A `join` lists at most `limit` documents
+
+A join listed every document referencing its document. It now lists at most
+its `limit` (default `10`), in the target's default order, on every surface and
+in the admin form; an explicit `limit` may not exceed `[pagination] max_limit`
+(a larger value fails startup), and a join without one lists
+`min(10, max_limit)`.
+
+**Action:** set `limit` on a join that must list more than ten documents:
+`crap.fields.join({ name = "posts", collection = "posts", on = "author", limit = 50 })`.
+
+### 112. A `join` inside an array or blocks row fails the load
+
+A join lists the documents that reference the whole document, so inside an
+array or blocks row it repeated the same list in every row. It is refused at
+any depth under a row.
+
+**Action:** move the join to the top level, into a group, or into a row /
+collapsible / tabs wrapper.
+
+### 113. Populated documents: read hooks, drafts, and shape
+
+A document embedded by relationship or join population now reads as a
+direct read of it by the same reader would:
+
+- its collection's `before_read` hooks run (once per collection per read — one
+  that aborts hides the collection's populated documents) and its field and
+  collection `after_read` hooks run on it, at every depth, with the embedding
+  read's operation;
+- with `draft = true`, populated documents show their pending draft when the
+  reader may read that collection's drafts (bounded by its draft rule's row
+  constraint), and their published content otherwise;
+- the same document appears populated wherever it is referenced (a post's
+  `author` and `editor` alike), stopping only at a reference back to a
+  document on its own path — `find` and `find_by_id` return the same shape.
+
+**Action:** review `after_read` hooks that assumed they only see top-level
+documents (they now also shape embedded copies; `ctx.operation` is the
+embedding read's), and `before_read` hooks that abort — they now hide that
+collection's populated documents too.
+
+### 114. New references to trashed documents are refused
+
+A write that adds a reference to a soft-deleted document is refused exactly
+like one to a missing document: a validation error on the field holding the
+reference (`validation.reference_unavailable`, keyed like every field error —
+`author`, `seo__author`, `items[0][author]`), instead of the field-less
+`cannot reference {collection}/{id}: target no longer exists (concurrently
+hard-deleted)` error a missing target used to raise. A reference no field of
+the write carries (a version restore) still fails with
+`cannot reference {collection}/{id}: no such document`. References a document
+already holds are kept, and `crap-cms import` keeps an exported reference to a
+document the export carries trashed.
+
+**Action:** none, unless a client relies on referencing trashed documents
+(restore the target first) or matches the old error message (read the field
+error instead).
+
+### 115. Lua `io` can no longer write into the config directory
+
+Hooks could open any file under the config directory for writing — including
+the hooks, templates and translations the server runs, and a `.lua` file a
+hook could then `require`. The config directory is now read-only to Lua:
+`io.output` and `io.open` with any mode but `"r"`/`"rb"` are refused there
+("not writable"), and writes go only under a `[hooks] io_roots` directory.
+An `io_roots` entry may not contain the config directory or lie inside one of
+its code directories (`collections/`, `globals/`, `hooks/`, `access/`,
+`jobs/`, `routes/`, `plugins/`, `templates/`, `static/`, `migrations/`,
+`types/`, `lua/`, `translations/`) — startup fails naming it — and `require`
+no longer loads a module from an `io_roots` directory or from `data/`.
+
+**Action:** if a hook (typically a Lua storage backend) writes files under the
+config directory, give it a directory of its own and list it:
+
+```toml
+[hooks]
+io_roots = ["uploads-lua"]   # relative to the config directory, or absolute
+```
+
+Remove any `io_roots` entry that names the config directory itself (`"."`) or
+one of its code directories.
+
+### 116. A failed `crap.*` call inside a hook no longer half-applies
+
+Every Lua CRUD call on a hook's shared transaction now runs as one atomic step
+(a savepoint). A call that fails — and that the hook catches with `pcall` —
+leaves none of its writes, events or `crap.tx.on_commit` effects behind, while
+the rest of the operation commits. Before, SQLite kept the failed call's
+partial writes, and on Postgres the operation reported success while its
+commit silently rolled everything back, the main write included. A commit
+whose transaction the database aborted now fails instead of reporting
+success. A `crap.transaction(fn)` block inside a hook is such a step too.
+
+**Action:** none, unless a hook relied on a caught, failed call's partial
+writes surviving.
+
+### 117. Auth strategies take a write connection only when they write
+
+A strategy's CRUD ran on the connection it was handed — a login held a write
+connection across the strategy hook. Its reads now run on the caller's
+connection and only its first write opens the transaction, on a write-pool
+connection (IMMEDIATE on SQLite, like an auth callback's and an `mfa_deliver`
+hook's). All three now publish live events, invalidate the populate cache,
+send verification emails and run `crap.tx` effects for what they commit, as
+every other write does. The strategy's reads before its first write run in
+autocommit, outside the transaction.
+
+**Action:** none, unless a strategy relied on its lookup and its write seeing
+one snapshot: make the write idempotent (a `unique` field) instead.
+
+### 118. SQL statements have a time limit (`[database] statement_timeout`)
+
+A single SQL statement may now run at most `statement_timeout` (default 30
+seconds) before it is interrupted (SQLite) or cancelled on the server
+(Postgres); the request fails with a time-limit error. A queued bulk job's
+statements are also bounded by the job's `timeout`. The startup schema sync
+(and `db migrate fresh`), data migrations, backups, `db cleanup`, `export`
+and `import` are exempt. On SQLite a write statement interrupted inside a
+transaction rolls back the whole transaction, not only the statement: the
+operation fails as a whole, even when a hook caught the error with `pcall`.
+
+**Action:** raise `statement_timeout` in `[database]` (or set `0` to turn it
+off) if legitimate requests run longer statements.
+
+### 119. Global reads populate their relationships
+
+A global read populates its relationships now (default `[depth]
+default_depth`). It used to return its relationship and upload fields as ids,
+whatever depth a client wanted. `GetGlobal` (new `depth` field), MCP `global_read_*`
+(new `depth` argument) and Lua `crap.globals.get` (new `depth` option) now
+populate them like `FindByID`: an omitted `depth` is `[depth] default_depth`
+— `1` unless changed — so a global's references come back as populated
+documents by default, processed like every populated document (target access,
+drafts, read hooks, field stripping). A collection read hook running on a
+document a global read embeds sees `ctx.operation = "get"`.
+
+**Action:** code that reads a global's reference as an id — a Lua hook
+comparing `crap.globals.get("site").featured` with an id, a client decoding it
+as a string — passes `depth = 0`, or reads the populated document's `id`.
+Regenerate gRPC clients for `GetGlobalRequest.depth`.
+
+
+### 120. Failed MCP API keys are rate-limited per client
+
+The MCP HTTP endpoint compared any number of wrong API keys from one address.
+Failed keys now count against a per-address budget the size of the per-IP login
+budget (`[auth] max_ip_login_attempts` within `login_lockout_seconds`, in its own
+keyspace); an address over it is answered HTTP `429` — even with the right key —
+until the window passes. A request with the right key clears its address's
+failures.
+
+**Action:** none for a client using the right key. A client behind a shared
+address with a misconfigured sibling may see `429`s; fix the sibling's key.
+
+
+### 121. A group set to `null` is refused
+
+A write that set a group field itself to `null` — Lua `{ seo = crap.null }`,
+gRPC `null_value`, JSON `"seo": null` — or to any value that is not an object
+was accepted and changed nothing: a group has no column of its own, so the
+value was dropped. Every write surface (admin, gRPC, MCP, Lua, the `validate`
+dry-run) now refuses it with a validation error on the group (`seo`, or
+`seo__social` for a group nested in a group). A group inside an array or blocks
+row is unchanged: there `null` is stored and clears it.
+
+**Action:** to clear a group, set its sub-fields to `null`
+(`{ seo = { title = crap.null, description = crap.null } }`).
+
 ## Admin UI behavior
 
 ### A JSON rich text value the editor cannot open is shown read-only
@@ -3008,6 +3317,74 @@ continue to work.
   `exclude_collections` and the per-collection `access.mcp` gate — not with
   `access.read`, which no longer narrows it.
 
+- **`X-Forwarded-For` is read from the right.** Behind `trust_proxy = true`
+  the client address was the *leftmost* forwarded entry — the one the client
+  writes itself when the proxy appends (nginx `$proxy_add_x_forwarded_for`,
+  HAProxy, AWS ALB), so every request could pick its own rate-limit bucket.
+  The chain is now walked from the right, skipping hops listed in
+  `trusted_proxies`; the first unlisted address is the client. `["*"]` now
+  takes the **rightmost** entry. **Action:** behind more than one proxy (e.g.
+  CDN → load balancer → crap-cms), list every proxy's address or CIDR in
+  `trusted_proxies`, or the nearest proxy's view of the previous hop becomes
+  the client address.
+- **gRPC honours `trust_proxy` too.** The gRPC API (per-IP limiter, auth
+  limiters, the address hooks see) used only the TCP peer; with
+  `trust_proxy = true` it now resolves the client exactly like the admin
+  server. A gRPC call that reaches no TCP acceptor is attributed to `0.0.0.0`
+  (was the string `"unknown"` in `remote_addr`).
+- **Per-IP limits bucket IPv6 by /64.** Every per-IP budget (login, forgot /
+  reset password, verification, MFA, auth callbacks, custom-route
+  `rate_limit`, `grpc_rate_limit_requests`) counted each IPv6 address
+  separately, so one host with a /64 had unlimited budgets. IPv6 clients now
+  share one budget per /64 and IPv4-mapped IPv6 addresses count as IPv4;
+  hooks and logs still see the full address. Existing rate-limit counters
+  (in memory or Redis) are keyed differently after the upgrade and start
+  from zero.
+- **Pre-auth requests are bounded.** An email longer than 254 octets is refused
+  on login / forgot-password / resend-verification before any rate limiter or
+  lookup (and no longer echoed into the login page); a password longer than
+  `[auth.password_policy] max_length` — or 1024 bytes, whichever is larger — is
+  refused at login before any hash, so lowering `max_length` never locks out
+  existing passwords up to 1024 bytes. A blocked IP no longer records per-email
+  attempts.
+- **Pre-auth routes take at most `[server] auth_body_limit` (64KB).** Login,
+  logout, forgot / reset password, resend verification, verify email, MFA and
+  the auth callbacks answered bodies up to the upload limit; larger bodies now
+  get `413`. Raise `auth_body_limit` if an identity provider posts a larger
+  `form_post` callback.
+- **Listener limits.** Each listener now holds at most `[server]
+  max_connections` connections — by default derived from the process's
+  open-file limit (`ulimit -n`, minus 256, split between the two listeners;
+  the value is logged at startup). `serve` and `work` raise the process's
+  open-file soft limit to its hard limit at startup, logging the old and new
+  values. The admin server closes connections that do
+  not send complete headers within `header_read_timeout` (30s), the gRPC server
+  closes connections that do not open with the HTTP/2 preface within the same
+  deadline, caps streams per connection (`grpc_max_concurrent_streams`, 200)
+  and pings idle peers (`grpc_keepalive_interval`, 60s). With `h2c = false`
+  the admin listener now speaks HTTP/1.1 only (prior-knowledge HTTP/2 was
+  accepted by accident). **Action:** for a node that serves many concurrent
+  clients (including SSE streams), raise the hard open-file limit (systemd
+  `LimitNOFILE`, `ulimit -Hn`) or set `max_connections` explicitly.
+- **Admin requests have a 60-second deadline by default.** `[server]
+  request_timeout` defaulted to none, so a client trickling a request body
+  held its connection indefinitely. It now defaults to `60` seconds and covers
+  the whole body — including the form the CSRF check buffers — and producing
+  the response head; exceeded requests get `408`. SSE streams and file
+  downloads are not cut. File uploads into upload collections follow the new
+  `upload_timeout` instead (default `0`, no deadline). `request_timeout = 0`
+  now disables the deadline (it used to be refused at startup). **Action:** if
+  a custom route, an MCP tool call or a hook-heavy admin save legitimately
+  takes longer than a minute, raise `request_timeout` (or set it to `0`).
+- **Live-update streams per client.** `[live] max_connections_per_client`
+  (10) caps the SSE and gRPC `Subscribe` streams one user — or one anonymous
+  address — may hold; over it SSE answers `503` and Subscribe
+  `RESOURCE_EXHAUSTED`. A Subscribe stream now takes its slot after the
+  caller's token is resolved.
+- **Logins no longer hold a write connection.** The password check reads on
+  the read pool and holds no connection while the hash runs; a write
+  connection is taken only when a custom auth strategy writes. No action.
+
 ## gRPC clients (regenerate from `proto/content.proto`)
 
 Wire-contract changes — regenerate your gRPC stubs and adjust:
@@ -3147,7 +3524,7 @@ What changed:
   groups and array rows included. A TypeScript read field is `?: T | null`,
   since an empty value reads as `null`. In TypeScript `…Document` no longer extends
   `…Data`; `…Data` keeps its required fields as the input for creating (an
-  update accepts `Partial<…Data>`), and each group and array row type has a
+  update accepts `Update<…Data>`), and each group and array row type has a
   `…Data` input variant that keeps its required fields too (`PostsSeoData`
   beside the read type `PostsSeo`); the row type of an array stored in its own table
   (not nested inside another row) gains an optional `id` — send it back on update
@@ -3240,7 +3617,7 @@ What changed:
     one was always refused at runtime.
 
 - **A JSON rich text field is no longer typed as a string.** With
-  `admin.richtext_format = "json"` the value on the wire is a JSON document.
+  `admin.format = "json"` the value on the wire is a JSON document.
   It now generates `serde_json::Value` in Rust, `interface{}` in Go,
   `unknown` in TypeScript and `Any` in Python, and the Rust proto decoder
   decodes it instead of dropping it. The same decoder fix restores `json`

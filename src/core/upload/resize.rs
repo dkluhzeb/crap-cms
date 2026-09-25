@@ -12,7 +12,11 @@ use crate::core::upload::{
     FormatQuality, FormatResult, ImageSize, QueuedConversion, SharedStorage, SizeResult, served_url,
 };
 
-use super::{CleanupGuard, StorageBackend, process::Destination};
+use super::{
+    CleanupGuard, StorageBackend,
+    decode::{decode_image, with_image_slot},
+    process::Destination,
+};
 
 mod plan;
 
@@ -132,14 +136,18 @@ pub fn process_image_entry_with_storage(
         .get(source_key)
         .with_context(|| format!("Source image not found: {source_key}"))?;
 
-    let img = image::load_from_memory(&source_data)
-        .with_context(|| format!("Failed to decode image: {source_key}"))?;
+    // Decode + encode hold one process-wide image slot, shared with the
+    // upload path, so queued conversions and uploads together stay bounded.
+    let target_data = with_image_slot(|| {
+        let img = decode_image(&source_data)
+            .with_context(|| format!("Failed to decode image: {source_key}"))?;
 
-    let target_data = match format {
-        "webp" => webp_to_bytes(&img, quality)?,
-        "avif" => avif_to_bytes(&img, quality)?,
-        _ => bail!("Unsupported format: {format}"),
-    };
+        match format {
+            "webp" => webp_to_bytes(&img, quality),
+            "avif" => avif_to_bytes(&img, quality),
+            _ => bail!("Unsupported format: {format}"),
+        }
+    })?;
 
     let content_type = match format {
         "webp" => "image/webp",
@@ -416,8 +424,8 @@ pub fn process_image_entry(
         bail!("Source image not found: {source_path}");
     }
 
-    let img =
-        image::open(source).with_context(|| format!("Failed to decode image: {source_path}"))?;
+    let img = decode_image(&fs::read(source)?)
+        .with_context(|| format!("Failed to decode image: {source_path}"))?;
 
     let target = Path::new(target_path);
 

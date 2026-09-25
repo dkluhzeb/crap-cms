@@ -8,7 +8,10 @@ use std::collections::HashMap;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::typegen::lua::LuaAnnotation;
+use crate::{
+    core::{Document, DocumentFields},
+    typegen::lua::LuaAnnotation,
+};
 
 /// Context passed to `strategy`-type auth `authenticate` hooks.
 #[derive(Serialize, LuaAnnotation)]
@@ -62,8 +65,9 @@ pub struct MfaWhenContext<'a> {
     pub collection: &'a str,
     /// The credential-verified user's field data (password hash hidden).
     #[lua(ty = "table<string, any>")]
-    pub user: &'a crate::core::DocumentFields,
+    pub user: &'a DocumentFields,
     /// The login surface: `"admin"` or `"grpc"`.
+    #[lua(ty = "crap.Surface")]
     pub surface: &'a str,
     /// Request headers (lowercase keys).
     #[lua(ty = "table<string, string>")]
@@ -78,7 +82,7 @@ pub struct MfaWhenContext<'a> {
 /// [`HookRunner::run_mfa_when`](crate::hooks::HookRunner)).
 pub struct MfaWhenInput<'a> {
     pub collection: &'a str,
-    pub user: &'a crate::core::Document,
+    pub user: &'a Document,
     pub surface: &'a str,
     pub headers: &'a HashMap<String, String>,
 }
@@ -93,7 +97,7 @@ pub struct MfaDeliverContext<'a> {
     pub collection: &'a str,
     /// The credential-verified user's field data (password hash hidden).
     #[lua(ty = "table<string, any>")]
-    pub user: &'a crate::core::DocumentFields,
+    pub user: &'a DocumentFields,
     /// The 6-digit code to deliver. Single-use; already stored server-side.
     pub code: &'a str,
     /// Seconds until the code expires.
@@ -108,7 +112,7 @@ pub struct MfaDeliverContext<'a> {
 /// [`HookRunner::run_mfa_deliver`](crate::hooks::HookRunner)).
 pub struct MfaDeliverInput<'a> {
     pub collection: &'a str,
-    pub user: &'a crate::core::Document,
+    pub user: &'a Document,
     pub code: &'a str,
     pub expires_in: u64,
 }

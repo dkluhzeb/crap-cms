@@ -7,14 +7,15 @@ use crate::{
         upload::{readable_fields, writable_fields},
     },
     hooks::lifecycle::operation::{global_hook_operations, global_read_hook_operations},
-    typegen::helpers::{to_pascal_case, w},
+    typegen::helpers::{has_localized_columns, to_pascal_case, w},
 };
 
 use super::{
     accessor::{render_global_accessor, render_global_typing_factories},
     classes::{
-        literal_union, render_sub_type_classes, write_field_hook_context, write_fields,
-        write_hook_context_tail, write_system_fields,
+        literal_union, render_localized_group_classes, render_partial_group_classes,
+        render_sub_type_classes, write_field_hook_context, write_fields, write_hook_context_tail,
+        write_system_fields,
     },
     field::LuaShape,
 };
@@ -23,12 +24,15 @@ use super::{
 fn render_data_classes(out: &mut String, global: &GlobalDefinition, pascal: &str) {
     let read_fields = readable_fields(&global.fields);
 
-    // crap.global_data.* — hook ctx.data for globals. Every field, `id` and
-    // the timestamps optional for the same reasons as `crap.data.X`: an
-    // update's before-hooks see only the fields the request sends.
+    let stored = writable_fields(&global.fields);
+
+    // crap.global_data.* — hook ctx.data for globals: the stored fields (the
+    // set the group classes are rendered from), every one, `id` and the
+    // timestamps optional for the same reasons as `crap.data.X`: an update's
+    // before-hooks see only the fields the request sends.
     w!(out, "---@class crap.global_data.{pascal}");
     w!(out, "---@field id? string");
-    write_fields(out, &global.fields, pascal, LuaShape::Partial);
+    write_fields(out, &stored, pascal, LuaShape::Partial);
     w!(out, "---@field created_at? string");
     w!(out, "---@field updated_at? string");
     out.push('\n');
@@ -36,12 +40,7 @@ fn render_data_classes(out: &mut String, global: &GlobalDefinition, pascal: &str
     // crap.global_partial.* — partial-update payload for `update`: the write
     // shape, every field optional.
     w!(out, "---@class crap.global_partial.{pascal}");
-    write_fields(
-        out,
-        &writable_fields(&global.fields),
-        pascal,
-        LuaShape::Partial,
-    );
+    write_fields(out, &stored, pascal, LuaShape::Partial);
     out.push('\n');
 
     // crap.global_doc.* — the read shape; always has timestamps. Same
@@ -49,6 +48,32 @@ fn render_data_classes(out: &mut String, global: &GlobalDefinition, pascal: &str
     w!(out, "---@class crap.global_doc.{pascal} : crap.Document");
     w!(out, "---@field id string");
     write_fields(out, &read_fields, pascal, LuaShape::Read);
+    write_system_fields(out, global.has_drafts(), false);
+    w!(out, "---@field created_at? string");
+    w!(out, "---@field updated_at? string");
+    out.push('\n');
+}
+
+/// `crap.global_doc_localized.*` — what a `locale = "all"` read of a global
+/// holding a per-locale column returns: each localized field a
+/// `{ [locale] = value }` table, each group holding one its
+/// `crap.doc_group_localized.*`.
+fn render_localized_doc_class(out: &mut String, global: &GlobalDefinition, pascal: &str) {
+    let read_fields = readable_fields(&global.fields);
+
+    if !has_localized_columns(&read_fields, false) {
+        return;
+    }
+
+    let shape = LuaShape::Localized { inherited: false };
+    render_localized_group_classes(out, &read_fields, pascal, shape);
+
+    w!(
+        out,
+        "---@class crap.global_doc_localized.{pascal} : crap.Document"
+    );
+    w!(out, "---@field id string");
+    write_fields(out, &read_fields, pascal, shape);
     write_system_fields(out, global.has_drafts(), false);
     w!(out, "---@field created_at? string");
     w!(out, "---@field updated_at? string");
@@ -112,14 +137,11 @@ fn render_fn_aliases(out: &mut String, slug: &str, pascal: &str) {
 pub(super) fn render_global(out: &mut String, global: &GlobalDefinition) {
     let pascal = to_pascal_case(&global.slug);
 
-    // The stored write-shape family (a virtual `Join` is never stored) and
-    // the read-shape family, as for a collection.
-    render_sub_type_classes(
-        out,
-        &writable_fields(&global.fields),
-        &pascal,
-        LuaShape::Input,
-    );
+    // The stored write-shape family (a virtual `Join` is never stored), its
+    // partial-write groups, and the read-shape family, as for a collection.
+    let stored = writable_fields(&global.fields);
+    render_sub_type_classes(out, &stored, &pascal, LuaShape::Input);
+    render_partial_group_classes(out, &stored, &pascal);
     render_sub_type_classes(
         out,
         &readable_fields(&global.fields),
@@ -128,18 +150,21 @@ pub(super) fn render_global(out: &mut String, global: &GlobalDefinition) {
     );
 
     render_data_classes(out, global, &pascal);
+    render_localized_doc_class(out, global, &pascal);
     render_hook_classes(out, global, &pascal);
     render_fn_aliases(out, &global.slug, &pascal);
 
-    render_global_accessor(out, &global.slug, &pascal);
+    render_global_accessor(out, global, &pascal);
     render_global_typing_factories(out, global, &pascal);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_helpers::{class_block, text_field};
     use super::*;
-    use crate::core::{FieldDefinition, FieldType};
+    use crate::{
+        core::{FieldDefinition, FieldType},
+        typegen::lua::test_helpers::{class_block, text_field},
+    };
 
     /// Global reads are `get`; a global's `after_read` also shapes its
     /// `update`, `unpublish` and `restore` live events.
@@ -166,6 +191,27 @@ mod tests {
             field_hook.contains("---@field document crap.global_data.Footer"),
             "{field_hook}"
         );
+    }
+
+    /// Regression: `crap.global_data.*` was rendered from every field while
+    /// the group classes came from the stored ones, so a group holding only a
+    /// join named a class nothing declared.
+    #[test]
+    fn hook_data_names_only_declared_group_classes() {
+        let mut global = GlobalDefinition::new("footer");
+        global.fields = vec![
+            FieldDefinition::builder("links", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("mentions", FieldType::Join).build(),
+                ])
+                .build(),
+        ];
+        let mut out = String::new();
+        render_global(&mut out, &global);
+
+        let data = class_block(&out, "---@class crap.global_data.Footer");
+        assert!(!data.contains("crap.group.FooterLinks"), "{data}");
+        assert!(!data.contains("mentions"), "{data}");
     }
 
     /// Regression: a global's `after_read` hooks were typed with the stored
@@ -359,5 +405,37 @@ mod tests {
         assert!(doc.contains("---@field refs? table[]"), "{doc}");
         assert!(!doc.contains("secret"), "{doc}");
         assert!(!doc.contains("collection?"), "{doc}");
+    }
+
+    /// A global holding a localized field declares its `locale = "all"` read
+    /// class; one without declares none.
+    #[test]
+    fn localized_global_declares_the_all_locales_doc() {
+        let mut global = GlobalDefinition::new("settings");
+        global.fields = vec![
+            FieldDefinition::builder("site_name", FieldType::Text)
+                .localized(true)
+                .build(),
+            text_field("theme", false),
+        ];
+
+        let mut out = String::new();
+        render_global(&mut out, &global);
+
+        let doc = class_block(
+            &out,
+            "---@class crap.global_doc_localized.Settings : crap.Document",
+        );
+        assert!(
+            doc.contains("---@field site_name? table<string, string>"),
+            "{doc}"
+        );
+        assert!(doc.contains("---@field theme? string\n"), "{doc}");
+
+        let mut plain = GlobalDefinition::new("footer");
+        plain.fields = vec![text_field("copyright", false)];
+        let mut out = String::new();
+        render_global(&mut out, &plain);
+        assert!(!out.contains("global_doc_localized"), "{out}");
     }
 }

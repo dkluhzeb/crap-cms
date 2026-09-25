@@ -1419,6 +1419,17 @@ mod tests {
         assert!(s["properties"]["events"].is_object());
     }
 
+    /// The MCP `global_read_*` schema advertises `depth`: a global read
+    /// populates its relationships like `find_by_id`.
+    #[test]
+    fn global_read_schema_advertises_depth() {
+        let mut def = GlobalDefinition::new("settings");
+        def.fields = vec![text_field("site_name")];
+        let s = global_input_schema(&def, CrudOp::Find);
+        assert_eq!(s["properties"]["depth"]["type"], "integer");
+        assert!(s["properties"]["draft"].is_object());
+    }
+
     /// `delete_many`'s `trash` flag (empty-the-trash) is declared Lua-only in
     /// the wire model — the MCP schema must not render it.
     #[test]

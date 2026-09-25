@@ -19,7 +19,9 @@
   {{else}}
     <p class="form__join-empty">{{t "no_related_items"}}</p>
   {{/if}}
-  {{#if join_count}}
+  {{#if join_total}}
+    <p class="form__join-count">{{t "join_shown_of_total" shown=join_count total=join_total}}</p>
+  {{else if join_count}}
     <p class="form__join-count">
       {{join_count}}
       {{#if (eq join_count 1)}}

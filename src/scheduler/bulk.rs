@@ -367,6 +367,10 @@ fn run_bulk_op(
         force_hard_delete,
     } = p;
 
+    // A statement still running when the job's time is up is interrupted,
+    // not merely noticed between documents.
+    let _statements = deadline.bound_statements();
+
     // The same wire→filter chokepoint the synchronous gRPC codecs use
     // (`parse_where_json` delegates to it), so a queued run and a direct
     // call decode the stored `where` identically.

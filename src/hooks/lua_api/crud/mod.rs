@@ -10,5 +10,6 @@ mod tx_conn;
 
 pub(crate) use register::{CrudConfig, register_crud_functions};
 pub(crate) use tx_conn::{
-    TxSlot, ensure_writable, get_tx_conn, open_lazy_tx, with_lua_db, with_lua_db_read,
+    TxSlot, ensure_writable, get_tx_conn, open_lazy_tx_to_write, run_step, with_lua_db,
+    with_lua_db_read,
 };

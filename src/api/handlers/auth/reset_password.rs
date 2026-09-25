@@ -6,10 +6,9 @@ use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
-use crate::core::collection::Auth;
 use crate::{
-    api::{content, handlers::ContentService},
-    core::{CollectionDefinition, rate_limit::IP_RESET_PASSWORD_KEYSPACE},
+    api::{content, handlers::ContentService, request_client_ip},
+    core::{CollectionDefinition, collection::Auth, rate_limit::IP_RESET_PASSWORD_KEYSPACE},
     service::{AppInfra, ServiceContext, auth::consume_reset_token},
 };
 
@@ -75,9 +74,7 @@ impl ContentService {
         &self,
         request: Request<content::ResetPasswordRequest>,
     ) -> Result<Response<content::ResetPasswordResponse>, Status> {
-        let ip = request
-            .remote_addr()
-            .map_or_else(|| "unknown".to_string(), |a| a.ip().to_string());
+        let client = request_client_ip(&request, &self.server_config);
         let req = request.into_inner();
 
         let def = self.get_collection_def(&req.collection)?;
@@ -112,7 +109,7 @@ impl ContentService {
         if self
             .ip_forgot_password_limiter
             .rescoped(IP_RESET_PASSWORD_KEYSPACE)
-            .check_and_block(&ip)
+            .check_and_block_ip(&client)
         {
             return Err(Status::resource_exhausted(
                 "Too many attempts, try again later",

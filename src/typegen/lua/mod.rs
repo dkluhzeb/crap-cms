@@ -53,6 +53,7 @@ mod classes;
 mod collection_classes;
 mod ensure_table;
 mod field;
+mod filter_paths;
 mod fn_macro_tests;
 mod fn_render;
 mod fn_spec;

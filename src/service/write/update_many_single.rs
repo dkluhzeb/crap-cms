@@ -85,10 +85,10 @@ pub(crate) fn update_many_single_in_conn(
     // rewrote the row through its own CRUD is accounted for.
     let before_files = document_file_keys(ctx, def, id, input.locale_ctx)?;
 
-    // The status the row has going in, read as late as the files are: a
-    // publish of a draft moves it out of the draft view, which the live event
-    // announces.
-    let status_before = ctx.status_before_write(id, snapshot_only)?;
+    // The row as it goes in, read as late as the files are: a publish of a
+    // draft moves it out of the draft view — content and all — which the live
+    // event announces, and a draft save leaves it where it is.
+    let row_before = ctx.update_row_before(id, snapshot_only, input.locale_ctx)?;
 
     // A draft save reports its snapshot with its own rows; a published write
     // reports the stored row, hydrated BEFORE after-change hooks so they see
@@ -158,7 +158,7 @@ pub(crate) fn update_many_single_in_conn(
     // the live event is built from it, with the status view it moved from.
     let row = ctx
         .write_event_row(&doc, input.locale_ctx, snapshot_only)?
-        .map(|row| row.status_moved_from(status_before));
+        .map(|row| row.before_write(row_before, snapshot_only));
 
     strip_reported(ctx, write_hooks, &mut doc, input.locale_ctx)?;
 

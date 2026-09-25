@@ -2,18 +2,48 @@
 
 #[cfg(test)]
 use crate::db::query::fts::search::table_exists;
+use crate::db::query::fts::{
+    index::ColumnText,
+    layout::{FtsColumn, PG_FTS_CONFIG, PgVector},
+};
 #[cfg(test)]
 use crate::db::{DbConnection, DbValue};
-
-/// The Postgres full-text-search configuration used for every `to_tsvector`
-/// call. One source so the config can't drift between the backfill and the
-/// runtime upsert.
-pub(super) const PG_FTS_CONFIG: &str = "simple";
 
 /// Build a Postgres `to_tsvector('simple', <text>)` expression over `text_expr`
 /// (a bound placeholder or a SQL text expression).
 pub(super) fn pg_tsvector(text_expr: &str) -> String {
     format!("to_tsvector('{PG_FTS_CONFIG}', {text_expr})")
+}
+
+/// Each index column's indexable text, as [`ColumnText`] reads its stored
+/// value `raw(i)` (`''` when absent). Shared by the per-write upsert and the
+/// startup rebuild, so both index the same words.
+pub(super) fn column_texts<'r>(
+    columns: &[FtsColumn],
+    column_text: &ColumnText<'_>,
+    raw: impl Fn(usize) -> Option<&'r str>,
+) -> Vec<String> {
+    columns
+        .iter()
+        .enumerate()
+        .map(|(i, column)| column_text.text(&column.name, raw(i).unwrap_or("")))
+        .collect()
+}
+
+/// The text each Postgres tsvector is built from: its member columns' texts,
+/// space-joined, in `vectors` order.
+pub(super) fn pg_vector_texts<'a>(
+    vectors: &'a [PgVector],
+    texts: &'a [String],
+) -> impl Iterator<Item = String> + 'a {
+    vectors.iter().map(|vector| {
+        vector
+            .members
+            .iter()
+            .map(|&i| texts[i].as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    })
 }
 
 /// Get column names from the FTS table (excludes `id`) — a test probe for the

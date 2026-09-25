@@ -5,7 +5,11 @@ use std::collections::HashMap;
 
 use anyhow::{Context as _, Result};
 
-use super::{exif::apply_exif_orientation, resize::process_image_sizes};
+use super::{
+    decode::{decode_image, with_image_slot},
+    exif::apply_exif_orientation,
+    resize::process_image_sizes,
+};
 use crate::core::upload::{
     CleanupGuard, CollectionUpload, InspectedUpload, ProcessedUpload, QueuedConversion,
     SharedStorage, SizeResult, served_url,
@@ -49,19 +53,24 @@ fn generate_sizes(
         return Ok((HashMap::new(), Vec::new()));
     }
 
-    let data = &inspected.file.data;
-    let img = image::load_from_memory(data).context("Failed to decode image")?;
+    // The decode, the upright copy, every size and every synchronous format
+    // conversion hold one process-wide slot, so a burst of uploads queues
+    // instead of exhausting memory and CPU.
+    with_image_slot(|| {
+        let data = &inspected.file.data;
+        let img = decode_image(data)?;
 
-    // Phones and cameras commonly record images sideways with an EXIF
-    // `Orientation` tag instructing the renderer to rotate. The `image` crate
-    // ignores the tag, so without this step every portrait photo would ship
-    // sideways through the resize and format-conversion pipeline. Re-encoding
-    // into PNG/WebP/AVIF below also strips the remaining EXIF metadata (GPS
-    // coords, camera identifiers) — a privacy win for any uploads served
-    // publicly.
-    let img = apply_exif_orientation(data, img);
+        // Phones and cameras commonly record images sideways with an EXIF
+        // `Orientation` tag instructing the renderer to rotate. The `image`
+        // crate ignores the tag, so without this step every portrait photo
+        // would ship sideways through the resize and format-conversion
+        // pipeline. Re-encoding into PNG/WebP/AVIF below also strips the
+        // remaining EXIF metadata (GPS coords, camera identifiers) — a privacy
+        // win for any uploads served publicly.
+        let img = apply_exif_orientation(data, img);
 
-    process_image_sizes(&img, &inspected.columns.filename, dest, guard)
+        process_image_sizes(&img, &inspected.columns.filename, dest, guard)
+    })
 }
 
 /// Store an inspected upload: save the original, generate image sizes and

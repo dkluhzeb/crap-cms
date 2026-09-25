@@ -105,20 +105,24 @@ fn strip_label_docs(
 }
 
 /// Gated reverse-lookup / list read for a display label set: `base_filters` AND
-/// the viewer's view filters. Empty when nothing is visible — so a join field
-/// never enumerates or counts rows of a collection the viewer cannot read.
+/// the viewer's view filters, at most `limit` rows in the collection's default
+/// order. Empty when nothing is visible — so a join field never enumerates or
+/// counts rows of a collection the viewer cannot read.
 pub(in crate::admin::handlers::field_context) fn gated_find(
     ctx: &EnrichCtx,
-    slug: &str,
-    def: &CollectionDefinition,
+    (slug, def): (&str, &CollectionDefinition),
     base_filters: Vec<FilterClause>,
+    limit: i64,
 ) -> Vec<Document> {
     let Some(mut filters) = view_filters(ctx, slug, def) else {
         return Vec::new();
     };
     filters.extend(base_filters);
 
-    let fq = FindQuery::builder().filters(filters).build();
+    let fq = FindQuery::builder()
+        .filters(filters)
+        .limit(Some(limit))
+        .build();
     let mut docs = query::find(ctx.conn, slug, def, &fq, ctx.rel_locale_ctx)
         .inspect_err(|e| warn!("enrichment label list read for '{slug}' failed: {e}"))
         .unwrap_or_default();
@@ -126,6 +130,24 @@ pub(in crate::admin::handlers::field_context) fn gated_find(
     strip_label_docs(ctx, slug, def, &mut docs);
 
     docs
+}
+
+/// How many rows a [`gated_find`] with no limit would read: `base_filters` AND
+/// the viewer's view filters, counted in SQL. `None` when nothing is visible
+/// or the count fails — the caller then shows no total rather than a wrong one.
+pub(in crate::admin::handlers::field_context) fn gated_count(
+    ctx: &EnrichCtx,
+    (slug, def): (&str, &CollectionDefinition),
+    base_filters: Vec<FilterClause>,
+) -> Option<usize> {
+    let mut filters = view_filters(ctx, slug, def)?;
+    filters.extend(base_filters);
+
+    let total = query::count(ctx.conn, slug, def, &filters, ctx.rel_locale_ctx)
+        .inspect_err(|e| warn!("enrichment count for '{slug}' failed: {e}"))
+        .ok()?;
+
+    usize::try_from(total).ok()
 }
 
 #[cfg(all(test, feature = "sqlite"))]
@@ -171,6 +193,7 @@ mod tests {
             reg: &reg,
             rel_locale_ctx: None,
             user: None,
+            doc_id: None,
             ancestor_readonly: false,
         };
 
@@ -211,10 +234,11 @@ mod tests {
             reg: &reg,
             rel_locale_ctx: None,
             user: None,
+            doc_id: None,
             ancestor_readonly: false,
         };
 
-        let docs = gated_find(&ctx, "posts", &def, Vec::new());
+        let docs = gated_find(&ctx, ("posts", &def), Vec::new(), 10);
 
         assert_eq!(docs.len(), 2, "both readable targets are listed");
         for doc in &docs {
@@ -253,6 +277,7 @@ mod tests {
             reg: &reg,
             rel_locale_ctx: None,
             user: None,
+            doc_id: None,
             ancestor_readonly: false,
         };
         assert!(
@@ -270,6 +295,7 @@ mod tests {
             reg: &reg,
             rel_locale_ctx: None,
             user: None,
+            doc_id: None,
             ancestor_readonly: false,
         };
         assert!(

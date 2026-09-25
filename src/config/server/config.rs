@@ -45,36 +45,46 @@ pub struct ServerConfig {
     /// Browsers that don't support h2c fall back to HTTP/1.1 on the same port.
     /// Default: false.
     pub h2c: bool,
-    /// Trust `X-Forwarded-For` for client IP extraction (admin HTTP only).
-    /// Enable when running behind a reverse proxy (nginx, Caddy, etc.).
-    /// When false (default), the TCP socket address is used -- XFF is ignored.
-    /// Does not affect gRPC, which always uses the TCP peer address.
+    /// Trust `X-Forwarded-For` for client IP extraction. Enable when running
+    /// behind a reverse proxy (nginx, Caddy, etc.). When false (default), the
+    /// TCP peer address is the client and XFF is ignored. Applies to the admin
+    /// HTTP server, custom routes, and the gRPC API alike.
     ///
-    /// **Security:** if this is `true` but `trusted_proxies` is empty, any
-    /// client can spoof `X-Forwarded-For` and rotate per-IP rate limits
-    /// (login, password reset). Always pair `trust_proxy = true` with a
-    /// `trusted_proxies` allowlist containing the reverse proxy's IP or
-    /// CIDR range. Startup emits a warning when this pairing is missing.
+    /// Requires a non-empty `trusted_proxies` — `trust_proxy = true` without
+    /// one is a fatal startup error.
     pub trust_proxy: bool,
-    /// IP addresses or CIDR ranges allowed to set `X-Forwarded-For`. When
-    /// non-empty and `trust_proxy = true`, the XFF header is honored only
-    /// if the request's direct peer address is in this list; otherwise
-    /// the TCP socket address is used. Accepts both IPv4 and IPv6 in
-    /// either bare (`10.0.0.1`) or CIDR (`10.0.0.0/8`, `::1/128`) form.
+    /// IP addresses or CIDR ranges of the reverse proxies allowed to set
+    /// `X-Forwarded-For`, in bare (`10.0.0.1`, `::1`) or CIDR (`10.0.0.0/8`,
+    /// `::1/128`) form. Required when `trust_proxy = true`; a malformed entry
+    /// is a fatal startup error.
     ///
-    /// Empty (default) preserves the pre-hardening behaviour: when
-    /// `trust_proxy` is `true`, XFF is trusted unconditionally. A warning
-    /// is logged at startup for this combination.
+    /// XFF is honored only when the request's direct peer is listed.
+    /// The chain is then read from the RIGHT: each listed proxy hop is
+    /// skipped, and the first address that is not a listed proxy is the
+    /// client — the leftmost entries are whatever the client itself sent, so
+    /// they are never trusted blindly. `"*"` trusts every direct peer but
+    /// marks no forwarded entry as a proxy, so the rightmost entry is taken;
+    /// list the proxies explicitly when requests pass through several.
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
     /// Public-facing base URL (e.g. "<https://cms.example.com>"). Used for password reset
     /// emails and other external links. When not set, falls back to `http://{host}:{admin_port`}.
     pub public_url: Option<String>,
-    /// HTTP request timeout for the admin server in seconds. None = no timeout (default).
-    /// Applies to all admin HTTP requests. SSE streams are exempt (handled by shutdown).
-    /// Accepts integer seconds or human-readable string ("30s", "5m").
-    #[serde(default, with = "serde_duration_option")]
-    pub request_timeout: Option<u64>,
+    /// How long an admin HTTP request may take to arrive and be answered, in
+    /// seconds: reading its body and producing the response head. Exceeded →
+    /// `408 Request Timeout`. Default: 60s; `0` disables. Applies to every
+    /// admin route (including custom routes and MCP) except the ones that
+    /// accept a file, which use `upload_timeout`. A streamed response body (SSE,
+    /// a file download) is never cut. Accepts integer seconds or a
+    /// human-readable string ("30s", "5m").
+    #[serde(default = "default_request_timeout", with = "serde_duration")]
+    pub request_timeout: u64,
+    /// `request_timeout` for the routes that accept a file: an upload
+    /// collection's admin create / update and `/api/upload` create / update.
+    /// Default: `0` — no deadline, so a large file on a slow link is never
+    /// cut off. Accepts integer seconds or a human-readable string ("30m").
+    #[serde(default, with = "serde_duration")]
+    pub upload_timeout: u64,
     /// gRPC request timeout in seconds. None = no timeout (default).
     /// Applies to all gRPC RPCs including Subscribe streams.
     /// Accepts integer seconds or human-readable string ("30s", "5m").
@@ -103,6 +113,44 @@ pub struct ServerConfig {
     #[serde(default)]
     pub bulk_max_documents: i64,
 
+    /// Maximum body size of the public, pre-authentication admin routes
+    /// (login, logout, forgot / reset password, email verification, MFA, auth
+    /// callbacks). Default: 64KB. Independent of the upload limits, so an
+    /// anonymous form POST can never make the server buffer an upload-sized
+    /// body. Accepts integer bytes or a human-readable string ("64KB").
+    #[serde(default = "default_auth_body_limit", with = "serde_filesize")]
+    pub auth_body_limit: u64,
+
+    /// Maximum number of connections each listener (admin HTTP and gRPC)
+    /// holds open at once. At the cap the listener stops accepting until a
+    /// connection closes; waiting clients queue in the kernel backlog.
+    /// Default: unset — derived at startup from the process's open-file soft
+    /// limit (`RLIMIT_NOFILE`), minus a reserve for the database, logs and
+    /// uploads, split between the two listeners (4096 where there is no such
+    /// limit); the chosen value is logged. Keep an explicit value below the
+    /// file-descriptor limit.
+    pub max_connections: Option<usize>,
+
+    /// How long an admin HTTP client may take to send a request's headers
+    /// (and, with `h2c`, to show which protocol it speaks), and a gRPC client
+    /// to open with the HTTP/2 connection preface. Default: 30s. A connection
+    /// that has not delivered them by then is closed, so slow or silent
+    /// clients cannot hold connections open.
+    /// Accepts integer seconds or a human-readable string ("30s").
+    #[serde(default = "default_header_read_timeout", with = "serde_duration")]
+    pub header_read_timeout: u64,
+
+    /// Maximum concurrent HTTP/2 streams (in-flight RPCs, including
+    /// `Subscribe` streams) per gRPC connection. Default: 200.
+    pub grpc_max_concurrent_streams: u32,
+
+    /// Interval of the HTTP/2 keep-alive ping the gRPC server sends on idle
+    /// connections; a peer that does not answer within 20s is disconnected,
+    /// so dead clients do not hold connections. Default: 60s. Accepts integer
+    /// seconds or a human-readable string ("60s").
+    #[serde(default = "default_grpc_keepalive_interval", with = "serde_duration")]
+    pub grpc_keepalive_interval: u64,
+
     /// Whether the gRPC schema-introspection RPCs (`ListCollections`,
     /// `DescribeCollection`) are readable without authentication. Default:
     /// `true` — the content model is public, like a headless-CMS schema. Set to
@@ -120,6 +168,22 @@ fn default_grpc_max_message_size() -> u64 {
     16 * 1024 * 1024 // 16MB
 }
 
+fn default_auth_body_limit() -> u64 {
+    64 * 1024 // 64KB
+}
+
+fn default_request_timeout() -> u64 {
+    60
+}
+
+fn default_header_read_timeout() -> u64 {
+    30
+}
+
+fn default_grpc_keepalive_interval() -> u64 {
+    60
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -134,10 +198,16 @@ impl Default for ServerConfig {
             trust_proxy: false,
             trusted_proxies: Vec::new(),
             public_url: None,
-            request_timeout: None,
+            request_timeout: default_request_timeout(),
+            upload_timeout: 0,
             grpc_timeout: None,
             grpc_max_message_size: default_grpc_max_message_size(),
             bulk_max_documents: 0,
+            auth_body_limit: default_auth_body_limit(),
+            max_connections: None,
+            header_read_timeout: default_header_read_timeout(),
+            grpc_max_concurrent_streams: 200,
+            grpc_keepalive_interval: default_grpc_keepalive_interval(),
             public_schema_introspection: true,
         }
     }
@@ -247,9 +317,10 @@ mod tests {
     }
 
     #[test]
-    fn server_config_request_timeout_defaults_to_none() {
+    fn server_config_request_timeout_defaults_to_a_minute_and_uploads_to_none() {
         let server = ServerConfig::default();
-        assert!(server.request_timeout.is_none());
+        assert_eq!(server.request_timeout, 60);
+        assert_eq!(server.upload_timeout, 0);
         assert!(server.grpc_timeout.is_none());
     }
 
@@ -258,11 +329,12 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(
             tmp.path().join("crap.toml"),
-            "[server]\nrequest_timeout = 30\ngrpc_timeout = \"60s\"\n",
+            "[server]\nrequest_timeout = 30\nupload_timeout = \"1h\"\ngrpc_timeout = \"60s\"\n",
         )
         .unwrap();
         let config = CrapConfig::load(tmp.path()).unwrap();
-        assert_eq!(config.server.request_timeout, Some(30));
+        assert_eq!(config.server.request_timeout, 30);
+        assert_eq!(config.server.upload_timeout, 3600);
         assert_eq!(config.server.grpc_timeout, Some(60));
     }
 
@@ -275,7 +347,38 @@ mod tests {
         )
         .unwrap();
         let config = CrapConfig::load(tmp.path()).unwrap();
-        assert_eq!(config.server.request_timeout, Some(300));
+        assert_eq!(config.server.request_timeout, 300);
+    }
+
+    #[test]
+    fn server_config_connection_limits_have_finite_defaults() {
+        let server = ServerConfig::default();
+
+        assert_eq!(server.auth_body_limit, 64 * 1024);
+        assert_eq!(server.max_connections, None, "derived at startup");
+        assert_eq!(server.header_read_timeout, 30);
+        assert_eq!(server.grpc_max_concurrent_streams, 200);
+        assert_eq!(server.grpc_keepalive_interval, 60);
+    }
+
+    #[test]
+    fn server_config_connection_limits_from_toml() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            tmp.path().join("crap.toml"),
+            "[server]\nauth_body_limit = \"16KB\"\nmax_connections = 100\n\
+             header_read_timeout = \"10s\"\ngrpc_max_concurrent_streams = 50\n\
+             grpc_keepalive_interval = \"2m\"\n",
+        )
+        .unwrap();
+
+        let server = CrapConfig::load(tmp.path()).unwrap().server;
+
+        assert_eq!(server.auth_body_limit, 16 * 1024);
+        assert_eq!(server.max_connections, Some(100));
+        assert_eq!(server.header_read_timeout, 10);
+        assert_eq!(server.grpc_max_concurrent_streams, 50);
+        assert_eq!(server.grpc_keepalive_interval, 120);
     }
 
     #[test]

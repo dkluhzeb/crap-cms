@@ -11,7 +11,9 @@ use crate::{
         },
         handlers::{
             field_context::enrich::{
-                EnrichCtx, gated_find_by_id, polymorphic_selected_from_value,
+                EnrichCtx, gated_find_by_id,
+                join::enrich_join,
+                polymorphic_selected_from_value,
                 types::{
                     build_upload_item, enrich_richtext, resolve_has_many_items,
                     resolve_upload_has_many,
@@ -58,6 +60,12 @@ pub fn enrich_nested_fields(
             }
             FieldContext::Blocks(bf) => {
                 enrich_nested_blocks(bf, field_def, ctx);
+            }
+            FieldContext::Join(jf) => {
+                // A join in a group lists the documents referencing the
+                // edited document, exactly as a top-level one does (joins are
+                // refused inside array/blocks rows at load).
+                enrich_join(jf, field_def, ctx);
             }
             FieldContext::Richtext(rf) => {
                 // A richtext field inside a Group must get its custom-node

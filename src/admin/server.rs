@@ -1,26 +1,17 @@
 //! Axum router setup, auth middleware, and admin server startup.
 
 // Auth middleware and user loading are in `auth_middleware.rs`.
-use super::auth_middleware::auth_middleware;
 pub(crate) use super::auth_middleware::{
     bearer_token, evaluate_admin_request, headers_to_map, load_auth_user, session_cookie_token,
 };
 
-use std::{
-    future::Future,
-    net::SocketAddr,
-    path::PathBuf,
-    pin::Pin,
-    sync::{Arc, atomic::AtomicUsize},
-    time::Duration,
-};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use axum::{
     Router,
     body::{self, Body},
-    error_handling::HandleErrorLayer,
-    extract::{ConnectInfo, DefaultBodyLimit, MatchedPath, State},
+    extract::{DefaultBodyLimit, MatchedPath, State},
     http::{
         Method, Request, StatusCode,
         header::{
@@ -30,36 +21,33 @@ use axum::{
     },
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{MethodRouter, get, post},
-};
-use hyper::service;
-use hyper_util::{
-    rt::{TokioExecutor, TokioIo},
-    server::conn::auto::Builder as AutoBuilder,
+    routing::{get, post},
 };
 use nanoid::nanoid;
-use tokio::{net::TcpListener, select, spawn};
+use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
-use tower::{Service, ServiceBuilder, timeout::TimeoutLayer};
 use tower_http::{compression::CompressionLayer, trace::TraceLayer};
 use tracing::{info, info_span};
 
 use crate::{
     admin::{
-        AdminState, CSP_NONCE, CspNonce, Translations, csrf,
+        API_PREFIX, AdminState, CSP_NONCE, CspNonce, Translations, csrf,
         custom_pages::CustomPageRegistry,
         global_body_limit,
         handlers::{
-            auth as auth_handlers, collections, custom_route::custom_routes_router, dashboard,
-            events, globals, shared::with_error_toast, static_assets, uploads,
+            auth as auth_handlers, custom_route::custom_routes_router, shared::with_error_toast,
+            static_assets, uploads,
         },
+        listener::{self, ListenerLimits},
+        request_deadline,
+        routes::{auth_routes, protected_with_auth},
         server_builder::AdminStartParamsBuilder,
-        templates, upload_body_limit,
+        templates,
     },
     api::upload::upload_router,
-    config::{CompressionMode, CrapConfig},
+    config::{CompressionMode, CrapConfig, ServerConfig},
     core::{
-        JwtSecret, SERVER_DRAIN_SECS, SharedPasswordProvider, drain_with_deadline,
+        JwtSecret, LiveSlots, SERVER_DRAIN_SECS, SharedPasswordProvider, drain_with_deadline,
         email::create_email_provider_with_lease, rate_limit::LoginRateLimiter,
     },
     db::{DbConnection, DbPool},
@@ -110,10 +98,10 @@ pub async fn start(
 ) -> Result<()> {
     let state = build_admin_state(params, shutdown.clone())?;
 
-    let h2c_enabled = state.config.server.h2c;
+    let server = state.config.server.clone();
     let app = build_router(state);
 
-    serve_admin(addr, app, h2c_enabled, shutdown).await
+    serve_admin(addr, app, &server, shutdown).await
 }
 
 /// Assemble the [`AdminState`] from the start-params: load templates and
@@ -157,7 +145,10 @@ fn build_admin_state(params: AdminStartParams, shutdown: CancellationToken) -> R
         .values()
         .any(|d| d.is_auth_collection());
 
-    let max_sse_connections = config.live.max_sse_connections;
+    let sse_slots = LiveSlots::new(
+        config.live.max_sse_connections,
+        config.live.max_connections_per_client,
+    );
     let subscriber_send_timeout_ms = config.live.subscriber_send_timeout_ms;
 
     Ok(AdminState {
@@ -177,42 +168,31 @@ fn build_admin_state(params: AdminStartParams, shutdown: CancellationToken) -> R
         has_auth,
         translations,
         shutdown,
-        sse_connections: Arc::new(AtomicUsize::new(0)),
-        max_sse_connections,
+        sse_slots,
         password_provider,
         subscriber_send_timeout_ms,
         custom_pages,
     })
 }
 
-/// Bind the listener and run the Axum server (h2c or plain) under the shared
-/// bounded drain (long-lived connections may not close promptly).
+/// Bind the listener and serve the admin router through the capped accept
+/// loop ([`listener::serve`]) under the shared bounded drain (long-lived
+/// connections may not close promptly).
 #[cfg(not(tarpaulin_include))]
 async fn serve_admin(
     addr: &str,
     app: Router,
-    h2c_enabled: bool,
+    server: &ServerConfig,
     shutdown: CancellationToken,
 ) -> Result<()> {
-    let listener = TcpListener::bind(addr).await?;
-    let serve_shutdown = shutdown.clone();
+    let socket = TcpListener::bind(addr).await?;
+    let limits = ListenerLimits::from_config(server);
 
-    let server_future: Pin<Box<dyn Future<Output = Result<()>> + Send>> = if h2c_enabled {
+    if server.h2c {
         info!("Admin server: h2c (HTTP/2 cleartext) enabled");
+    }
 
-        Box::pin(serve_h2c(listener, app, serve_shutdown))
-    } else {
-        Box::pin(async move {
-            axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(serve_shutdown.cancelled_owned())
-            .await?;
-
-            Ok(())
-        })
-    };
+    let server_future = listener::serve(socket, app, limits, server.h2c, shutdown.clone());
 
     drain_with_deadline(
         server_future,
@@ -221,160 +201,6 @@ async fn serve_admin(
         "Admin server",
     )
     .await
-}
-
-/// Run the admin server with h2c (HTTP/2 cleartext) support.
-/// Uses hyper-util's `auto::Builder` which negotiates HTTP/1.1 vs HTTP/2
-/// on the same port. Reverse proxies can speak HTTP/2 to the backend
-/// without TLS; browsers fall back to HTTP/1.1 gracefully.
-#[cfg(not(tarpaulin_include))]
-async fn serve_h2c(listener: TcpListener, app: Router, shutdown: CancellationToken) -> Result<()> {
-    loop {
-        select! {
-            result = listener.accept() => {
-                let (socket, addr) = result?;
-                let tower_service = app.clone();
-
-                spawn(async move {
-                    let hyper_service = service::service_fn(move |mut req| {
-                        // Insert ConnectInfo so extractors can read the client address
-                        // (axum::serve does this automatically; h2c needs it manually)
-                        req.extensions_mut()
-                            .insert(ConnectInfo(addr));
-                        tower_service.clone().call(req)
-                    });
-
-                    let io = TokioIo::new(socket);
-
-                    AutoBuilder::new(TokioExecutor::new())
-                        .serve_connection_with_upgrades(io, hyper_service)
-                        .await
-                        .ok(); // Connection errors are expected (client disconnect)
-                });
-            }
-            () = shutdown.cancelled() => break,
-        }
-    }
-    Ok(())
-}
-
-/// Build reusable method routers for collection and global endpoints.
-#[cfg(not(tarpaulin_include))]
-fn method_routers(
-    state: &AdminState,
-) -> (
-    MethodRouter<AdminState>,
-    MethodRouter<AdminState>,
-    MethodRouter<AdminState>,
-) {
-    // Create and update may carry an upload collection's file: their body
-    // limit follows that collection instead of the global default.
-    let upload_limit = || middleware::from_fn_with_state(state.clone(), upload_body_limit);
-
-    let slug = get(collections::list_items)
-        .merge(post(collections::create_action).route_layer(upload_limit()));
-    let item = get(collections::edit_form)
-        .delete(collections::delete_action)
-        .merge(
-            post(collections::update_action)
-                .put(collections::update_action)
-                .route_layer(upload_limit()),
-        );
-    let globals = MethodRouter::new()
-        .get(globals::edit_form)
-        .post(globals::update_action);
-
-    (slug, item, globals)
-}
-
-/// Assemble the protected admin routes (everything behind auth middleware).
-#[cfg(not(tarpaulin_include))]
-fn protected_routes(
-    slug_methods: MethodRouter<AdminState>,
-    item_methods: MethodRouter<AdminState>,
-    globals_methods: MethodRouter<AdminState>,
-) -> Router<AdminState> {
-    Router::new()
-        .route("/", get(dashboard::index))
-        .route("/admin", get(dashboard::index))
-        .route(
-            "/admin/p/{slug}",
-            get(crate::admin::handlers::custom_page::render_custom_page),
-        )
-        .route("/admin/collections", get(collections::list_collections))
-        .route("/admin/collections/{slug}", slug_methods)
-        .route(
-            "/admin/collections/{slug}/create",
-            get(collections::create_form),
-        )
-        .route("/admin/collections/{slug}/{id}", item_methods)
-        .route(
-            "/admin/collections/{slug}/{id}/delete",
-            get(collections::delete_confirm),
-        )
-        .route(
-            "/admin/collections/{slug}/{id}/back-references",
-            get(collections::back_references),
-        )
-        .route(
-            "/admin/collections/{slug}/{id}/undelete",
-            post(collections::undelete_action),
-        )
-        .route(
-            "/admin/collections/{slug}/empty-trash",
-            post(collections::empty_trash_action),
-        )
-        .route(
-            "/admin/collections/{slug}/{id}/versions",
-            get(collections::list_versions_page),
-        )
-        .route(
-            "/admin/collections/{slug}/{id}/versions/{version_id}/restore",
-            get(collections::restore_confirm).post(collections::restore_version),
-        )
-        .route(
-            "/admin/collections/{slug}/validate",
-            post(collections::items::validate::validate_create),
-        )
-        .route(
-            "/admin/collections/{slug}/{id}/validate",
-            post(collections::items::validate::validate_update),
-        )
-        .route(
-            "/admin/collections/{slug}/evaluate-conditions",
-            post(collections::evaluate_conditions),
-        )
-        .route(
-            "/admin/api/search/{slug}",
-            get(collections::search_collection),
-        )
-        .route(
-            "/admin/api/user-settings/{slug}",
-            post(collections::save_user_settings),
-        )
-        .route("/admin/globals/{slug}", globals_methods)
-        .route(
-            "/admin/globals/{slug}/evaluate-conditions",
-            post(globals::evaluate_conditions),
-        )
-        .route(
-            "/admin/globals/{slug}/validate",
-            post(globals::validate::validate_global),
-        )
-        .route(
-            "/admin/globals/{slug}/versions",
-            get(globals::list_versions_page),
-        )
-        .route(
-            "/admin/globals/{slug}/versions/{version_id}/restore",
-            get(globals::restore_confirm).post(globals::restore_version),
-        )
-        .route("/admin/events", get(events::sse_handler))
-        .route(
-            "/admin/api/session-refresh",
-            post(auth_handlers::session_refresh),
-        )
-        .route("/admin/api/locale", post(auth_handlers::save_locale))
 }
 
 /// Build the full admin Axum router with all routes, middleware, and state.
@@ -398,6 +224,13 @@ pub fn build_router(state: AdminState) -> Router {
     // wrap them.
     let router = base.merge(custom_routes_router(&state));
 
+    // Outside every other request middleware (CSRF buffers form bodies), so
+    // each request's deadline covers all of its body reading.
+    let router = router.layer(middleware::from_fn_with_state(
+        state.clone(),
+        request_deadline,
+    ));
+
     // Static protective headers (frame-options, nosniff, referrer, permissions,
     // HSTS) apply to the FULL router — including custom routes, which would
     // otherwise ship with none. The nonce-bound admin CSP stays base-only.
@@ -409,28 +242,8 @@ pub fn build_router(state: AdminState) -> Router {
     let router = with_cors_layer(router, &state);
     let router = with_compression_layer(router, &state);
     let router = with_tracing_layer(router);
-    let router = with_timeout_layer(router, &state);
 
     router.with_state(state)
-}
-
-/// Build the protected (auth-required) sub-router and, when the deployment
-/// has auth collections or `require_auth = true`, layer the auth middleware
-/// on top.
-#[cfg(not(tarpaulin_include))]
-fn protected_with_auth(state: &AdminState) -> Router<AdminState> {
-    let (slug_methods, item_methods, globals_methods) = method_routers(state);
-    let protected = protected_routes(slug_methods, item_methods, globals_methods);
-
-    let needs_auth_layer = state.has_auth || state.config.admin.require_auth;
-    if needs_auth_layer {
-        protected.layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth_middleware,
-        ))
-    } else {
-        protected
-    }
 }
 
 /// Compose the public auth routes, the protected sub-router, the optional
@@ -454,40 +267,10 @@ fn assemble_base_router(
     Router::new()
         .route("/health", get(health_liveness))
         .route("/ready", get(health_readiness))
-        .route(
-            "/admin/login",
-            get(auth_handlers::login_page).post(auth_handlers::login_action),
-        )
-        .route("/admin/logout", post(auth_handlers::logout_action))
-        .route(
-            "/admin/forgot-password",
-            get(auth_handlers::forgot_password_page).post(auth_handlers::forgot_password_action),
-        )
-        .route(
-            "/admin/resend-verification",
-            get(auth_handlers::resend_verification_page)
-                .post(auth_handlers::resend_verification_action),
-        )
-        .route(
-            "/admin/reset-password",
-            get(auth_handlers::reset_password_page).post(auth_handlers::reset_password_action),
-        )
-        .route("/admin/verify-email", get(auth_handlers::verify_email))
-        .route(
-            "/admin/mfa",
-            get(auth_handlers::mfa_page).post(auth_handlers::verify_mfa_action),
-        )
-        .route(
-            csrf::AUTH_CALLBACK_ROUTE,
-            get(auth_handlers::auth_callback).post(auth_handlers::auth_callback),
-        )
-        .route(
-            csrf::AUTH_CALLBACK_SCOPED_ROUTE,
-            get(auth_handlers::auth_callback_scoped).post(auth_handlers::auth_callback_scoped),
-        )
+        .merge(auth_routes(state))
         .merge(protected)
         .merge(mcp_router)
-        .nest("/api", upload_api)
+        .nest(API_PREFIX, upload_api)
         .nest_service("/static", static_assets::overlay_service(&state.config_dir))
         .route(
             "/uploads/{collection_slug}/{filename}",
@@ -562,22 +345,6 @@ fn with_tracing_layer(router: Router<AdminState>) -> Router<AdminState> {
                     );
                 },
             ),
-    )
-}
-
-/// Apply the configured request-timeout layer, mapping tower timeout errors
-/// to a 408 Request Timeout response.
-#[cfg(not(tarpaulin_include))]
-fn with_timeout_layer(router: Router<AdminState>, state: &AdminState) -> Router<AdminState> {
-    let Some(timeout_secs) = state.config.server.request_timeout else {
-        return router;
-    };
-    router.layer(
-        ServiceBuilder::new()
-            .layer(HandleErrorLayer::new(|_| async {
-                StatusCode::REQUEST_TIMEOUT
-            }))
-            .layer(TimeoutLayer::new(Duration::from_secs(timeout_secs))),
     )
 }
 
@@ -956,7 +723,7 @@ pub(crate) fn extract_cookie<'a>(header: &'a str, name: &str) -> Option<&'a str>
     None
 }
 
-// MCP HTTP handler is in `mcp_handler.rs`.
+// MCP HTTP handlers live in `mcp_handler/`.
 use super::mcp_handler::{mcp_delete_session_handler, mcp_http_handler};
 
 #[cfg(test)]

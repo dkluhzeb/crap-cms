@@ -1,8 +1,12 @@
 //! Database connection trait — object-safe abstraction over backend-specific connections.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    result::Result as StdResult,
+};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
+use tracing::error;
 
 use crate::core::FieldType;
 
@@ -355,6 +359,215 @@ pub trait DbConnection {
     ///
     /// `SQLite`: `"2024-01-01 12:00:00"` → `"2024-01-01T12:00:00.000Z"`
     fn normalize_timestamp(&self, ts: &str) -> String;
+
+    // ── Transactions opened in place ─────────────────────────────────
+
+    /// Whether a transaction is open on this connection — one it is, or one
+    /// [`begin_in_place`](Self::begin_in_place) opened on it.
+    fn in_transaction(&self) -> bool;
+
+    /// Open a write transaction on this connection itself, for a scope that
+    /// cannot hold a [`BoxedTransaction`] borrowing its connection (see
+    /// [`InPlaceTransaction`]).
+    ///
+    /// `SQLite`: `BEGIN IMMEDIATE` — the write lock up front, exactly like
+    /// [`BoxedConnection::transaction_immediate`], so a read followed by a
+    /// write cannot fail with `SQLITE_BUSY_SNAPSHOT`. Postgres: `BEGIN`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if a transaction is already open or the
+    /// database refuses to start one (on `SQLite`: the write lock was not
+    /// granted within the busy timeout).
+    fn begin_in_place(&self) -> Result<()>;
+
+    /// Commit the transaction [`begin_in_place`](Self::begin_in_place)
+    /// opened.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the commit fails — including when the
+    /// database rolled the transaction back instead of committing it
+    /// (Postgres answers `COMMIT` on a transaction a failed statement aborted
+    /// with a `ROLLBACK`, which the driver would otherwise report as success).
+    fn commit_in_place(&self) -> Result<()>;
+
+    /// Roll back the transaction [`begin_in_place`](Self::begin_in_place)
+    /// opened.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the rollback fails.
+    fn rollback_in_place(&self) -> Result<()>;
+}
+
+/// The savepoint [`with_savepoint`] opens. Savepoints of one name nest: each
+/// `RELEASE` / `ROLLBACK TO` addresses the most recent one, so a step inside
+/// a step needs no name of its own.
+const STEP_SAVEPOINT: &str = "SAVEPOINT crap_step";
+const STEP_RELEASE: &str = "RELEASE SAVEPOINT crap_step";
+const STEP_ROLLBACK: &str = "ROLLBACK TO SAVEPOINT crap_step; RELEASE SAVEPOINT crap_step";
+
+/// Run `work` as one atomic step of the transaction open on `conn`: inside a
+/// savepoint that is released when `work` succeeds and rolled back to when it
+/// fails. A failed step therefore leaves no partial writes behind, and the
+/// transaction stays usable after it on both backends — on Postgres a failed
+/// statement otherwise aborts the whole transaction, and its `COMMIT` then
+/// silently rolls back every earlier write as well.
+///
+/// With no transaction open on `conn`, `work` runs as is: every statement
+/// commits on its own and there is nothing to step back to.
+///
+/// A step that reports success while its transaction is unusable (it caught a
+/// failed statement's error itself, on Postgres) is rolled back to its start
+/// and reported as failed.
+///
+/// # Errors
+///
+/// The outer error is the savepoint's own: it could not be opened, released
+/// or rolled back to. The inner result is `work`'s.
+pub fn with_savepoint<T, E>(
+    conn: &dyn DbConnection,
+    work: impl FnOnce() -> StdResult<T, E>,
+) -> Result<StdResult<T, E>> {
+    if !conn.in_transaction() {
+        return Ok(work());
+    }
+
+    conn.execute_batch(STEP_SAVEPOINT)
+        .context("failed to open a savepoint for the step")?;
+
+    let result = work();
+
+    if result.is_ok() {
+        let Err(e) = conn.execute_batch(STEP_RELEASE) else {
+            return Ok(result);
+        };
+
+        conn.execute_batch(STEP_ROLLBACK)
+            .context("failed to roll back to the step's savepoint")?;
+
+        return Err(e.context("the step left its transaction unusable and was rolled back"));
+    }
+
+    conn.execute_batch(STEP_ROLLBACK)
+        .context("failed to roll back to the step's savepoint")?;
+
+    Ok(result)
+}
+
+/// The connection an [`InPlaceTransaction`] runs on.
+enum Held<'c> {
+    /// A connection the transaction owns — it goes back to its pool when the
+    /// transaction is settled.
+    Owned(BoxedConnection),
+    /// A connection the caller owns and lends for the transaction's lifetime.
+    Borrowed(&'c dyn DbConnection),
+}
+
+impl Held<'_> {
+    fn conn(&self) -> &dyn DbConnection {
+        match self {
+            Self::Owned(conn) => conn,
+            Self::Borrowed(conn) => *conn,
+        }
+    }
+}
+
+/// A write transaction opened on a connection in place
+/// ([`DbConnection::begin_in_place`]): IMMEDIATE on `SQLite`, and committed
+/// through [`DbConnection::commit_in_place`], which refuses to report success
+/// for a transaction the database rolled back.
+///
+/// Unlike [`BoxedTransaction`] it does not hold its connection mutably
+/// borrowed, so a scope can open it lazily, or run it on a connection it was
+/// only lent. Dropping it without committing rolls it back.
+pub struct InPlaceTransaction<'c> {
+    held: Option<Held<'c>>,
+}
+
+impl InPlaceTransaction<'static> {
+    /// Open a transaction on `conn`, which the transaction keeps until it is
+    /// settled.
+    ///
+    /// # Errors
+    ///
+    /// Returns the backend error of [`DbConnection::begin_in_place`].
+    pub fn begin_owned(conn: BoxedConnection) -> Result<Self> {
+        Self::begin(Held::Owned(conn))
+    }
+}
+
+impl<'c> InPlaceTransaction<'c> {
+    /// Open a transaction on the lent connection `conn`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the backend error of [`DbConnection::begin_in_place`].
+    pub fn begin_on(conn: &'c dyn DbConnection) -> Result<Self> {
+        Self::begin(Held::Borrowed(conn))
+    }
+
+    fn begin(held: Held<'c>) -> Result<Self> {
+        held.conn().begin_in_place()?;
+
+        Ok(Self { held: Some(held) })
+    }
+
+    /// The connection the transaction runs on.
+    ///
+    /// # Panics
+    ///
+    /// Never: the connection is only taken by `commit`, which consumes the
+    /// transaction.
+    #[must_use]
+    pub fn conn(&self) -> &dyn DbConnection {
+        self.held
+            .as_ref()
+            .map(Held::conn)
+            .expect("an unsettled transaction holds its connection")
+    }
+
+    /// Commit the transaction; an owned connection goes back to its pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns the commit error — the transaction is rolled back, so the
+    /// connection never returns to its pool mid-transaction.
+    pub fn commit(mut self) -> Result<()> {
+        let Some(held) = self.held.take() else {
+            return Ok(());
+        };
+
+        let conn = held.conn();
+        let Err(e) = conn.commit_in_place() else {
+            return Ok(());
+        };
+
+        roll_back(conn);
+
+        Err(e)
+    }
+}
+
+impl Drop for InPlaceTransaction<'_> {
+    fn drop(&mut self) {
+        if let Some(held) = self.held.take() {
+            roll_back(held.conn());
+        }
+    }
+}
+
+/// Roll back `conn`'s in-place transaction, if one is still open; a failure
+/// is logged — there is nothing left to undo it with.
+fn roll_back(conn: &dyn DbConnection) {
+    if !conn.in_transaction() {
+        return;
+    }
+
+    let _ = conn
+        .rollback_in_place()
+        .inspect_err(|e| error!("transaction rollback failed: {e:#}"));
 }
 
 /// Private trait for backend connection implementations.
@@ -522,6 +735,18 @@ macro_rules! impl_db_connection_delegate {
             fn normalize_timestamp(&self, ts: &str) -> String {
                 self.inner.normalize_timestamp(ts)
             }
+            fn in_transaction(&self) -> bool {
+                self.inner.in_transaction()
+            }
+            fn begin_in_place(&self) -> Result<()> {
+                self.inner.begin_in_place()
+            }
+            fn commit_in_place(&self) -> Result<()> {
+                self.inner.commit_in_place()
+            }
+            fn rollback_in_place(&self) -> Result<()> {
+                self.inner.rollback_in_place()
+            }
         }
     };
 }
@@ -550,3 +775,221 @@ impl BoxedTransaction<'_> {
 }
 
 impl_db_connection_delegate!(BoxedTransaction<'_>);
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use std::time::Instant;
+
+    use anyhow::{Error, anyhow};
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::{
+        config::CrapConfig,
+        db::{DbPool, StatementDeadlineScope, StatementTimedOut, pool},
+    };
+
+    /// A file-backed pool with a short busy timeout and a `t` table.
+    fn test_pool() -> (TempDir, DbPool) {
+        let dir = TempDir::new().expect("tmpdir");
+        let mut config = CrapConfig::test_default();
+        config.database.path = "test.db".to_string();
+        config.database.busy_timeout = 50;
+
+        let pool = pool::create_pool(dir.path(), &config).expect("pool");
+        pool.write()
+            .expect("conn")
+            .execute_batch("CREATE TABLE t (x INTEGER)")
+            .expect("table");
+
+        (dir, pool)
+    }
+
+    fn values(pool: &DbPool) -> Vec<i64> {
+        pool.get()
+            .expect("conn")
+            .query_all("SELECT x FROM t ORDER BY x", &[])
+            .expect("select")
+            .iter()
+            .filter_map(|r| r.i64_at(0))
+            .collect()
+    }
+
+    fn insert(conn: &dyn DbConnection, x: i64) -> Result<usize> {
+        conn.execute("INSERT INTO t (x) VALUES (?1)", &[DbValue::Integer(x)])
+    }
+
+    /// A failed step leaves none of its own writes behind, and the writes
+    /// before and after it commit — the transaction is still usable.
+    #[test]
+    fn a_failed_step_is_rolled_back_to_its_start() {
+        let (_dir, pool) = test_pool();
+        let tx = InPlaceTransaction::begin_owned(pool.write().expect("conn")).expect("begin");
+        let conn = tx.conn();
+
+        insert(conn, 1).expect("before");
+
+        let step = with_savepoint(conn, || -> Result<()> {
+            insert(conn, 2)?;
+            Err(anyhow!("the step fails after writing"))
+        })
+        .expect("the savepoint itself works");
+        assert!(step.is_err(), "the step's own error is returned");
+
+        insert(conn, 3).expect("after");
+        tx.commit().expect("commit");
+
+        assert_eq!(values(&pool), vec![1, 3]);
+    }
+
+    /// A successful step's writes are kept, including a nested step's.
+    #[test]
+    fn a_successful_step_is_kept_and_steps_nest() {
+        let (_dir, pool) = test_pool();
+        let tx = InPlaceTransaction::begin_owned(pool.write().expect("conn")).expect("begin");
+        let conn = tx.conn();
+
+        let outer = with_savepoint(conn, || -> Result<()> {
+            insert(conn, 1)?;
+
+            let inner = with_savepoint(conn, || -> Result<()> {
+                insert(conn, 2)?;
+                Err(anyhow!("inner fails"))
+            })?;
+            assert!(inner.is_err());
+
+            insert(conn, 3)?;
+            Ok(())
+        })
+        .expect("savepoints");
+        assert!(outer.is_ok());
+
+        tx.commit().expect("commit");
+
+        assert_eq!(values(&pool), vec![1, 3]);
+    }
+
+    /// Outside a transaction there is nothing to step back to: the work runs
+    /// as is, and no transaction is left open behind it.
+    #[test]
+    fn a_step_outside_a_transaction_runs_as_is() {
+        let (_dir, pool) = test_pool();
+        let conn = pool.write().expect("conn");
+
+        let step = with_savepoint(&conn, || insert(&conn, 7)).expect("no savepoint needed");
+
+        assert!(step.is_ok());
+        assert!(!conn.in_transaction());
+        assert_eq!(values(&pool), vec![7]);
+    }
+
+    /// Dropping an unsettled transaction rolls it back; committing keeps it.
+    #[test]
+    fn an_in_place_transaction_commits_or_rolls_back_on_drop() {
+        let (_dir, pool) = test_pool();
+
+        let tx = InPlaceTransaction::begin_owned(pool.write().expect("conn")).expect("begin");
+        assert!(tx.conn().in_transaction());
+        insert(tx.conn(), 1).expect("insert");
+        tx.commit().expect("commit");
+
+        let tx = InPlaceTransaction::begin_owned(pool.write().expect("conn")).expect("begin");
+        insert(tx.conn(), 2).expect("insert");
+        drop(tx);
+
+        assert_eq!(values(&pool), vec![1]);
+    }
+
+    /// A lent connection is back in autocommit once its transaction settles.
+    #[test]
+    fn a_transaction_on_a_lent_connection_leaves_it_in_autocommit() {
+        let (_dir, pool) = test_pool();
+        let conn = pool.write().expect("conn");
+
+        {
+            let tx = InPlaceTransaction::begin_on(&conn).expect("begin");
+            insert(tx.conn(), 1).expect("insert");
+        }
+        assert!(!conn.in_transaction(), "the drop rolled back");
+
+        let tx = InPlaceTransaction::begin_on(&conn).expect("begin");
+        insert(tx.conn(), 2).expect("insert");
+        tx.commit().expect("commit");
+
+        assert!(!conn.in_transaction());
+        assert_eq!(values(&pool), vec![2]);
+    }
+
+    /// A write that runs far past its budget: interrupted, `SQLite` rolls back
+    /// the whole transaction it ran in, not only the statement.
+    fn interrupted_write(conn: &dyn DbConnection) -> Error {
+        let _expired = StatementDeadlineScope::bound_to(Some(Instant::now()));
+
+        conn.execute(
+            "INSERT INTO t (x) SELECT x FROM (WITH RECURSIVE c(x) AS \
+             (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 500000) SELECT x FROM c)",
+            &[],
+        )
+        .expect_err("the write is interrupted")
+    }
+
+    /// Regression: an interrupted write made `SQLite` roll the whole in-place
+    /// transaction back and return the connection to autocommit — a caller
+    /// that caught the error and carried on (a hook's `pcall`) then
+    /// committed every later statement on its own, while the transaction's
+    /// earlier writes were gone. Every later statement is refused, the commit
+    /// fails, and nothing of the transaction persists.
+    #[test]
+    fn statements_after_the_database_ended_an_in_place_transaction_are_refused() {
+        let (_dir, pool) = test_pool();
+        let tx = InPlaceTransaction::begin_owned(pool.write().expect("conn")).expect("begin");
+        let conn = tx.conn();
+
+        insert(conn, 1).expect("before");
+        assert!(interrupted_write(conn).is::<StatementTimedOut>());
+
+        let step = with_savepoint(conn, || insert(conn, 2));
+        assert!(
+            step.is_err() || step.is_ok_and(|r| r.is_err()),
+            "a later step is refused"
+        );
+        assert!(insert(conn, 3).is_err(), "a later statement is refused");
+        assert!(tx.commit().is_err(), "the commit reports the loss");
+
+        assert_eq!(values(&pool), Vec::<i64>::new());
+    }
+
+    /// The same for a transaction opened with `transaction_immediate`.
+    #[test]
+    fn statements_after_the_database_ended_a_boxed_transaction_are_refused() {
+        let (_dir, pool) = test_pool();
+        let mut conn = pool.write().expect("conn");
+        let tx = conn.transaction_immediate().expect("begin");
+
+        insert(&tx, 1).expect("before");
+        assert!(interrupted_write(&tx).is::<StatementTimedOut>());
+
+        assert!(insert(&tx, 3).is_err(), "a later statement is refused");
+        assert!(tx.commit().is_err(), "the commit reports the loss");
+        drop(conn);
+
+        assert_eq!(values(&pool), Vec::<i64>::new());
+    }
+
+    /// The in-place transaction is IMMEDIATE on `SQLite`: it holds the write
+    /// lock from its `BEGIN`, so a read-then-write inside it can never fail
+    /// with `SQLITE_BUSY_SNAPSHOT` — and another writer waits for it instead.
+    #[test]
+    fn an_in_place_transaction_takes_the_write_lock_up_front() {
+        let (_dir, pool) = test_pool();
+        let tx = InPlaceTransaction::begin_owned(pool.write().expect("conn")).expect("begin");
+
+        let other = pool.get().expect("second conn");
+        let Err(e) = other.begin_in_place() else {
+            panic!("a second writer must not get the lock while the first holds it");
+        };
+
+        assert!(format!("{e:#}").contains("locked"), "got: {e:#}");
+        drop(tx);
+    }
+}

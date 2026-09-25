@@ -217,6 +217,26 @@ impl FieldType {
         })
     }
 
+    /// Whether a field of this type may be full-text searched
+    /// (`admin.list_searchable_fields`): the types whose stored value is text
+    /// on both database backends — text, textarea, richtext, email, code,
+    /// select and radio. Numbers and checkboxes are numeric columns on
+    /// Postgres, and dates, JSON, references and containers hold no words worth
+    /// matching (filter them with `where` instead).
+    #[must_use]
+    pub fn is_searchable(&self) -> bool {
+        matches!(
+            self,
+            FieldType::Text
+                | FieldType::Textarea
+                | FieldType::Richtext
+                | FieldType::Email
+                | FieldType::Code
+                | FieldType::Select
+                | FieldType::Radio
+        )
+    }
+
     /// Whether this field type is allowed as a richtext node attribute.
     ///
     /// Only scalar types that can be rendered as a simple form input in the
@@ -440,6 +460,39 @@ mod tests {
             FieldType::Collapsible
         );
         assert_eq!(FieldType::Collapsible.as_str(), "collapsible");
+    }
+
+    #[test]
+    fn only_text_bearing_types_are_searchable() {
+        for ft in [
+            FieldType::Text,
+            FieldType::Textarea,
+            FieldType::Richtext,
+            FieldType::Email,
+            FieldType::Code,
+            FieldType::Select,
+            FieldType::Radio,
+        ] {
+            assert!(ft.is_searchable(), "{ft:?}");
+        }
+
+        for ft in [
+            FieldType::Number,
+            FieldType::Checkbox,
+            FieldType::Date,
+            FieldType::Json,
+            FieldType::Relationship,
+            FieldType::Upload,
+            FieldType::Array,
+            FieldType::Group,
+            FieldType::Blocks,
+            FieldType::Row,
+            FieldType::Collapsible,
+            FieldType::Tabs,
+            FieldType::Join,
+        ] {
+            assert!(!ft.is_searchable(), "{ft:?}");
+        }
     }
 
     #[test]

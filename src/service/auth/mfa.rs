@@ -15,14 +15,14 @@ use crate::{
     core::{
         Document,
         collection::{Auth, MfaMode},
-        email::{self, MfaCodeEmailContext},
+        email::{self, MfaCodeEmailContext, SystemEmail},
     },
     db::{
         DbConnection,
         query::{self, MfaCode},
     },
     hooks::lifecycle::MfaDeliverInput,
-    service::{AppInfra, ServiceContext, ServiceError},
+    service::{AppInfra, ServiceContext, ServiceError, user_settings::recipient_ui_locale},
 };
 
 /// MFA pending-token / code lifetime in seconds (5 minutes).
@@ -100,7 +100,7 @@ fn deliver_custom(infra: &AppInfra, auth: &Auth, d: &MfaCodeDelivery) {
         expires_in: MFA_PENDING_EXPIRY,
     };
 
-    if let Err(e) = infra.hook_runner.run_mfa_deliver(hook, &input, &infra.pool) {
+    if let Err(e) = infra.hook_runner.run_mfa_deliver(hook, &input, infra) {
         error!(
             collection = d.slug,
             hook = hook.reference(),
@@ -129,9 +129,14 @@ fn deliver_email(infra: &AppInfra, conn: &dyn DbConnection, d: &MfaCodeDelivery)
         }
     };
 
+    let locale = recipient_ui_locale(conn, &d.user.id);
+
     let job = email::EmailJobData {
         to: d.email.clone(),
-        subject: "Your verification code".to_string(),
+        subject: infra
+            .email
+            .email_renderer
+            .subject(SystemEmail::MfaCode, &locale),
         html,
         text: None,
     };

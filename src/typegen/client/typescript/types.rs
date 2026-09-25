@@ -15,8 +15,17 @@ pub(super) fn emit_read_field(w: &mut CodeWriter, field: &Field) {
 
 /// Emit one input property: its own optionality, a reference as its id, and a
 /// nested sub-type as its input variant.
+/// A nullable input key also takes `null`: an absent key keeps the stored
+/// value, an explicit `null` clears it. A required key cannot be cleared.
 pub(super) fn emit_input_field(w: &mut CodeWriter, field: &Field) {
-    emit_property(w, field, field.optional, &input_ty(&field.ty));
+    let ty = input_ty(&field.ty);
+    let ty = if field.nullable {
+        format!("{ty} | null")
+    } else {
+        ty
+    };
+
+    emit_property(w, field, field.optional, &ty);
 }
 
 /// Emit one interface property: an optional polymorphic-target `JSDoc` comment,
@@ -140,7 +149,7 @@ mod tests {
         assert!(doc.contains("  snippet_lang?: string | null;"), "{doc}");
 
         let data = interface_block(&out, "export interface SnippetsData {");
-        assert!(data.contains("  snippet_lang?: string;"), "{data}");
+        assert!(data.contains("  snippet_lang?: string | null;"), "{data}");
 
         let meta = interface_block(&out, "export interface SnippetsMeta {");
         assert!(meta.contains("  example_lang?: string | null;"), "{meta}");
@@ -169,7 +178,7 @@ mod tests {
         );
         assert!(out.contains("  type: string;"), "keyword bare key: {out}");
         assert!(
-            out.contains("  \"2fa\"?: string;"),
+            out.contains("  \"2fa\"?: string | null;"),
             "leading-digit key quoted: {out}"
         );
         assert!(out.contains("\"a\\\"b\""), "option quote escaped: {out}");
@@ -195,7 +204,7 @@ mod tests {
         );
 
         let data = interface_block(&out, "export interface PostsData {");
-        assert!(data.contains("  tags?: string[];"), "{data}");
+        assert!(data.contains("  tags?: string[] | null;"), "{data}");
     }
 
     #[test]
@@ -251,7 +260,7 @@ mod tests {
         assert!(doc.contains("Polymorphic relationship"), "comment: {doc}");
 
         let data = interface_block(&out, "export interface PostsData {");
-        assert!(data.contains("  related?: string[];"), "{data}");
+        assert!(data.contains("  related?: string[] | null;"), "{data}");
     }
 
     #[test]
@@ -299,7 +308,7 @@ mod tests {
 
         let data = interface_block(&out, "export interface PostsData {");
         assert!(data.contains("  author: string;"), "{data}");
-        assert!(data.contains("  cover?: string;"), "{data}");
+        assert!(data.contains("  cover?: string | null;"), "{data}");
         assert!(!data.contains("Document"), "{data}");
     }
 
@@ -318,8 +327,8 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("  price: number;"));
-        assert!(out.contains("  active?: boolean;"));
-        assert!(out.contains("  meta?: unknown;"));
+        assert!(out.contains("  active?: boolean | null;"));
+        assert!(out.contains("  meta?: unknown | null;"));
     }
 
     #[test]
@@ -410,7 +419,10 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("  tags: string[];"), "required: {out}");
-        assert!(out.contains("  labels?: string[];"), "optional: {out}");
+        assert!(
+            out.contains("  labels?: string[] | null;"),
+            "optional: {out}"
+        );
     }
 
     #[test]
@@ -430,7 +442,10 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("  scores: number[];"), "required: {out}");
-        assert!(out.contains("  weights?: number[];"), "optional: {out}");
+        assert!(
+            out.contains("  weights?: number[] | null;"),
+            "optional: {out}"
+        );
     }
 
     #[test]

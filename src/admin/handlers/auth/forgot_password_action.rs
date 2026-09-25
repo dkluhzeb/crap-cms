@@ -13,7 +13,7 @@ use crate::{
             ForgotPasswordForm, client_ip, get_auth_collections, render_forgot_success,
         },
     },
-    core::{CollectionDefinition, collection::Auth, normalize_email},
+    core::{CollectionDefinition, collection::Auth, login_email_key, rate_limit::AttemptBudget},
     service::ResetTarget,
 };
 
@@ -43,23 +43,24 @@ pub async fn forgot_password_action(
     Form(form): Form<ForgotPasswordForm>,
 ) -> Response {
     let auth_collections = get_auth_collections(&state);
-    let ip = client_ip(&headers, &addr, &state.config.server);
+    let client = client_ip(&headers, &addr, &state.config.server);
 
-    // Rate limit: prevent email/IP flooding. Atomically record this attempt
-    // against both limiters and bail if either is now over threshold — one
-    // operation per limiter, closing the concurrent-bypass race that the old
-    // is_blocked + separate record split left open. Both are evaluated (not
-    // short-circuited) so each counter advances every attempt. Returning the
-    // generic success on a block leaks nothing — the response is always
-    // "success" regardless of whether the email exists.
-    // Key the per-email limiter on the address in its stored form so spelling
-    // variants of one account can't each get a fresh flooding budget — the
-    // account lookup compares that form, so the limiter must too.
-    let email_key = normalize_email(&form.email);
+    // The response is the generic success whatever happens, so refusing an
+    // address longer than any deliverable one — before it is keyed,
+    // throttled or looked up — leaks nothing. The per-email key is the
+    // address in its stored form, so spelling variants of one account share
+    // one flooding budget.
+    let Some(email_key) = login_email_key(&form.email) else {
+        return render_forgot_success(&state, &auth_collections);
+    };
 
-    let email_blocked = state.forgot_password_limiter.check_and_block(&email_key);
-    let ip_blocked = state.ip_forgot_password_limiter.check_and_block(&ip);
-    if email_blocked || ip_blocked {
+    // Atomically record this attempt, IP budget first (see `AttemptBudget`),
+    // and bail with the same generic success if either budget is spent.
+    let budget = AttemptBudget::new(
+        &state.ip_forgot_password_limiter,
+        &state.forgot_password_limiter,
+    );
+    if budget.check_and_block(&client, &email_key) {
         return render_forgot_success(&state, &auth_collections);
     }
 

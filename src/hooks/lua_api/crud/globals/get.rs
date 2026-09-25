@@ -7,9 +7,9 @@ use anyhow::Result;
 use mlua::{FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Deserialize;
 
-use crate::config::LocaleConfig;
+use crate::config::{DepthConfig, LocaleConfig};
 use crate::core::Registry;
-use crate::db::LocaleContext;
+use crate::db::{LocaleContext, query};
 use crate::hooks::lifecycle::converters::document_to_lua_table;
 use crate::hooks::lua_api::crud::{
     get_tx_conn,
@@ -26,6 +26,12 @@ use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn,
 #[serde(default, deny_unknown_fields)]
 #[lua(class = "crap.GlobalGetOptions")]
 pub(crate) struct GlobalGetOptions {
+    /// Population depth for relationship and upload fields. Unset uses the
+    /// configured `[depth] default_depth` (as `crap.collections.find_by_id`
+    /// does); `0` = return IDs only. Clamped to the configured
+    /// `[depth] max_depth`.
+    #[lua(optional)]
+    pub(crate) depth: Option<i32>,
     /// Locale code for localized fields. Nil = default locale.
     pub(crate) locale: Option<String>,
     /// Skip access control checks (default: `false`). Set to `true` in
@@ -48,11 +54,16 @@ impl FromLua for GlobalGetOptions {
     }
 }
 
-/// State threaded into `crap.globals.get` — the snapshot registry plus
-/// the locale config (cloned once at registration time).
+/// State threaded into `crap.globals.get` — the snapshot registry, the
+/// locale config (cloned once at registration time) and the depth bounds.
 pub(crate) struct GlobalsGetState {
     pub(crate) registry: Arc<Registry>,
     pub(crate) locale_config: LocaleConfig,
+    /// Default relationship-population `depth` when unset, from `[depth]
+    /// default_depth`.
+    pub(crate) default_depth: i32,
+    /// Upper bound for relationship-population `depth`, from `[depth] max_depth`.
+    pub(crate) max_depth: i32,
 }
 
 /// Get a global's current value.
@@ -63,12 +74,13 @@ fn globals_get(
     #[lua(doc = "Global slug.")] slug: String,
     #[lua(
         ty = "crap.GlobalGetOptions",
-        doc = "Optional options (e.g., `{ locale = \"de\" }`)."
+        doc = "Optional options (e.g., `{ locale = \"de\", depth = 1 }`)."
     )]
     opts: Option<GlobalGetOptions>,
 ) -> LuaResult<Table> {
     let opts = opts.unwrap_or_default();
     let conn = get_tx_conn(lua)?;
+    let depth = query::clamp_depth(opts.depth, state.default_depth, state.max_depth);
 
     let locale_ctx =
         LocaleContext::from_locale_string(opts.locale.as_deref(), &state.locale_config)
@@ -88,18 +100,23 @@ fn globals_get(
         .hooks_enabled(hooks_enabled)
         .build();
 
+    // The registry resolves the populated targets. No `.cache(...)` and no
+    // `.populate_singleflight(...)`: Lua CRUD reads run inside hook
+    // transactions (see `crap.collections.find`).
     let ctx = ServiceContext::global(&slug, &def)
         .conn(conn)
         .read_hooks(&hooks)
         .user(user.as_ref())
         .ui_locale(ui_locale.clone())
         .override_access(opts.override_access)
+        .registry(Some(state.registry.as_ref()))
         .build();
 
     // Shared operation body — identical semantics on every surface.
     let args = GetGlobalArgs::builder()
         .locale_ctx(locale_ctx)
         .include_drafts(opts.draft)
+        .depth(depth)
         .build();
 
     let doc = GetGlobal::run(&ctx, args).map_err(lua_err)?;
@@ -123,12 +140,15 @@ pub(crate) fn register_globals_get(
     _table: &Table,
     registry: Arc<Registry>,
     locale_config: &LocaleConfig,
+    depth_config: &DepthConfig,
 ) -> Result<()> {
     register_crap_globals_get(
         lua,
         GlobalsGetState {
             registry,
             locale_config: locale_config.clone(),
+            default_depth: depth_config.default_depth,
+            max_depth: depth_config.max_depth,
         },
     )?;
     Ok(())

@@ -1,5 +1,6 @@
 //! Postgres harness: SQLSTATE classification, SQL composition of nested
-//! JSON sources and reserved-word columns, and the cron window claim.
+//! JSON sources and reserved-word columns, the cron window claim, and job
+//! deferral.
 
 #![cfg(all(test, feature = "postgres"))]
 
@@ -7,11 +8,15 @@ use serde_json::json;
 
 use super::{pg_test_pool, support::no_locale, unique_slug};
 use crate::{
-    core::{FieldType, Registry},
+    core::{FieldType, JobStatus, Registry, ScheduledBy},
     db::{
         DbConnection, DbValue, FilterOp,
         migrate::sync_all,
-        query::{column_read_expr, filter::build_op_condition, jobs::try_claim_cron_window},
+        query::{
+            column_read_expr,
+            filter::build_op_condition,
+            jobs::{Deferral, defer_job, get_job_run, insert_job, try_claim_cron_window},
+        },
     },
     service::ServiceError,
 };
@@ -216,6 +221,55 @@ async fn pg_the_cron_window_claim_is_atomic() {
     conn.execute(
         "DELETE FROM _crap_cron_fired WHERE slug = $1",
         &[DbValue::Text(slug)],
+    )
+    .unwrap();
+}
+
+/// A deferral gives the claim's attempt back and is bounded by the job's age —
+/// both halves are timestamp arithmetic against `created_at`, which Postgres
+/// types differently from `SQLite`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pg_a_deferral_keeps_the_attempt_and_honours_the_age_bound() {
+    let Some(pool) = pg_test_pool() else {
+        eprintln!("skipping: TEST_DATABASE_URL not set");
+        return;
+    };
+
+    sync_all(&pool, &Registry::default(), &no_locale()).expect("schema sync");
+
+    let conn = pool.get().expect("conn");
+    let slug = unique_slug("defer");
+    let job = insert_job(&conn, &slug, "{}", ScheduledBy::System, 3, "default", 0).unwrap();
+
+    conn.execute(
+        "UPDATE _crap_jobs SET status = 'running', attempt = 1 WHERE id = $1",
+        &[DbValue::Text(job.id.clone())],
+    )
+    .unwrap();
+    let running = get_job_run(&conn, &job.id).unwrap().unwrap();
+
+    assert!(defer_job(&conn, &running, "busy", Deferral::new(60, 3600)).unwrap());
+
+    let row = get_job_run(&conn, &job.id).unwrap().unwrap();
+    assert_eq!(row.status, JobStatus::Pending);
+    assert_eq!(row.attempt, 0);
+
+    conn.execute(
+        "UPDATE _crap_jobs SET status = 'running', attempt = 1, \
+         created_at = NOW() - INTERVAL '2 hours' WHERE id = $1",
+        &[DbValue::Text(job.id.clone())],
+    )
+    .unwrap();
+    let old = get_job_run(&conn, &job.id).unwrap().unwrap();
+
+    assert!(
+        !defer_job(&conn, &old, "busy", Deferral::new(60, 3600)).unwrap(),
+        "a job past the age bound is not deferred"
+    );
+
+    conn.execute(
+        "DELETE FROM _crap_jobs WHERE id = $1",
+        &[DbValue::Text(job.id)],
     )
     .unwrap();
 }

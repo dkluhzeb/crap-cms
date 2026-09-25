@@ -1,12 +1,25 @@
 //! Job-failure recording shared by every job kind.
 
 use anyhow::{Context as _, Error, Result};
-use tracing::{error, warn};
+use chrono::{DateTime, Utc};
+use tracing::{error, info, warn};
 
 use crate::{
     core::{JobRun, validate::humanize_hook_message},
-    db::{DbPool, query::jobs as job_query},
+    db::{
+        DbPool,
+        query::{jobs as job_query, jobs::Deferral},
+    },
 };
+
+/// How long after it was queued a job may still be deferred. Past this a
+/// deferrable condition counts as an ordinary failure and spends an attempt,
+/// so a job that never gets its resource still ends.
+const MAX_DEFER_AGE_SECS: u64 = 6 * 60 * 60;
+
+/// The shortest and longest wait before a deferred job runs again.
+const MIN_DEFER_DELAY_SECS: u64 = 15;
+const MAX_DEFER_DELAY_SECS: u64 = 300;
 
 /// Borrowed inputs for [`write_job_failure`], grouped per the >4-params rule
 /// (mirrors [`ExecuteJobParams`](crate::scheduler::ExecuteJobParams):
@@ -96,14 +109,148 @@ pub(in crate::scheduler) fn record_permanent_job_failure(
     })
 }
 
+/// Seconds since the job was queued; `0` when the stored time does not parse.
+fn job_age_secs(job_run: &JobRun, now: DateTime<Utc>) -> u64 {
+    let Some(created) = job_run.created_at.as_deref() else {
+        return 0;
+    };
+
+    let parsed = DateTime::parse_from_rfc3339(created)
+        .or_else(|_| DateTime::parse_from_rfc3339(&created.replacen(' ', "T", 1)));
+    let Ok(created) = parsed else {
+        return 0;
+    };
+
+    u64::try_from((now - created.with_timezone(&Utc)).num_seconds()).unwrap_or(0)
+}
+
+/// The wait before a deferred job runs again: a tenth of its age, clamped —
+/// so a job deferred again and again backs off as it ages.
+fn defer_delay_secs(age_secs: u64) -> u64 {
+    (age_secs / 10).clamp(MIN_DEFER_DELAY_SECS, MAX_DEFER_DELAY_SECS)
+}
+
+/// Record a run that found a shared resource busy (e.g. every image-processing
+/// slot taken): the job goes back to the queue with a backoff *without
+/// consuming an attempt*, since nothing about the job itself failed.
+///
+/// Bounded: a job queued more than [`MAX_DEFER_AGE_SECS`] ago is recorded as an
+/// ordinary failure instead ([`record_job_failure`]), so the attempt budget
+/// still ends a job whose resource never frees up.
+pub(super) fn record_job_deferral(
+    pool: &DbPool,
+    job_run: &JobRun,
+    label: &str,
+    err: &Error,
+) -> Result<()> {
+    let delay = defer_delay_secs(job_age_secs(job_run, Utc::now()));
+    let reason = format!("{err:#}");
+
+    let c = pool
+        .write()
+        .context("Failed to get DB connection to defer job")?;
+
+    let deferral = Deferral::new(delay, MAX_DEFER_AGE_SECS);
+
+    if job_query::defer_job(&c, job_run, &reason, deferral)? {
+        info!("{label} deferred ({reason}); runs again in {delay}s without using an attempt");
+
+        return Ok(());
+    }
+
+    drop(c);
+
+    record_job_failure(pool, job_run, label, err)
+}
+
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use anyhow::anyhow;
 
     use super::*;
     use crate::{
-        core::ScheduledBy, db::DbConnection, scheduler::runner::test_support::make_test_pool,
+        core::{JobStatus, ScheduledBy},
+        db::{DbConnection, DbValue},
+        scheduler::runner::test_support::make_test_pool,
     };
+
+    /// A job claimed once (running at attempt 1 of 3), queued `age_secs` ago.
+    fn claimed_job(pool: &DbPool, age_secs: u64) -> JobRun {
+        let conn = pool.get().unwrap();
+        let job = job_query::insert_job(&conn, "convert", "{}", ScheduledBy::Cli, 3, "default", 0)
+            .unwrap();
+
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running', attempt = 1, \
+             created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?2) WHERE id = ?1",
+            &[
+                DbValue::Text(job.id.clone()),
+                DbValue::Text(format!("-{age_secs} seconds")),
+            ],
+        )
+        .unwrap();
+
+        job_query::get_job_run(&conn, &job.id).unwrap().unwrap()
+    }
+
+    fn stored(pool: &DbPool, id: &str) -> JobRun {
+        job_query::get_job_run(&pool.get().unwrap(), id)
+            .unwrap()
+            .unwrap()
+    }
+
+    /// Regression: an image conversion that found every processing slot taken
+    /// spent an attempt like a real failure, so a burst of uploads could fail
+    /// conversions for good that nothing was wrong with.
+    #[test]
+    fn a_deferred_run_keeps_its_attempt() {
+        let pool = make_test_pool();
+        let job = claimed_job(&pool, 5);
+
+        record_job_deferral(&pool, &job, "Job", &anyhow!("busy")).unwrap();
+
+        let row = stored(&pool, &job.id);
+        assert_eq!(row.status, JobStatus::Pending);
+        assert_eq!(row.attempt, 0, "a deferral must not consume an attempt");
+    }
+
+    /// The bound: past the maximum age a deferrable run is an ordinary failure
+    /// and spends its attempt, so a job cannot wait forever.
+    #[test]
+    fn a_run_past_the_defer_window_spends_its_attempt() {
+        let pool = make_test_pool();
+        let job = claimed_job(&pool, MAX_DEFER_AGE_SECS + 60);
+
+        record_job_deferral(&pool, &job, "Job", &anyhow!("busy")).unwrap();
+
+        let row = stored(&pool, &job.id);
+        assert_eq!(row.status, JobStatus::Pending, "attempt 1 of 3 retries");
+        assert_eq!(row.attempt, 1, "the attempt is spent");
+    }
+
+    #[test]
+    fn the_defer_delay_grows_with_age_within_bounds() {
+        assert_eq!(defer_delay_secs(0), MIN_DEFER_DELAY_SECS);
+        assert_eq!(defer_delay_secs(600), 60);
+        assert_eq!(defer_delay_secs(MAX_DEFER_AGE_SECS), MAX_DEFER_DELAY_SECS);
+    }
+
+    #[test]
+    fn the_job_age_reads_both_stored_timestamp_shapes() {
+        let now = DateTime::parse_from_rfc3339("2026-01-01T00:10:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut job = JobRun::builder("j", "s").build();
+
+        job.created_at = Some("2026-01-01T00:00:00.000Z".into());
+        assert_eq!(job_age_secs(&job, now), 600);
+
+        job.created_at = Some("2026-01-01 00:00:00+00:00".into());
+        assert_eq!(job_age_secs(&job, now), 600);
+
+        job.created_at = Some("garbage".into());
+        assert_eq!(job_age_secs(&job, now), 0);
+    }
 
     /// Regression: a failed job records the FULL anyhow cause chain (`{:#}`),
     /// not just the top-level message. The user-job path used to `to_string()`

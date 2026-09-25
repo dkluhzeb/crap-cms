@@ -8,22 +8,31 @@ use include_dir::{Dir, include_dir};
 use serde::Serialize;
 use tracing::debug;
 
+use crate::{
+    admin::Translations,
+    core::email::{SystemEmail, validate_no_crlf},
+};
+
 static EMAIL_TEMPLATES_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates/email");
 
-/// Renders email templates using Handlebars with overlay support.
+/// Renders email templates using Handlebars with overlay support, and
+/// resolves the system emails' subject lines through the admin translations.
 /// Separate from admin templates — has its own Handlebars instance.
 pub struct EmailRenderer {
     hbs: Handlebars<'static>,
+    translations: Translations,
 }
 
 impl EmailRenderer {
     /// Create a new `EmailRenderer`, loading compiled-in defaults then overlaying
-    /// config dir templates from `<config_dir>/templates/email/`.
+    /// config dir templates from `<config_dir>/templates/email/`, and the
+    /// admin translations (with `<config_dir>/translations/` overrides) the
+    /// subject lines resolve through.
     ///
     /// # Errors
     ///
     /// Returns an error if any compiled-in or overlay template fails to load or
-    /// register.
+    /// register, or a subject translation spans more than one line.
     pub fn new(config_dir: &Path) -> Result<Self> {
         let mut hbs = Handlebars::new();
 
@@ -69,7 +78,19 @@ impl EmailRenderer {
             }
         }
 
-        Ok(Self { hbs })
+        let translations = Translations::load(config_dir);
+        check_subjects(&translations)?;
+
+        Ok(Self { hbs, translations })
+    }
+
+    /// The subject line of `email` in the UI `locale` — the translation of its
+    /// subject key, falling back to English.
+    #[must_use]
+    pub fn subject(&self, email: SystemEmail, locale: &str) -> String {
+        self.translations
+            .get(locale, email.subject_key())
+            .to_string()
     }
 
     /// Render an email template by name with the given typed context.
@@ -84,12 +105,107 @@ impl EmailRenderer {
     }
 }
 
+/// Every system email subject is a single header line in every UI locale. A
+/// translation override spanning lines would otherwise fail each send of
+/// that email; it fails the start instead.
+fn check_subjects(translations: &Translations) -> Result<()> {
+    for locale in translations.available_locales() {
+        for email in SystemEmail::ALL {
+            let key = email.subject_key();
+
+            validate_no_crlf("subject", translations.get(locale, key))
+                .with_context(|| format!("Translation '{key}' ({locale}) must be a single line"))?;
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
     use crate::core::email::{PasswordResetEmailContext, VerifyEmailContext};
+
+    #[test]
+    fn subjects_follow_the_ui_locale() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
+
+        assert_eq!(
+            renderer.subject(SystemEmail::PasswordReset, "en"),
+            "Reset your password"
+        );
+        assert_eq!(
+            renderer.subject(SystemEmail::PasswordReset, "de"),
+            "Passwort zurücksetzen"
+        );
+        assert_eq!(
+            renderer.subject(SystemEmail::VerifyEmail, "fr"),
+            "Verify your email",
+            "a locale without a translation falls back to English"
+        );
+    }
+
+    #[test]
+    fn every_system_subject_is_translated_in_the_shipped_locales() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
+
+        for email in SystemEmail::ALL {
+            for locale in ["en", "de"] {
+                assert_ne!(
+                    renderer.subject(email, locale),
+                    email.subject_key(),
+                    "{email:?} has no {locale} subject"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_config_dir_translation_overrides_a_subject() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("translations");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("de.json"),
+            r#"{ "email.subject.mfa_code": "Ihr Anmeldecode" }"#,
+        )
+        .unwrap();
+
+        let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
+
+        assert_eq!(
+            renderer.subject(SystemEmail::MfaCode, "de"),
+            "Ihr Anmeldecode"
+        );
+    }
+
+    /// Regression: a subject override spanning lines loaded fine and then
+    /// failed every send of that email (the header-injection guard refuses
+    /// it). The renderer refuses it at start.
+    #[test]
+    fn a_multi_line_subject_override_fails_the_start() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("translations");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("fr.json"),
+            r#"{ "email.subject.password_reset": "Réinitialiser\nBcc: x@y.z" }"#,
+        )
+        .unwrap();
+
+        let err = EmailRenderer::new(tmp.path())
+            .err()
+            .expect("a multi-line subject is refused");
+
+        assert!(
+            format!("{err:#}").contains("email.subject.password_reset"),
+            "{err:#}"
+        );
+    }
 
     #[test]
     fn renderer_new_loads_compiled_templates() {

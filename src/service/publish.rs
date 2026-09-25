@@ -69,12 +69,10 @@ impl ServiceContext<'_> {
         let Some(row) = row else { return };
 
         let gate = row.gate_snapshot();
-        let prior = row.prior();
+        let view = row.view();
         let mut doc = row.into_document();
 
         shape_reported(self, &mut doc);
-
-        let view = EventViewMeta::from_fields(&doc.fields).moved_from(prior);
 
         let gating = EventGating::new(view, Some(gate));
 

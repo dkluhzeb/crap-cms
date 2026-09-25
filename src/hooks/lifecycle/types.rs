@@ -695,6 +695,27 @@ impl<'a> TxContextGuard<'a> {
         guard
     }
 
+    /// The ambient context of a hook that settles its own transaction (an
+    /// auth strategy, an auth callback, an `mfa_deliver` hook): no user, the
+    /// CRUD infra its writes publish through, and a write `PoolContext` on
+    /// `pool`, so the `crap.tx` effects that run once the transaction settled
+    /// get pool-mode CRUD, as a job's do. The hook's own CRUD goes to its
+    /// transaction, installed on top (`LazyTxGuard`).
+    pub(crate) fn set_hook_tx(lua: &'a Lua, pool: DbPool, infra: LuaCrudInfra) -> Self {
+        let guard = Self::snapshot(lua);
+
+        lua.set_app_data(PoolContext {
+            pool,
+            mode: PoolMode::Write,
+        });
+
+        lua.set_app_data(UserContext(None));
+        lua.set_app_data(UiLocaleContext(None));
+        lua.set_app_data(infra);
+
+        guard
+    }
+
     /// Set only `UserContext` and `UiLocaleContext` (no `TxContext`/`PoolContext`,
     /// so NO CRUD access). Used by the `after_read` and validation paths, where
     /// field hooks and validators should see the current user + admin UI locale

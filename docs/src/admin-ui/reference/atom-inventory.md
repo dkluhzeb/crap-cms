@@ -88,7 +88,7 @@ stylesheet via `document.adoptedStyleSheets` on first connect (noted).
 | `<crap-dirty-form>`          | Mark form dirty on `EV_CHANGE`, prompt on navigate-away             | 187  |
 | `<crap-sticky-header>`       | Pin a header on scroll                                             | 50   |
 | `<crap-sidebar>`             | Sidebar toggle behaviour                                           | 83   |
-| `<crap-time>`                | Format ISO timestamps in user's locale                             | 57   |
+| `<crap-time>`                | Format ISO timestamps in the admin UI locale                       | 108  |
 | `<crap-collapsible>`         | Group/collapsible toggle                                           | 51   |
 | `<crap-locale-picker>`       | Editor locale switcher                                             | 35   |
 | `<crap-ui-locale-picker>`    | Admin UI locale switcher                                           | 49   |

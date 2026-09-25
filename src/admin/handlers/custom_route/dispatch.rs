@@ -382,13 +382,13 @@ pub async fn dispatch_custom_route(
 
     let method = request.method().clone();
     let headers = request.headers().clone();
-    let ip = client_ip(&headers, &addr, &state.config.server);
+    let client = client_ip(&headers, &addr, &state.config.server);
 
     // Per-route rate limit (recorded atomically up front).
     if mounted
         .limiter
         .as_ref()
-        .is_some_and(|limiter| limiter.check_and_block(&ip))
+        .is_some_and(|limiter| limiter.check_and_block_ip(&client))
     {
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     }
@@ -425,7 +425,7 @@ pub async fn dispatch_custom_route(
         query,
         headers,
         body,
-        ip,
+        ip: client.to_string(),
     };
     let db_kind = state.infra.pool.kind().to_string();
     let job = DispatchJob {

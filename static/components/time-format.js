@@ -2,7 +2,8 @@
  * Locale-aware date display — `<crap-time>`.
  *
  * Reads a timestamp from the `datetime` attribute and renders it as
- * locale-formatted text via `Intl.DateTimeFormat`. Re-renders when the
+ * locale-formatted text via `Intl.DateTimeFormat`, in the admin UI locale
+ * (`<html lang>`). Re-renders when the
  * attribute changes (HTMX swap, programmatic `setAttribute`).
  *
  * @attr datetime  Either an ISO 8601 string or SQLite's
@@ -18,7 +19,27 @@
  * @stability stable
  */
 
-const DATETIME = new Intl.DateTimeFormat(undefined, {
+/**
+ * The admin UI locale (`<html lang>`, set from the user's UI-language
+ * setting), so dates follow the admin chrome rather than the browser
+ * language. Falls back to the browser default when the attribute is
+ * missing or not a locale `Intl` supports.
+ *
+ * @returns {string|undefined}
+ */
+function uiLocale() {
+  const lang = document.documentElement.lang;
+  if (!lang) return undefined;
+  try {
+    return Intl.DateTimeFormat.supportedLocalesOf([lang]).length > 0 ? lang : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const LOCALE = uiLocale();
+
+const DATETIME = new Intl.DateTimeFormat(LOCALE, {
   year: 'numeric',
   month: 'short',
   day: 'numeric',
@@ -30,14 +51,14 @@ const DATETIME = new Intl.DateTimeFormat(undefined, {
 // at UTC noon, a `YYYY-MM` month); formatting them in the viewer's zone would
 // shift the day for UTC+12 and beyond, so they are rendered in UTC with no
 // clock time.
-const DAY = new Intl.DateTimeFormat(undefined, {
+const DAY = new Intl.DateTimeFormat(LOCALE, {
   year: 'numeric',
   month: 'short',
   day: 'numeric',
   timeZone: 'UTC',
 });
 
-const MONTH = new Intl.DateTimeFormat(undefined, {
+const MONTH = new Intl.DateTimeFormat(LOCALE, {
   year: 'numeric',
   month: 'long',
   timeZone: 'UTC',

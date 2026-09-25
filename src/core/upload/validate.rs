@@ -1,10 +1,9 @@
-use std::io::Cursor;
-
 use anyhow::{Context as _, Result, bail};
-use image::{ImageFormat, ImageReader};
+use image::ImageFormat;
 
 use crate::core::upload::{
     CollectionUpload, UploadedFile,
+    decode::{MAX_IMAGE_PIXELS, image_reader},
     svg::{is_svg, validate_svg_content},
 };
 
@@ -207,12 +206,9 @@ pub(super) fn decodable_image(content_type: &str) -> bool {
 ///    a 1 MB file can declare up to 500 MP (also caught by guard 1). Real
 ///    photographs sit in the single-digit range, so normal uploads pass.
 pub(super) fn check_image_dimensions(data: &[u8]) -> Result<(u32, u32)> {
-    const MAX_PIXELS: u64 = 100_000_000;
     const MAX_PIXELS_PER_BYTE: u64 = 500;
 
-    let reader = ImageReader::new(Cursor::new(data))
-        .with_guessed_format()
-        .context("Failed to detect image format")?;
+    let reader = image_reader(data)?;
 
     // Fail closed if the header dimensions can't be read: skipping the checks
     // and proceeding to a full `image::load_from_memory` decode is exactly what
@@ -224,7 +220,7 @@ pub(super) fn check_image_dimensions(data: &[u8]) -> Result<(u32, u32)> {
 
     let pixels = u64::from(w) * u64::from(h);
 
-    if pixels > MAX_PIXELS {
+    if pixels > MAX_IMAGE_PIXELS {
         bail!("Image too large: {w}x{h} exceeds pixel limit");
     }
 

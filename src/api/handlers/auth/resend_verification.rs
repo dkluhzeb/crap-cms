@@ -4,12 +4,14 @@ use std::sync::Arc;
 
 use tonic::{Request, Response};
 
-use crate::core::collection::Auth;
 use crate::{
-    api::{content, handlers::ContentService},
+    api::{content, handlers::ContentService, request_client_ip},
     core::{
-        normalize_email,
-        rate_limit::{IP_RESEND_VERIFICATION_KEYSPACE, RESEND_VERIFICATION_KEYSPACE},
+        collection::Auth,
+        login_email_key,
+        rate_limit::{
+            AttemptBudget, IP_RESEND_VERIFICATION_KEYSPACE, RESEND_VERIFICATION_KEYSPACE,
+        },
     },
     service::ResendTarget,
 };
@@ -25,31 +27,31 @@ impl ContentService {
         &self,
         request: Request<content::ResendVerificationRequest>,
     ) -> Response<content::ResendVerificationResponse> {
-        let ip = request
-            .remote_addr()
-            .map_or_else(|| "unknown".to_string(), |a| a.ip().to_string());
+        let client = request_client_ip(&request, &self.server_config);
         let req = request.into_inner();
 
         let ok_response = Response::new(content::ResendVerificationResponse {});
 
+        // Same success whatever happens, so an address longer than any
+        // deliverable one is refused — before it is keyed, throttled or looked
+        // up — without leaking anything. The normalized key makes casing
+        // variants of one address share a budget.
+        let Some(email_key) = login_email_key(&req.email) else {
+            return ok_response;
+        };
+
         // Own keyspace, not the forgot-password limiters: a burst of resends
         // must not drain the budget a legitimate password reset from the same
         // address or IP needs. Mirrors the admin route and the two other
-        // token endpoints.
-        //
-        // Normalized per-email key: the account lookup is case-insensitive, so
-        // a raw-email key would let casing variants each get a fresh budget.
-        let email_key = normalize_email(&req.email);
-
-        let email_blocked = self
+        // token endpoints. IP budget first (see `AttemptBudget`).
+        let email_limiter = self
             .forgot_password_limiter
-            .rescoped(RESEND_VERIFICATION_KEYSPACE)
-            .check_and_block(&email_key);
-        let ip_blocked = self
+            .rescoped(RESEND_VERIFICATION_KEYSPACE);
+        let ip_limiter = self
             .ip_forgot_password_limiter
-            .rescoped(IP_RESEND_VERIFICATION_KEYSPACE)
-            .check_and_block(&ip);
-        if email_blocked || ip_blocked {
+            .rescoped(IP_RESEND_VERIFICATION_KEYSPACE);
+
+        if AttemptBudget::new(&ip_limiter, &email_limiter).check_and_block(&client, &email_key) {
             return ok_response;
         }
 

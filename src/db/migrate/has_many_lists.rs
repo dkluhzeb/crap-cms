@@ -25,6 +25,14 @@
 //! `collection/id`) can't become a list without losing it, so startup stops and
 //! names the documents instead.
 //!
+//! The same pass keeps a has-one relationship or upload inside a row holding
+//! a single id: a field switched from `has_many` back to one value leaves its
+//! one-element lists behind, which no reader of a has-one reference reads (the
+//! reference would stop counting, leaving its target deletable while the row
+//! still names it). A one-element list becomes its element, an empty one NULL;
+//! a list of several can't become one value without dropping the others, so
+//! startup stops and names the rows instead.
+//!
 //! Unlike the one-time conversions this pass stays: any later change to a
 //! definition can leave such values behind again.
 
@@ -61,17 +69,74 @@ use crate::{
 /// Leads the meta value; bump to run the pass again everywhere after a change
 /// here. The rest of the value fingerprints the has-many fields a pass covered,
 /// so a field switched to `has_many` or retyped later runs it again.
-const PASS_VERSION: &str = "1";
+const PASS_VERSION: &str = "2";
 
 /// The gate of one collection or global, keyed by its table.
 fn meta_key(table: &str) -> String {
     format!("has_many_lists:{table}")
 }
 
-/// The leaves a pass covers: scalar has-many fields, and has-many references
-/// wherever they are stored in a row rather than a junction table.
+/// The leaves a pass covers: scalar has-many fields, and references wherever
+/// they are stored in a row rather than a junction table — a has-many one as
+/// its id list, a has-one one as its single id. (The pass only reaches a
+/// reference inside a row: a document's own reference is carried between its
+/// column and its junction by the cardinality pass.)
 fn is_list_leaf(field: &FieldDefinition) -> bool {
-    field.is_has_many_scalar() || field.is_has_many_reference()
+    field.is_has_many_scalar() || field.field_type.is_reference()
+}
+
+/// Whether `field` stores one reference, not a list.
+fn is_single_reference(field: &FieldDefinition) -> bool {
+    field.field_type.is_reference() && !field.is_has_many_reference()
+}
+
+/// The stored form of `value` for the covered leaf `field`: a has-one
+/// reference's single id, else the list [`stored_list`] reads. `Err` holds the
+/// values that don't fit.
+fn stored_shape(
+    field: &FieldDefinition,
+    value: &Value,
+    place: ListPlace,
+) -> Result<Value, Vec<Value>> {
+    if is_single_reference(field) {
+        return stored_single(value);
+    }
+
+    stored_list(field, value, place)
+}
+
+/// A has-one reference's stored form: a list (or JSON-array text, as a row's
+/// column holds it) of at most one id unwrapped — an empty one to NULL — and
+/// anything else as it is. A list of several ids is refused.
+fn stored_single(value: &Value) -> Result<Value, Vec<Value>> {
+    match value {
+        Value::Array(items) => match items.as_slice() {
+            [] => Ok(Value::Null),
+            [one] => Ok(one.clone()),
+            _ => Err(items.clone()),
+        },
+        Value::String(text) if text.trim_start().starts_with('[') => {
+            match from_str::<Value>(text) {
+                Ok(list @ Value::Array(_)) => stored_single(&list),
+                _ => Ok(value.clone()),
+            }
+        }
+        other => Ok(other.clone()),
+    }
+}
+
+/// Why `field`'s stored value was refused: the elements a list can't hold, or
+/// the ids a has-one reference can't keep all of.
+fn rejected_value(field: &FieldDefinition, elements: &[Value]) -> String {
+    if !is_single_reference(field) {
+        return rejected_elements(elements);
+    }
+
+    format!(
+        "holds {} values, but the field is has-one and keeps one: {}",
+        elements.len(),
+        rejected_elements(elements)
+    )
 }
 
 /// A collection or global whose has-many lists are kept in their list form.
@@ -196,10 +261,10 @@ fn normalize_one(
 
     if !pass.rejected.is_empty() {
         bail!(
-            "Values of has-many fields in '{}' can't be stored as lists of their field's type \
-             (a number list holds only numbers):\n  {}\nChange or remove these values, or the \
-             field definition, then start again — see \"Changing a definition that has data\" in \
-             the database documentation.",
+            "Values of fields in '{}' don't fit their field's stored shape (a number list holds \
+             only numbers, a has-one reference one id):\n  {}\nChange or remove these values, \
+             or the field definition, then start again — see \"Changing a definition that has \
+             data\" in the database documentation.",
             target.slug,
             pass.rejected.join("\n  ")
         );
@@ -424,18 +489,22 @@ impl<'r> ScannedRow<'r> {
     }
 }
 
-/// The change the stored value of a has-many list's column at `place` needs.
+/// The change the stored value of a covered column at `place` needs.
 fn column_change(field: &FieldDefinition, stored: &DbValue, place: ListPlace) -> Change {
-    let list = match stored_list(field, &stored.to_json(), place) {
+    let list = match stored_shape(field, &stored.to_json(), place) {
         Ok(list) => list,
-        Err(elements) => return Change::Rejected(vec![rejected_elements(&elements)]),
+        Err(elements) => return Change::Rejected(vec![rejected_value(field, &elements)]),
     };
 
     if list.is_null() {
         return Change::Store(DbValue::Null);
     }
 
-    let text = list.to_string();
+    // A single reference is its id as text; a list, its JSON.
+    let text = match list {
+        Value::String(id) => id,
+        list => list.to_string(),
+    };
 
     if matches!(stored, DbValue::Text(raw) if *raw == text) {
         return Change::Keep;
@@ -499,14 +568,18 @@ fn normalize_nested(
             return VisitAction::Keep;
         };
 
-        match stored_list(field, value, ListPlace::Row) {
+        match stored_shape(field, value, ListPlace::Row) {
             Ok(list) if list == *value => VisitAction::Keep,
             Ok(list) => {
                 changed = true;
                 VisitAction::Replace(list)
             }
             Err(elements) => {
-                rejected.push(format!("{} {}", field.name, rejected_elements(&elements)));
+                rejected.push(format!(
+                    "{} {}",
+                    field.name,
+                    rejected_value(field, &elements)
+                ));
                 VisitAction::Keep
             }
         }

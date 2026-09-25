@@ -66,7 +66,7 @@ Every field type accepts these properties:
 ### Reserved field names
 
 A field `name` is rejected at definition time if it would collide with an
-automatically generated column:
+automatically generated column or a key the framework adds to documents:
 
 - **Must not start with `_`.** The underscore prefix is reserved for system
   columns (`_status`, `_ref_count`, `_deleted_at`, `_order`, `_locale`, the
@@ -75,6 +75,9 @@ automatically generated column:
   for group-field column nesting (`group__subfield`).
 - **Must not be `id`, `parent_id`, `created_at`, or `updated_at`** — these are
   the primary key, join-table foreign key, and timestamp columns.
+- **Must not be `collection`** (at any depth) — every populated relationship
+  target carries a `collection` key naming its collection, which a field of
+  that name would collide with.
 - **On an upload collection: must not be an upload system column, nor `sizes`
   when `image_sizes` are configured.** Every read assembles the per-size
   columns into a `sizes` object, so a field of that name would be overwritten

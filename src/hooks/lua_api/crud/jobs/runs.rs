@@ -16,7 +16,8 @@ use std::sync::Arc;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 
 use crate::{
-    core::Registry,
+    core::{Document, Registry, job::JobRun},
+    db::DbConnection,
     hooks::lua_api::{
         crud::{helpers::hook_user, tx_conn::get_tx_conn},
         integer::opt_integer,
@@ -35,9 +36,9 @@ pub(crate) struct JobsRunsState {
 /// hook's user drives the access gate, and the in-VM hooks evaluate it.
 fn job_ctx<'a>(
     lua: &'a Lua,
-    conn: &'a dyn crate::db::DbConnection,
+    conn: &'a dyn DbConnection,
     hooks: &'a LuaWriteHooks<'a>,
-    user: Option<&'a crate::core::Document>,
+    user: Option<&'a Document>,
 ) -> ServiceContext<'a> {
     let _ = lua;
 
@@ -49,7 +50,7 @@ fn job_ctx<'a>(
 }
 
 /// Convert a job run into the Lua table shape.
-fn run_to_table(lua: &Lua, run: &crate::core::job::JobRun) -> LuaResult<Table> {
+fn run_to_table(lua: &Lua, run: &JobRun) -> LuaResult<Table> {
     let t = lua.create_table()?;
 
     t.set("id", run.id.clone())?;

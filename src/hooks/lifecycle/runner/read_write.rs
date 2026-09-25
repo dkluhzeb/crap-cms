@@ -59,10 +59,25 @@ impl HookRunner {
         Ok(self.run_hooks(hooks, HookEvent::BeforeRead, ctx)?.context)
     }
 
+    /// Whether a document of a collection with `hooks` and `fields` has any
+    /// `after_read` hook to run: a field-level one, a collection-level one, or
+    /// a registered one. Without one every `after_read` entry point returns
+    /// the documents untouched, taking no Lua VM.
+    #[must_use]
+    pub fn has_after_read_hooks(&self, hooks: &Hooks, fields: &[FieldDefinition]) -> bool {
+        has_field_hooks_for_event(fields, &FieldHookEvent::AfterRead)
+            || !hooks.after_read.is_empty()
+            || self.has_registered_hooks_for("after_read")
+    }
+
     /// Fire `after_read` hooks on a single document. Returns transformed doc.
     /// Field-level `after_read` hooks run first, then collection-level, then global registered.
     /// On error: logs warning, returns original doc unmodified.
     pub fn apply_after_read(&self, ctx: &AfterReadCtx, doc: Document) -> Document {
+        if !self.has_after_read_hooks(ctx.hooks, ctx.fields) {
+            return doc;
+        }
+
         let lua = match self.pool.acquire() {
             Ok(l) => l,
             Err(e) => {
@@ -89,11 +104,7 @@ impl HookRunner {
     /// Returns the original data unchanged if no hooks are configured.
     #[must_use]
     pub fn apply_after_read_for_event(&self, input: &EventAfterReadInput<'_>) -> DocumentFields {
-        let has_field_hooks = has_field_hooks_for_event(input.fields, &FieldHookEvent::AfterRead);
-        let has_collection_hooks = !input.hooks.after_read.is_empty();
-        let has_registered = self.has_registered_hooks_for("after_read");
-
-        if !has_field_hooks && !has_collection_hooks && !has_registered {
+        if !self.has_after_read_hooks(input.hooks, input.fields) {
             return input.data.clone();
         }
 
@@ -122,12 +133,8 @@ impl HookRunner {
     /// Fire `after_read` hooks on a list of documents.
     /// Acquires a single VM for the entire batch instead of one per document.
     pub fn apply_after_read_many(&self, ctx: &AfterReadCtx, docs: Vec<Document>) -> Vec<Document> {
-        let has_field_hooks = has_field_hooks_for_event(ctx.fields, &FieldHookEvent::AfterRead);
-        let has_collection_hooks = !ctx.hooks.after_read.is_empty();
-        let has_registered = self.has_registered_hooks_for("after_read");
-
         // No hooks at all — skip VM acquisition entirely
-        if !has_field_hooks && !has_collection_hooks && !has_registered {
+        if !self.has_after_read_hooks(ctx.hooks, ctx.fields) {
             return docs;
         }
 

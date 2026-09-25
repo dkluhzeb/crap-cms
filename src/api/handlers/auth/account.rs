@@ -91,15 +91,8 @@ fn account_action_blocking(
         .write()
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
 
-    let auth_user = ContentService::resolve_auth_user(
-        input.token.as_deref(),
-        &input.headers,
-        &*infra.token_provider,
-        &infra.hook_runner,
-        &infra.registry,
-        &conn,
-        &input.infra.locale_config,
-    )?;
+    let auth_user =
+        ContentService::resolve_auth_user(input.token.as_deref(), &input.headers, infra, &conn)?;
 
     let Some(auth_user) = auth_user else {
         return Err(Status::unauthenticated("Authentication required"));

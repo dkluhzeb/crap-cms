@@ -193,6 +193,12 @@ pub struct JoinField {
     /// `{{#if join_count}}…{{/if}}`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub join_count: Option<usize>,
+
+    /// How many visible documents reference this one, set only when more
+    /// exist than `join_items` lists (a join lists at most its `limit`).
+    /// Templates render "`join_count` of `join_total`" with it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub join_total: Option<usize>,
 }
 
 impl JoinField {
@@ -207,6 +213,7 @@ impl JoinField {
             join_on: None,
             join_items: None,
             join_count: None,
+            join_total: None,
         }
     }
 }
@@ -329,6 +336,7 @@ mod tests {
             join_on: Some("author_id".to_string()),
             join_items: None,
             join_count: None,
+            join_total: None,
         };
         let v = serde_json::to_value(FieldContext::Join(f)).unwrap();
         assert_eq!(v["readonly"], true);

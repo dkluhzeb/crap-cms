@@ -36,28 +36,25 @@ use crate::{
 pub(crate) fn run_effects_on_vm(lua: &Lua, effects: &[DeferredEffect], outcome: EffectOutcome) {
     let _deadline = ExecutionDeadlineGuard::suspend(lua);
 
-    for effect in effects.iter().filter(|e| e.outcome == outcome) {
-        if let Err(e) = call_one_effect(lua, effect, outcome) {
+    for effect in effects.iter().filter(|e| e.runs_on(outcome)) {
+        if let Err(e) = call_one_effect(lua, effect) {
             warn!(
                 "tx {} effect '{}' failed: {e:#}",
-                outcome.as_str(),
+                effect.outcome.as_str(),
                 effect.hook_ref
             );
         }
     }
 }
 
-/// Resolve one effect's hook ref and call it with `{ data, outcome }`.
-fn call_one_effect(
-    lua: &Lua,
-    effect: &DeferredEffect,
-    outcome: EffectOutcome,
-) -> anyhow::Result<()> {
+/// Resolve one effect's hook ref and call it with `{ data, outcome }`, where
+/// `outcome` is the one the effect was registered for.
+fn call_one_effect(lua: &Lua, effect: &DeferredEffect) -> anyhow::Result<()> {
     let func = resolve_hook_function(lua, &effect.hook_ref)?;
 
     let ctx = lua.create_table()?;
     ctx.set("data", lua_api::json_to_lua(lua, &effect.payload)?)?;
-    ctx.set("outcome", outcome.as_str())?;
+    ctx.set("outcome", effect.outcome.as_str())?;
 
     func.call::<()>(ctx)?;
 
@@ -150,6 +147,7 @@ mod tests {
             outcome: EffectOutcome::Commit,
             hook_ref: "hooks.effect".to_string(),
             payload: json!({}),
+            unconditional: false,
         }];
         run_effects_on_vm(&lua, &effects, EffectOutcome::Commit);
 

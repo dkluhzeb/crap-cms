@@ -6,10 +6,12 @@
 //!
 //! The Rust client types and the proto decoder are one contract (`typegen
 //! proto` decodes into the `typegen client -l rs` structs), so both are also
-//! parsed with `syn` and every decoder is checked to build exactly the fields
-//! of the struct it targets. That is structural, not a type check: a true
-//! compile of the pair (and a TS/Go/Python compiler check of the others) needs
-//! a toolchain at test time, out of scope for the hermetic suite.
+//! parsed with `syn`, every decoder is checked to build exactly the fields of
+//! the struct it targets, and each file must bind every top-level name once.
+//! That is structural, not a type check. The TypeScript, Go and Python output
+//! is compiled by the language's own toolchain when one is on `PATH` (`deno`,
+//! `go`, `python3` — see `toolchain_check`), for the kitchen sink and for a
+//! schema of adversarial names; without one, that check skips with a note.
 //!
 //! The Lua types (with the static `types/crap.lua`) are checked against the
 //! `LuaLS` annotation grammar hermetically, and by a real `lua-language-server
@@ -26,7 +28,7 @@ use std::{
     fs,
 };
 
-use syn::{Expr, File, ImplItem, Item, Member, Stmt, Type, parse_file};
+use syn::{Expr, File, ImplItem, Item, Member, Stmt, Type, UseTree, parse_file};
 
 use crate::{
     core::{
@@ -40,7 +42,7 @@ use crate::{
         Language,
         client::generate,
         lua::{self, luals_check},
-        rust_proto,
+        rust_proto, toolchain_check,
     },
 };
 
@@ -493,7 +495,13 @@ fn lua_types_follow_the_luals_grammar() {
     }
 }
 
-/// A real `LuaLS --check` of the kitchen-sink types reports nothing at
+/// Hook-author calls against the kitchen-sink types — typed `where` tables
+/// with `or` groups and dotted paths, `crap.null` clears, a draft create, an
+/// all-locales read — which the `LuaLS` check runs beside the types.
+const KITCHEN_SINK_USAGE: &str = include_str!("client/testdata/kitchen_sink_usage.lua.txt");
+
+/// A real `LuaLS --check` of the kitchen-sink types, and of calls written
+/// against them, reports nothing at
 /// Warning level. Skipped (with a note) when no `lua-language-server` is
 /// found — set `CRAP_LUALS` to its path, or put it on `PATH`.
 #[test]
@@ -502,6 +510,7 @@ fn lua_types_pass_a_luals_check() {
     let files: Vec<(&str, &str)> = files
         .iter()
         .map(|(name, source)| (*name, source.as_str()))
+        .chain([("usage.lua", KITCHEN_SINK_USAGE)])
         .collect();
 
     let Some(result) = luals_check::luals_diagnostics(&files) else {
@@ -587,10 +596,22 @@ fn proto_constructors(file: &File) -> Vec<(String, BTreeSet<String>)> {
 /// single-locale struct has a decoder; the `locale = "all"` shape has none.
 #[test]
 fn proto_decoders_build_exactly_the_client_structs() {
-    let reg = kitchen_sink();
-    let client = parse_file(&generate(&reg, Language::Rust).expect("generate"))
+    assert_proto_decoders_match(&kitchen_sink());
+}
+
+/// The Rust client types and proto decoder of `reg`, parsed.
+fn rust_files(reg: &Registry) -> (File, File) {
+    let client = parse_file(&generate(reg, Language::Rust).expect("generate"))
         .expect("the Rust client types parse");
-    let proto = parse_file(&rust_proto::render(&reg, PROTO_MOD)).expect("the proto decoder parses");
+    let proto = parse_file(&rust_proto::render(reg, PROTO_MOD)).expect("the proto decoder parses");
+
+    (client, proto)
+}
+
+/// Every proto decoder of `reg` builds exactly the fields of the client
+/// struct it targets, and every single-locale client struct has one.
+fn assert_proto_decoders_match(reg: &Registry) {
+    let (client, proto) = rust_files(reg);
 
     let structs = client_structs(&client);
     let ctors = proto_constructors(&proto);
@@ -611,5 +632,220 @@ fn proto_decoders_build_exactly_the_client_structs() {
             built.contains(name.as_str()),
             "client struct `{name}` has no proto decoder"
         );
+    }
+}
+
+/// The std prelude names the generated Rust files use unqualified.
+const RUST_PRELUDE_USED: [&str; 10] = [
+    "Option", "Some", "None", "Result", "Ok", "Err", "String", "Vec", "Box", "From",
+];
+
+/// Slugs whose `PascalCase` is a name a generated file binds: the Rust
+/// client's `Rel` and `serde` imports, the std prelude, `Self` and the proto
+/// decoder's imports and trait; Go's `Rel`; Python's keywords and `typing`
+/// imports; TypeScript's prelude and `Record`.
+const ADVERSARIAL_SLUGS: [&str; 27] = [
+    "rel",
+    "serialize",
+    "deserialize",
+    "option",
+    "some",
+    "none",
+    "result",
+    "ok",
+    "err",
+    "string",
+    "vec",
+    "box",
+    "from",
+    "self",
+    "document",
+    "data_map",
+    "field_value",
+    "kind",
+    "from_document",
+    "true",
+    "false",
+    "optional",
+    "any",
+    "literal",
+    "localized",
+    "record",
+    "update",
+];
+
+/// Field names that are keywords or annotation names somewhere, a leading
+/// digit, a select whose constant meets a group's type name (Go), and a
+/// reference to the `rel` collection.
+fn adversarial_fields() -> Vec<FieldDefinition> {
+    let mut fields: Vec<FieldDefinition> = [
+        "str", "float", "bool", "list", "dict", "type", "class", "2fa",
+    ]
+    .into_iter()
+    .map(|name| text(name, false))
+    .collect();
+
+    fields.extend([
+        FieldDefinition::builder("status", FieldType::Select)
+            .options(options(&["meta"]))
+            .build(),
+        FieldDefinition::builder("status_meta", FieldType::Group)
+            .fields(vec![text("note", false)])
+            .build(),
+        relationship("owner", "rel", false),
+    ]);
+
+    fields
+}
+
+/// A collection per [`ADVERSARIAL_SLUGS`] slug, each with the
+/// [`adversarial_fields`].
+fn adversarial() -> Registry {
+    let mut reg = Registry::new();
+
+    for slug in ADVERSARIAL_SLUGS {
+        let mut col = CollectionDefinition::new(slug);
+        col.fields = adversarial_fields();
+        reg.register_collection(col);
+    }
+
+    reg
+}
+
+/// The names a `use` tree binds; a glob binds none by name.
+fn use_names(tree: &UseTree, out: &mut Vec<String>) {
+    match tree {
+        UseTree::Path(path) => use_names(&path.tree, out),
+        UseTree::Name(name) => out.push(name.ident.to_string()),
+        UseTree::Rename(rename) => out.push(rename.rename.to_string()),
+        UseTree::Group(group) => {
+            for item in &group.items {
+                use_names(item, out);
+            }
+        }
+        UseTree::Glob(_) => {}
+    }
+}
+
+/// Every name `file` binds at the top level: its imports and its type,
+/// trait, function and constant declarations.
+fn top_level_names(file: &File) -> Vec<String> {
+    let mut names = Vec::new();
+
+    for item in &file.items {
+        match item {
+            Item::Use(item) => use_names(&item.tree, &mut names),
+            Item::Struct(item) => names.push(item.ident.to_string()),
+            Item::Enum(item) => names.push(item.ident.to_string()),
+            Item::Type(item) => names.push(item.ident.to_string()),
+            Item::Trait(item) => names.push(item.ident.to_string()),
+            Item::Fn(item) => names.push(item.sig.ident.to_string()),
+            Item::Const(item) => names.push(item.ident.to_string()),
+            _ => {}
+        }
+    }
+
+    names
+}
+
+/// `file` binds each top-level name once and shadows no std prelude name.
+fn assert_binds_each_name_once(file: &File, what: &str) {
+    let mut seen = HashSet::new();
+
+    for name in top_level_names(file) {
+        assert!(
+            !RUST_PRELUDE_USED.contains(&name.as_str()),
+            "{what} shadows the std `{name}`"
+        );
+        assert!(seen.insert(name.clone()), "{what} binds `{name}` twice");
+    }
+}
+
+/// Regression: a slug `PascalCase`ing onto a name the generated Rust files
+/// bind — `rel` onto the `Rel` wrapper, `option` onto the std `Option`,
+/// `document` onto the decoder's `Document` import — declared a clashing or
+/// shadowing type, and the pair did not compile. Beyond parsing: each file
+/// binds every top-level name once without shadowing the std prelude, the
+/// decoder's own names never hide a client struct its glob import brings in,
+/// and every decoder still builds exactly its client struct.
+#[test]
+fn rust_files_bind_every_name_once_for_adversarial_names() {
+    let reg = adversarial();
+
+    let (client, proto) = rust_files(&reg);
+    assert_binds_each_name_once(&client, "the client types");
+    assert_binds_each_name_once(&proto, "the proto decoder");
+
+    let client_names: HashSet<String> = top_level_names(&client).into_iter().collect();
+    for name in top_level_names(&proto) {
+        assert!(
+            !client_names.contains(&name),
+            "the proto decoder's `{name}` hides the client's"
+        );
+    }
+
+    assert_proto_decoders_match(&reg);
+}
+
+/// A toolchain check passes; skipped, with a note, without the toolchain.
+fn assert_toolchain_passes(result: Option<Result<(), String>>, what: &str) {
+    let Some(result) = result else {
+        eprintln!("skipping the {what} check: its toolchain is not on PATH");
+        return;
+    };
+
+    if let Err(report) = result {
+        panic!("{what} do not compile:\n{report}");
+    }
+}
+
+/// Client code written against the kitchen-sink TypeScript types — a create,
+/// a partial update with a partial group, a read, an all-locales read — and
+/// the writes the types must refuse (`@ts-expect-error`).
+const KITCHEN_SINK_TS_USAGE: &str = include_str!("client/testdata/kitchen_sink_usage.ts.txt");
+
+/// The generated TypeScript type-checks (`deno check`), with the usage
+/// fixture against the kitchen sink, and for the adversarial names.
+#[test]
+fn typescript_types_pass_a_type_check() {
+    let kitchen = generate(&kitchen_sink(), Language::Typescript).expect("generate");
+    assert_toolchain_passes(
+        toolchain_check::typescript(&[
+            ("types.ts", kitchen.as_str()),
+            ("usage.ts", KITCHEN_SINK_TS_USAGE),
+        ]),
+        "the kitchen-sink TypeScript types",
+    );
+
+    let adversarial = generate(&adversarial(), Language::Typescript).expect("generate");
+    assert_toolchain_passes(
+        toolchain_check::typescript(&[("types.ts", adversarial.as_str())]),
+        "the adversarial TypeScript types",
+    );
+}
+
+/// The generated Go compiles (`go vet`), for the kitchen sink and the
+/// adversarial names.
+#[test]
+fn go_types_compile() {
+    for (what, reg) in [
+        ("the kitchen-sink Go types", kitchen_sink()),
+        ("the adversarial Go types", adversarial()),
+    ] {
+        let source = generate(&reg, Language::Go).expect("generate");
+        assert_toolchain_passes(toolchain_check::go(&source), what);
+    }
+}
+
+/// The generated Python imports, and every dataclass instantiates and
+/// resolves its annotations, for the kitchen sink and the adversarial names.
+#[test]
+fn python_types_import_and_resolve() {
+    for (what, reg) in [
+        ("the kitchen-sink Python types", kitchen_sink()),
+        ("the adversarial Python types", adversarial()),
+    ] {
+        let source = generate(&reg, Language::Python).expect("generate");
+        assert_toolchain_passes(toolchain_check::python(&source), what);
     }
 }

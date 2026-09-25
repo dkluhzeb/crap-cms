@@ -2,10 +2,10 @@
 
 use serde_json::{Value, json};
 
-use super::access::{ListFieldAccess, field_label};
+use super::access::ListFieldAccess;
 use crate::{
     admin::handlers::shared::{
-        ListUrlContext, auto_label_from_name, is_column_eligible, is_meta_column,
+        ListUrlContext, auto_label_from_name, field_label, is_column_eligible, is_meta_column,
         is_sortable_column,
     },
     core::collection::CollectionDefinition,

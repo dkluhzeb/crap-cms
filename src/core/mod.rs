@@ -6,8 +6,8 @@
 //!
 //! Two flavours of submodule:
 //!
-//! - **Leaf modules** (`auth`, `collection`, `condition`, `document`,
-//!   `document_fields`, `document_id`, `field`, `job`, `registry`,
+//! - **Leaf modules** (`accept`, `auth`, `client_ip`, `collection`, `condition`, `document`,
+//!   `document_fields`, `document_id`, `field`, `job`, `live_slots`, `registry`,
 //!   `req_context`, `slug`, `text`, `timezone`, `tls`, `validate`) -- one or two
 //!   tightly-coupled types each. Their public types are re-exported
 //!   flat at `crate::core::*`; external callers use the short path.
@@ -38,8 +38,10 @@
 //! - Builders colocate with their struct in a single file with the
 //!   tests at the bottom.
 
+pub mod accept;
 pub mod auth;
 pub mod cache;
+pub mod client_ip;
 pub mod collection;
 pub mod column;
 pub mod condition;
@@ -56,9 +58,11 @@ pub mod hex;
 pub mod hook_ref;
 pub mod job;
 pub mod lifecycle;
+pub mod live_slots;
 pub mod lua_lease;
 pub mod nesting_depth;
 pub mod nul;
+pub mod open_files;
 pub mod parse;
 pub mod rate_limit;
 #[cfg(feature = "redis")]
@@ -81,22 +85,28 @@ pub mod walk;
 /// `macros/src/builder.rs` for the field rules.
 pub use crap_cms_macros::Builder;
 
-pub use auth::{AuthUser, Claims, HashedPassword, JwtSecret, normalize_email};
+pub use accept::{
+    AcceptedConnection, ConnectionCap, H2_PREFACE, HttpProtocol, resolve_max_connections,
+    sniff_protocol,
+};
+pub use auth::{AuthUser, Claims, HashedPassword, JwtSecret, login_email_key, normalize_email};
+pub use client_ip::ClientIp;
 pub use collection::{
     Access, CollectionDefinition, GlobalDefinition, Hooks, IndexDefinition, Labels, LiveMode,
     LiveSetting, VersionsConfig,
 };
-pub use column::{AUTO_COLUMNS, is_system_column};
+pub use column::{AUTO_COLUMNS, RESERVED_FIELD_NAMES, is_reserved_field_name, is_system_column};
 pub use condition::{ConditionExpr, ConditionOp, ConditionRow};
 pub use document::Document;
 pub use document_fields::DocumentFields;
 pub use document_id::DocumentId;
 pub use field::{
-    BLOCK_TYPE_KEY, BlockDefinition, FieldAccess, FieldAdmin, FieldAdminBuilder, FieldAdminLabels,
-    FieldDefinition, FieldDefinitionBuilder, FieldHookFn, FieldHooks, FieldTab, FieldType,
-    FieldWidth, JoinConfig, LocalizedString, McpFieldConfig, PickerAppearance, RelationshipConfig,
-    RequiredLocales, SelectOption, ValidateFunction, current_label_locale, in_label_locale,
-    reference_items, set_default_label_locale, spawn_blocking_in_label_locale, to_title_case,
+    BLOCK_TYPE_KEY, BlockDefinition, DEFAULT_JOIN_LIMIT, FieldAccess, FieldAdmin,
+    FieldAdminBuilder, FieldAdminLabels, FieldDefinition, FieldDefinitionBuilder, FieldHookFn,
+    FieldHooks, FieldTab, FieldType, FieldWidth, JoinConfig, LocalizedString, McpFieldConfig,
+    PickerAppearance, RelationshipConfig, RequiredLocales, SelectOption, ValidateFunction,
+    current_label_locale, default_label_locale, in_label_locale, reference_items,
+    set_default_label_locale, spawn_blocking_in_label_locale, to_title_case,
     validate_template_name, with_label_locale,
 };
 pub(crate) use field::{Companion, LANG_SUFFIX, TZ_SUFFIX};
@@ -106,6 +116,7 @@ pub(crate) use group_repr::{flatten_group_fields, nest_group_fields};
 pub use hook_ref::HookRef;
 pub use job::{JobDefinition, JobLabels, JobRun, JobStatus, ScheduledBy};
 pub use lifecycle::{Readiness, SERVER_DRAIN_SECS, drain_with_deadline};
+pub use live_slots::{LiveSlot, LiveSlots, SlotRefusal};
 pub use lua_lease::{LocalLease, LuaVmLease};
 pub use nesting_depth::{NESTING_DEPTH, NestingDepth, max_nesting_depth, set_max_nesting_depth};
 pub use nul::{nul_character_errors, reject_nul_characters};

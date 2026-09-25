@@ -3,8 +3,8 @@
 use tonic::{Request, Response};
 
 use crate::{
-    api::{content, handlers::ContentService},
-    core::{collection::Auth, normalize_email},
+    api::{content, handlers::ContentService, request_client_ip},
+    core::{collection::Auth, login_email_key, rate_limit::AttemptBudget},
     service::ResetTarget,
 };
 
@@ -16,27 +16,27 @@ impl ContentService {
         &self,
         request: Request<content::ForgotPasswordRequest>,
     ) -> Response<content::ForgotPasswordResponse> {
-        let ip = request
-            .remote_addr()
-            .map_or_else(|| "unknown".to_string(), |a| a.ip().to_string());
+        let client = request_client_ip(&request, &self.server_config);
         let req = request.into_inner();
 
         let ok_response = Response::new(content::ForgotPasswordResponse {});
 
-        // Key the per-email limiter on the address in its stored form so
-        // spelling variants of one account share a bucket — `find_by_email`
-        // compares that form, so a raw-email key would let an attacker sidestep
-        // the per-account reset-flood limit by rotating the spelling.
-        let email_key = normalize_email(&req.email);
+        // The response is the generic success whatever happens, so refusing an
+        // address longer than any deliverable one — before it is keyed,
+        // throttled or looked up — leaks nothing. The per-email key is the
+        // address in its stored form (the form `find_by_email` compares), so
+        // spelling variants of one account share one reset-flood budget.
+        let Some(email_key) = login_email_key(&req.email) else {
+            return ok_response;
+        };
 
-        // Atomically record this attempt against both limiters and bail if
-        // either is now over threshold — one operation per limiter, closing the
-        // concurrent-bypass race the is_blocked + separate record split left
-        // open. Both are evaluated (not short-circuited) so each counter
-        // advances. The generic success response leaks nothing on a block.
-        let email_blocked = self.forgot_password_limiter.check_and_block(&email_key);
-        let ip_blocked = self.ip_forgot_password_limiter.check_and_block(&ip);
-        if email_blocked || ip_blocked {
+        // Atomically record this attempt, IP budget first (see
+        // `AttemptBudget`); a block returns the same generic success.
+        let budget = AttemptBudget::new(
+            &self.ip_forgot_password_limiter,
+            &self.forgot_password_limiter,
+        );
+        if budget.check_and_block(&client, &email_key) {
             return ok_response;
         }
 

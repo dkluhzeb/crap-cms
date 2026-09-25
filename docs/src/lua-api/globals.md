@@ -89,6 +89,7 @@ Get a global's current value. Returns the typed document.
 | --- | --- | --- |
 | `locale` | string | Locale code (e.g. `"en"`, `"de"`). Fetches locale-specific field values; omit for default locale. |
 | `override_access` | boolean | Bypass the global's `access.read` check (default `false`). |
+| `depth` | integer | Population depth for relationship and upload fields. Unset = `[depth] default_depth` (as `crap.collections.find_by_id`); `0` = IDs only; clamped to `[depth] max_depth`. |
 | `draft` | boolean | Read unpublished (draft) content (default `false`). Gated by `access.draft` (falling back to `access.update`); a reader without draft access silently gets the published view, never an error. When the global has drafts enabled and has been unpublished, a normal read returns an empty global (every field `nil`, `_status = "draft"`) until it is published again; set `true` to read the draft. |
 
 ```lua

@@ -15,17 +15,20 @@
 //! [`get_tx_conn`] is the conn-mode-only path retained for hook-internal
 //! code that knows the mode.
 
+use std::{cell::RefCell, rc::Rc};
+
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult};
 
 use crate::{
-    db::DbConnection,
+    db::{DbConnection, with_savepoint},
     hooks::{
         lifecycle::{
-            AfterReadScope, LazyTxContext, PoolContext, PoolMode, ReadOnlyScope, TxContext,
-            check_execution_deadline,
+            AfterReadScope, LazyTxContext, LuaCrudInfra, PoolContext, PoolMode, ReadOnlyScope,
+            TxContext, check_execution_deadline,
         },
         lua_api::transaction::run_scoped_tx,
     },
+    service::{DeferredEffect, EffectOutcome},
 };
 
 /// Open the hook's pending lazy transaction (see
@@ -43,6 +46,27 @@ pub(crate) fn open_lazy_tx(lua: &Lua) -> LuaResult<()> {
         return Ok(());
     }
 
+    install_lazy_tx(lua)
+}
+
+/// [`open_lazy_tx`] for a write: a write inside a read that runs on the
+/// lazy transaction's reader ([`LazyReadScope`]) opens the transaction too,
+/// instead of writing on the reader.
+///
+/// # Errors
+///
+/// As [`open_lazy_tx`].
+pub(crate) fn open_lazy_tx_to_write(lua: &Lua) -> LuaResult<()> {
+    let on_reader = lua.app_data_ref::<LazyReadScope>().is_some();
+
+    if lua.app_data_ref::<TxContext>().is_some() && !on_reader {
+        return Ok(());
+    }
+
+    install_lazy_tx(lua)
+}
+
+fn install_lazy_tx(lua: &Lua) -> LuaResult<()> {
     let Some(lazy) = lua.app_data_ref::<LazyTxContext>().map(|c| *c) else {
         return Ok(());
     };
@@ -56,6 +80,53 @@ pub(crate) fn open_lazy_tx(lua: &Lua) -> LuaResult<()> {
     lua.set_app_data(TxContext::new(conn));
 
     Ok(())
+}
+
+/// Marks a read running on a pending lazy transaction's reader (see
+/// [`open_lazy_tx_to_write`]).
+struct LazyReadScope;
+
+/// Removes the [`LazyReadScope`] marker — on the unwind path too.
+struct LazyReadSlot<'a>(&'a Lua);
+
+impl Drop for LazyReadSlot<'_> {
+    fn drop(&mut self) {
+        self.0.remove_app_data::<LazyReadScope>();
+    }
+}
+
+/// The reader of the pending lazy transaction, while no write opened it and
+/// no other connection context is installed.
+fn lazy_reader(lua: &Lua) -> Option<&dyn DbConnection> {
+    if lua.app_data_ref::<TxContext>().is_some() {
+        return None;
+    }
+
+    let lazy = lua.app_data_ref::<LazyTxContext>().map(|c| *c)?;
+
+    // SAFETY: as in `install_lazy_tx`.
+    unsafe { lazy.tx() }.reader()
+}
+
+/// Run a read on the pending lazy transaction's `reader`, in autocommit.
+/// The reader is installed as the `TxContext` for the call only, so reads
+/// nested in it share it — while a write nested in it opens the transaction
+/// ([`open_lazy_tx_to_write`]).
+fn read_on_lazy_reader<R>(
+    lua: &Lua,
+    reader: &dyn DbConnection,
+    work: impl FnOnce(&dyn DbConnection) -> LuaResult<R>,
+) -> LuaResult<R> {
+    // SAFETY: `reader` outlives this call (the lazy transaction borrows it
+    // for the hook's run), and `TxSlot` removes the pointer when the call
+    // ends — including on unwind.
+    lua.set_app_data(TxContext::new(reader));
+    lua.set_app_data(LazyReadScope);
+
+    let _slot = TxSlot(lua);
+    let _read = LazyReadSlot(lua);
+
+    work(reader)
 }
 
 /// Get the active transaction connection from Lua `app_data`.
@@ -151,15 +222,15 @@ pub(crate) fn with_lua_db<R>(
     // that spends its time waiting on I/O and never trips the VM hook.
     check_execution_deadline(lua)?;
 
-    // A hook's lazy transaction opens here, at its first CRUD call.
-    open_lazy_tx(lua)?;
+    // A hook's lazy transaction opens here, at its first write.
+    open_lazy_tx_to_write(lua)?;
 
     // Conn-mode: a shared outer tx is already open. Hand the existing
     // connection to `work` — `get_tx_conn(lua)` inside `work` sees the
-    // same TxContext.
+    // same TxContext — as one atomic step of that transaction.
     if lua.app_data_ref::<TxContext>().is_some() {
         let conn = get_tx_conn(lua)?;
-        return work(conn);
+        return run_step(lua, conn, work);
     }
 
     if lua.app_data_ref::<PoolContext>().is_none() {
@@ -170,6 +241,114 @@ pub(crate) fn with_lua_db<R>(
     // by this single op sees the same `crap.tx` / event / file-cleanup
     // semantics as under `crap.transaction(fn)` or the service envelope.
     run_scoped_tx(lua, "crap.collections", work)
+}
+
+/// How far each of the scope's queues had grown when a step began — what a
+/// failed step truncates them back to.
+struct StepMarks {
+    events: Option<usize>,
+    verifications: Option<usize>,
+    files: Option<usize>,
+    deferred: Option<usize>,
+}
+
+impl StepMarks {
+    fn take(lua: &Lua) -> Self {
+        let infra = lua.app_data_ref::<LuaCrudInfra>();
+        let infra = infra.as_deref();
+
+        Self {
+            events: infra
+                .and_then(|i| i.event_queue.as_ref())
+                .map(|q| q.borrow().len()),
+            verifications: infra
+                .and_then(|i| i.verification_queue.as_ref())
+                .map(|q| q.borrow().len()),
+            files: infra
+                .and_then(|i| i.file_cleanup.as_ref())
+                .map(|q| q.borrow().len()),
+            deferred: infra
+                .and_then(|i| i.deferred.as_ref())
+                .map(|q| q.borrow().len()),
+        }
+    }
+
+    /// The step was rolled back to its savepoint: what it queued goes with
+    /// its writes — its events and verifications announce writes that never
+    /// happened, and its file deletions would remove files a restored row
+    /// still points at. Its `crap.tx.on_commit` effects are dropped for the
+    /// same reason, while its `on_rollback` compensations are kept to run
+    /// whatever the transaction's outcome: the step they compensate was
+    /// undone either way.
+    fn undo(self, lua: &Lua) {
+        let Some(infra) = lua.app_data_ref::<LuaCrudInfra>().map(|r| (*r).clone()) else {
+            return;
+        };
+
+        truncate(infra.event_queue.as_ref(), self.events);
+        truncate(infra.verification_queue.as_ref(), self.verifications);
+        truncate(infra.file_cleanup.as_ref(), self.files);
+
+        let (Some(queue), Some(mark)) = (infra.deferred.as_ref(), self.deferred) else {
+            return;
+        };
+
+        let mut queue = queue.borrow_mut();
+        let start = mark.min(queue.len());
+        let registered = queue.split_off(start);
+
+        queue.extend(
+            registered
+                .into_iter()
+                .filter(|e| e.outcome == EffectOutcome::Rollback)
+                .map(|e| DeferredEffect {
+                    unconditional: true,
+                    ..e
+                }),
+        );
+    }
+}
+
+/// Shorten `queue` back to `mark` entries.
+fn truncate<T>(queue: Option<&Rc<RefCell<Vec<T>>>>, mark: Option<usize>) {
+    if let (Some(queue), Some(mark)) = (queue, mark) {
+        queue.borrow_mut().truncate(mark);
+    }
+}
+
+/// Run one CRUD call (or a nested `crap.transaction` block) on the shared
+/// transaction's connection as one atomic step of it (see
+/// [`with_savepoint`]).
+///
+/// A step that fails — and a hook can catch the failure with `pcall` and
+/// carry on — leaves none of its writes behind and none of what it queued
+/// (see [`StepMarks::undo`]), while the enclosing transaction stays usable
+/// and commits what the rest of the hook did. On Postgres a failed statement
+/// otherwise aborts the whole transaction: its `COMMIT` would roll back every
+/// write of the operation, the main document write included.
+///
+/// # Errors
+///
+/// Returns `work`'s error, or a Lua runtime error when the savepoint itself
+/// fails.
+pub(crate) fn run_step<R>(
+    lua: &Lua,
+    conn: &dyn DbConnection,
+    work: impl FnOnce(&dyn DbConnection) -> LuaResult<R>,
+) -> LuaResult<R> {
+    // Outside a transaction every statement commits on its own: there is no
+    // step to roll back, and nothing queued is undone.
+    let marks = conn.in_transaction().then(|| StepMarks::take(lua));
+
+    let result = with_savepoint(conn, || work(conn))
+        .map_err(|e| RuntimeError(format!("{e:#}")))
+        .and_then(|r| r);
+
+    if let (Err(_), Some(marks)) = (&result, marks) {
+        marks.undo(lua);
+    }
+
+    result
 }
 
 /// Refuse CRUD from inside an `after_read` hook.
@@ -269,11 +448,16 @@ pub(crate) fn with_lua_db_read<R>(
 ) -> LuaResult<R> {
     refuse_in_after_read(lua)?;
     check_execution_deadline(lua)?;
+
+    if let Some(reader) = lazy_reader(lua) {
+        return read_on_lazy_reader(lua, reader, work);
+    }
+
     open_lazy_tx(lua)?;
 
     if lua.app_data_ref::<TxContext>().is_some() {
         let conn = get_tx_conn(lua)?;
-        return work(conn);
+        return run_step(lua, conn, work);
     }
 
     let ctx = lua

@@ -134,12 +134,14 @@ impl SchemaAdmin {
     }
 }
 
-/// `Join` field configuration (`{ collection, on }`). `None` for every
+/// `Join` field configuration (`{ collection, on, limit? }`). `None` for every
 /// non-`Join` field; always populated for `Join` fields.
 #[derive(Serialize)]
 struct SchemaJoin {
     collection: String,
     on: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit: Option<u32>,
 }
 
 /// One field in a `SchemaCollection`. The same shape covers all field
@@ -206,9 +208,9 @@ pub(crate) struct SchemaField {
     admin: SchemaAdmin,
     /// `Join` field config. Absent for every non-`Join` field; for
     /// `Join` fields, mirrors the user's `crap.FieldDefinition.join`
-    /// value (`{ collection, on }`).
+    /// value (`{ collection, on, limit? }`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[lua(ty = "{ collection: string, on: string }", optional)]
+    #[lua(ty = "{ collection: string, on: string, limit?: integer }", optional)]
     join: Option<SchemaJoin>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[lua(ty = "{ label: string, value: string }[]", optional)]
@@ -330,6 +332,7 @@ fn build_field(f: &FieldDefinition) -> SchemaField {
         join: f.join.as_ref().map(|j| SchemaJoin {
             collection: AsRef::<str>::as_ref(&j.collection).to_owned(),
             on: j.on.clone(),
+            limit: j.limit,
         }),
         options: f
             .options

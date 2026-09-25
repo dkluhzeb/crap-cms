@@ -2,6 +2,7 @@
 
 mod batch;
 mod helpers;
+mod join;
 mod single;
 mod singleflight;
 mod types;
@@ -17,7 +18,7 @@ pub(crate) use crate::db::query::poly_ref::parse as parse_poly_ref;
 pub(crate) use batch::populate_relationships_batch_cached;
 pub(crate) use helpers::document_to_json;
 pub(crate) use single::populate_relationships_cached;
-pub(crate) use types::{PopulateCtx, locale_cache_key, populate_cache_key};
+pub(crate) use types::{PopulateCtx, Visited, locale_cache_key, populate_cache_key};
 
 /// The value a populate singleflight slot holds: a fetched raw doc (or a genuine
 /// not-found `None`), or a shared backend error. Storing the `Result` — with the
@@ -35,13 +36,24 @@ pub type SharedPopulateSingleflight = std::sync::Arc<singleflight::Singleflight<
 /// Shared test helpers for populate tests — DB setup and collection definitions.
 #[cfg(all(test, feature = "sqlite"))]
 pub(crate) mod test_helpers {
-    use crate::core::{Registry, Slug, collection::*, field::*};
+    use crate::core::{Registry, collection::*, field::*};
     use crate::db::{DbConnection, InMemoryConn};
 
     // Re-export shared helpers so callers keep `use test_helpers::*`
     pub(crate) use crate::db::query::test_helpers::{
         make_field, make_group_field, make_tabs_field,
     };
+
+    /// DDL for `slug`'s version table — every drafts-enabled collection has
+    /// one, and a draft read looks up pending drafts in it.
+    pub(crate) fn versions_table_sql(slug: &str) -> String {
+        format!(
+            "CREATE TABLE \"_versions_{slug}\" (
+                id TEXT PRIMARY KEY, _parent TEXT, _version INTEGER, _status TEXT,
+                _latest INTEGER, snapshot TEXT, created_at TEXT
+            );"
+        )
+    }
 
     pub(crate) fn make_collection_def(
         slug: &str,
@@ -126,10 +138,7 @@ pub(crate) mod test_helpers {
 
     pub(crate) fn make_authors_def_with_join() -> CollectionDefinition {
         let mut join_field = make_field("posts", FieldType::Join);
-        join_field.join = Some(JoinConfig {
-            collection: Slug::new("posts"),
-            on: "author".to_string(),
-        });
+        join_field.join = Some(JoinConfig::new("posts", "author"));
         make_collection_def(
             "authors",
             vec![make_field("name", FieldType::Text), join_field],
@@ -140,10 +149,7 @@ pub(crate) mod test_helpers {
     /// to exercise nested-container join population.
     pub(crate) fn make_authors_def_with_nested_join() -> CollectionDefinition {
         let mut join_field = make_field("posts", FieldType::Join);
-        join_field.join = Some(JoinConfig {
-            collection: Slug::new("posts"),
-            on: "author".to_string(),
-        });
+        join_field.join = Some(JoinConfig::new("posts", "author"));
         let mut group = make_field("section", FieldType::Group);
         group.fields = vec![join_field];
         make_collection_def("authors", vec![make_field("name", FieldType::Text), group])

@@ -149,7 +149,7 @@ pub async fn reset_password_action(
     headers: HeaderMap,
     Form(form): Form<ResetPasswordForm>,
 ) -> Response {
-    let ip = client_ip(&headers, &addr, &state.config.server);
+    let client = client_ip(&headers, &addr, &state.config.server);
 
     // Local-only validation runs FIRST, before the rate-limit gate: a
     // mismatched confirmation or a policy violation is a legitimate user typo,
@@ -175,7 +175,7 @@ pub async fn reset_password_action(
     let ip_reset_limiter = state
         .ip_forgot_password_limiter
         .rescoped(IP_RESET_PASSWORD_KEYSPACE);
-    if ip_reset_limiter.check_and_block(&ip) {
+    if ip_reset_limiter.check_and_block_ip(&client) {
         return render_reset_error(&state, Some(&form.token), "error_reset_link_invalid");
     }
 

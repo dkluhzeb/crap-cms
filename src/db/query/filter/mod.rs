@@ -4,6 +4,7 @@ mod day;
 mod decode;
 mod elements;
 mod error;
+mod limits;
 #[cfg(test)]
 pub(crate) mod localized_rows_fixture;
 pub mod memory;
@@ -17,6 +18,7 @@ mod where_clause;
 
 pub use decode::{decode_where_json_str, decode_where_map};
 pub(crate) use error::invalid_query;
+pub use limits::check_filter_limits;
 #[cfg(all(test, feature = "postgres"))]
 pub(crate) use operators::build_op_condition;
 pub(crate) use resolve::{lookup_column_field, lookup_column_field_type};

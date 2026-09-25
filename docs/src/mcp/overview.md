@@ -89,6 +89,15 @@ An `api_key` is **required** when HTTP transport is enabled, and must be at leas
 header; a missing or wrong key is answered with a JSON-RPC error (code `-32600`,
 "Invalid or missing API key") over HTTP `200`, not an HTTP `401`.
 
+Failed keys are rate-limited per client address (an IPv6 client per /64,
+resolved through `[server] trust_proxy`): after `[auth] max_ip_login_attempts`
+failures (default 20) within `[auth] login_lockout_seconds` (default 5 minutes),
+that address is answered HTTP `429` — even with the right key — until the window
+passes. A request with the right key clears its address's failures. The budget
+has the per-IP login budget's size but its own keyspace, so MCP failures and
+admin logins never drain each other; with `[auth] rate_limit_backend = "redis"`
+it is shared across nodes.
+
 Request bodies are capped at `[mcp] http_max_body_bytes` (default **1 MiB**;
 larger bodies get a JSON-RPC parse error); the stdio transport caps a request
 line at the same value. Raise it when clients push large
@@ -209,7 +218,7 @@ covers reads as well as writes:
 | `page` | `find_*` | Page number, 1-indexed (page mode only). |
 | `after_cursor` | `find_*` | Forward cursor (cursor mode only; mutually exclusive with `page` and `before_cursor`). |
 | `before_cursor` | `find_*` | Backward cursor (cursor mode only; mutually exclusive with `page` and `after_cursor`). |
-| `depth` | `find_*`, `find_by_id_*` | How deep to populate relationships. |
+| `depth` | `find_*`, `find_by_id_*`, `global_read_*` | How deep to populate relationships. |
 | `search` | `find_*`, `count_*` | Full-text search query. |
 | `locale` | `find_*`, `find_by_id_*`, `count_*`, `create_*`, `update_*`, `validate_*`, `create_many_*`, `update_many_*`, `list_versions_*`, `global_read_*`, `global_update_*`, `global_validate_*` | Locale code for localized fields — selects the locale on reads, targets it on writes. |
 | `draft` | `find_*`, `find_by_id_*`, `count_*`, `create_*`, `update_*`, `validate_*`, `create_many_*`, `update_many_*`, `global_read_*`, `global_update_*`, `global_validate_*` | On writes: save as a draft version. On reads: include the draft overlay. |

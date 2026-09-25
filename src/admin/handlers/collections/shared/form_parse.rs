@@ -8,7 +8,10 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState,
-        handlers::{forms::FormParseError, shared::error_toast},
+        handlers::{
+            forms::FormParseError,
+            shared::{error_toast, ui_locale_of},
+        },
     },
     core::{AuthUser, CollectionDefinition, upload::format_filesize},
 };
@@ -33,7 +36,7 @@ pub(in crate::admin::handlers::collections) fn form_parse_error_response(
 ) -> Response {
     error!("Form parse failed for '{}': {err}", def.slug);
 
-    let locale = auth_user.map_or("en", |Extension(au)| au.ui_locale.as_str());
+    let locale = ui_locale_of(auth_user);
 
     if !err.is_too_large() {
         let message = state.translations.get(locale, UNREADABLE_KEY);

@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tonic::Request;
+use tonic::{Code, Request};
 
 use crap_cms::api::content;
 use crap_cms::api::content::content_api_server::ContentApi;
@@ -773,4 +773,68 @@ async fn create_with_dangling_reference_fails() {
         0,
         "no post should exist after the failed create — tx must have rolled back"
     );
+}
+
+// ── Regression: a refused reference is a field error ─────────────────────
+
+/// Regression: a write referencing a missing document failed with a message
+/// naming no field, and one referencing a TRASHED document was accepted —
+/// every read then hid the target while the reference pinned it in the
+/// trash. Both are refused alike, as a validation error on the field holding
+/// the reference, so every surface reports it on that input.
+#[tokio::test]
+async fn a_reference_to_an_unavailable_document_is_a_field_error() {
+    let mut defs = make_posts_and_tags();
+    defs[0].soft_delete = true;
+    let setup = setup(defs);
+
+    let tag_id = setup
+        .service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "tags".into(),
+            data: Some(make_struct(&[("name", "Trashed")])),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap()
+        .id;
+
+    setup
+        .service
+        .delete(Request::new(content::DeleteRequest {
+            events: None,
+            collection: "tags".to_string(),
+            id: tag_id.clone(),
+            force_hard_delete: false,
+        }))
+        .await
+        .expect("move the tag to the trash");
+
+    for target in [tag_id.as_str(), "ghost"] {
+        let status = setup
+            .service
+            .create(Request::new(content::CreateRequest {
+                events: None,
+                collection: "posts".into(),
+                data: Some(make_struct(&[("title", "Post"), ("tag", target)])),
+                ..Default::default()
+            }))
+            .await
+            .expect_err("the reference is refused");
+
+        assert_eq!(status.code(), Code::InvalidArgument, "{target}");
+        assert!(
+            status
+                .message()
+                .contains("tag: tag references a document that does not exist"),
+            "{target}: {}",
+            status.message()
+        );
+    }
+
+    assert_eq!(get_ref_count(&setup, "tags", &tag_id), 0);
 }

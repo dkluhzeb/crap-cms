@@ -20,6 +20,27 @@ pub(crate) const STATIC: &str = "static";
 pub(crate) const MIGRATIONS: &str = "migrations";
 pub(crate) const TYPES: &str = "types";
 pub(crate) const LUA: &str = "lua";
+pub(crate) const TRANSLATIONS: &str = "translations";
+
+/// The top-level subdirectories that hold what the server runs or renders —
+/// Lua code, templates, static assets, translations, generated types. Lua
+/// `io` never writes under them, so no `[hooks] io_roots` entry may overlap
+/// one (see `hooks::io_jail`).
+pub(crate) const CODE_DIRS: &[&str] = &[
+    COLLECTIONS,
+    GLOBALS,
+    HOOKS,
+    ACCESS,
+    JOBS,
+    ROUTES,
+    PLUGINS,
+    TEMPLATES,
+    STATIC,
+    MIGRATIONS,
+    TYPES,
+    LUA,
+    TRANSLATIONS,
+];
 
 // == Nested subdirectory names ==========================================
 

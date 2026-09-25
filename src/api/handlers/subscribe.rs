@@ -4,10 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
     future::Future,
     pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
@@ -18,65 +15,36 @@ use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
 use tracing::{error, warn};
 
-use crate::admin::handlers::shared::response::on_blocking_section;
-use crate::config::LocaleConfig;
 use crate::{
+    admin::handlers::shared::response::on_blocking_section,
     api::{
         content,
         handlers::{
             ContentService, content_service::pool_error_status, enum_mapping,
             proto::json_to_field_value,
         },
+        request_client_ip,
     },
     core::{
-        Document, EventReceiver, MutationEvent, Registry, SharedTokenProvider,
+        ClientIp, Document, EventReceiver, LiveSlot, LiveSlots, MutationEvent, Registry,
+        SlotRefusal,
         event::{InvalidationReceiver, MAX_DRAIN, RecvError, drain_and_coalesce},
     },
-    db::DbPool,
     hooks::HookRunner,
-    service::{EventAccessInput, EventAccessMap, EventDelivery, EventGate, delivered_operations},
+    service::{
+        AppInfra, EventAccessInput, EventAccessMap, EventDelivery, EventGate, delivered_operations,
+    },
 };
 
 /// Outbound channel capacity per subscriber. Small — we rely on `send_timeout`
 /// + drop-on-backpressure rather than queuing.
 const SUBSCRIBER_CHANNEL_CAPACITY: usize = 16;
 
-/// Atomically try to acquire a Subscribe connection slot.
-///
-/// Returns `true` if a slot was acquired (counter incremented), `false` if the
-/// limit has been reached. When `max == 0`, no limit is enforced (always succeeds).
-fn try_acquire_subscribe_slot(counter: &AtomicUsize, max: usize) -> bool {
-    loop {
-        let current = counter.load(Ordering::Relaxed);
-
-        if max > 0 && current >= max {
-            return false;
-        }
-
-        if counter
-            .compare_exchange_weak(current, current + 1, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-        {
-            return true;
-        }
-    }
-}
-
-/// RAII guard that decrements the Subscribe connection counter on drop.
-struct SubscribeConnectionGuard {
-    counter: Arc<AtomicUsize>,
-}
-
-impl Drop for SubscribeConnectionGuard {
-    fn drop(&mut self) {
-        self.counter.fetch_sub(1, Ordering::Relaxed);
-    }
-}
-
-/// Stream wrapper that holds a connection guard, releasing it when the stream ends.
+/// Stream wrapper that holds the stream's live-update slot, releasing it when
+/// the stream ends.
 struct GuardedStream<S> {
     inner: Pin<Box<S>>,
-    _guard: SubscribeConnectionGuard,
+    _slot: LiveSlot,
 }
 
 impl<S: Stream + Unpin> Stream for GuardedStream<S> {
@@ -392,20 +360,7 @@ impl ContentService {
         Response<Pin<Box<dyn Stream<Item = Result<content::MutationEvent, Status>> + Send>>>,
         Status,
     > {
-        let max = self.max_subscribe_connections;
-
-        if !try_acquire_subscribe_slot(&self.subscribe_connections, max) {
-            warn!(
-                "Subscribe connection limit reached ({}/{}), rejecting",
-                max, max
-            );
-            return Err(Status::resource_exhausted("Too many Subscribe streams"));
-        }
-
-        let subscribe_guard = SubscribeConnectionGuard {
-            counter: self.subscribe_connections.clone(),
-        };
-
+        let client = request_client_ip(&request, &self.server_config);
         let metadata = request.metadata().clone();
         let req = request.into_inner();
 
@@ -438,6 +393,10 @@ impl ContentService {
 
         let my_user_id = access.user_doc.as_ref().map(|d| d.id.to_string());
 
+        // The slot is keyed by the resolved principal — the user, or the
+        // anonymous caller's address — so no one client can hold every slot.
+        let slot = self.acquire_subscribe_slot(my_user_id.as_deref(), &client)?;
+
         let event_rx = event_transport.subscribe();
         let invalidation_rx = self.infra.invalidation_transport.subscribe();
         let send_timeout_dur = Duration::from_millis(self.subscriber_send_timeout_ms);
@@ -465,13 +424,35 @@ impl ContentService {
 
         let guarded = GuardedStream {
             inner: Box::pin(stream),
-            _guard: subscribe_guard,
+            _slot: slot,
         };
 
         Ok(Response::new(Box::pin(guarded)
             as Pin<
                 Box<dyn Stream<Item = Result<content::MutationEvent, Status>> + Send>,
             >))
+    }
+
+    /// Take a `Subscribe` slot for the client keyed by `user_id` (or, when
+    /// anonymous, by its address), refusing with `RESOURCE_EXHAUSTED` when
+    /// every slot, or this client's share, is taken.
+    fn acquire_subscribe_slot(
+        &self,
+        user_id: Option<&str>,
+        client: &ClientIp,
+    ) -> Result<LiveSlot, Status> {
+        let key = LiveSlots::client_key(user_id, client);
+
+        self.subscribe_slots.try_acquire(&key).map_err(|refusal| {
+            warn!(?refusal, "Subscribe stream refused");
+
+            match refusal {
+                SlotRefusal::AllTaken => Status::resource_exhausted("Too many Subscribe streams"),
+                SlotRefusal::ClientLimit => {
+                    Status::resource_exhausted("Too many Subscribe streams for this client")
+                }
+            }
+        })
     }
 
     /// Resolve which collections and globals the caller has read access to,
@@ -484,15 +465,11 @@ impl ContentService {
         globals_req: Vec<String>,
     ) -> Result<SubscribeAccess, Status> {
         let input = ResolveSubscribeAccessBlockingInput {
-            pool: self.infra.pool.clone(),
-            token_provider: self.infra.token_provider.clone(),
-            registry: Arc::clone(&self.infra.registry),
-            hook_runner: self.infra.hook_runner.clone(),
+            infra: Arc::clone(&self.infra),
             token,
             headers,
             collections_req,
             globals_req,
-            locale_config: self.infra.locale_config.clone(),
         };
 
         task::spawn_blocking(move || resolve_subscribe_access_blocking(input))
@@ -504,15 +481,11 @@ impl ContentService {
 
 /// Owned bundle for the `resolve_subscribe_access` spawn-blocking body.
 struct ResolveSubscribeAccessBlockingInput {
-    pool: DbPool,
-    token_provider: SharedTokenProvider,
-    registry: Arc<Registry>,
-    hook_runner: HookRunner,
+    infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
     token: Option<String>,
     collections_req: Vec<String>,
     globals_req: Vec<String>,
-    locale_config: LocaleConfig,
 }
 
 /// Walk every requested collection + global, run their per-view `access` hooks
@@ -521,8 +494,9 @@ struct ResolveSubscribeAccessBlockingInput {
 fn resolve_subscribe_access_blocking(
     input: ResolveSubscribeAccessBlockingInput,
 ) -> Result<SubscribeAccess, Status> {
-    let kind = input.pool.kind();
+    let kind = input.infra.pool.kind();
     let mut conn = input
+        .infra
         .pool
         .get()
         .inspect_err(|e| error!("Subscribe pool error: {}", e))
@@ -531,11 +505,8 @@ fn resolve_subscribe_access_blocking(
     let auth_user = ContentService::resolve_auth_user(
         input.token.as_deref(),
         &input.headers,
-        &*input.token_provider,
-        &input.hook_runner,
-        &input.registry,
+        &input.infra,
         &conn,
-        &input.locale_config,
     )?;
     let user_doc = auth_user.as_ref().map(|u| &u.user_doc);
 
@@ -547,6 +518,7 @@ fn resolve_subscribe_access_blocking(
     // Empty request = subscribe to every collection/global the user can see.
     let target_collections: Vec<String> = if input.collections_req.is_empty() {
         input
+            .infra
             .registry
             .collections
             .keys()
@@ -558,6 +530,7 @@ fn resolve_subscribe_access_blocking(
 
     let target_globals: Vec<String> = if input.globals_req.is_empty() {
         input
+            .infra
             .registry
             .globals
             .keys()
@@ -568,11 +541,11 @@ fn resolve_subscribe_access_blocking(
     };
 
     let maps = EventAccessMap::resolve(&EventAccessInput {
-        registry: &input.registry,
+        registry: &input.infra.registry,
         collection_slugs: &target_collections,
         global_slugs: &target_globals,
         user_doc,
-        hook_runner: &input.hook_runner,
+        hook_runner: &input.infra.hook_runner,
         conn: &tx,
     });
 
@@ -646,37 +619,6 @@ mod tests {
 
         let err = requested_operations(vec!["creat".into()]).unwrap_err();
         assert!(err.contains("unknown operation 'creat'"), "{err}");
-    }
-
-    #[test]
-    fn subscribe_slot_acquire_within_limit() {
-        let counter = AtomicUsize::new(0);
-        assert!(try_acquire_subscribe_slot(&counter, 10));
-        assert_eq!(counter.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn subscribe_slot_acquire_at_limit() {
-        let counter = AtomicUsize::new(5);
-        assert!(!try_acquire_subscribe_slot(&counter, 5));
-        assert_eq!(counter.load(Ordering::Relaxed), 5);
-    }
-
-    #[test]
-    fn subscribe_slot_acquire_no_limit() {
-        let counter = AtomicUsize::new(1000);
-        assert!(try_acquire_subscribe_slot(&counter, 0));
-        assert_eq!(counter.load(Ordering::Relaxed), 1001);
-    }
-
-    #[test]
-    fn subscribe_slot_fills_to_limit() {
-        let counter = AtomicUsize::new(0);
-        for _ in 0..3 {
-            assert!(try_acquire_subscribe_slot(&counter, 3));
-        }
-        assert!(!try_acquire_subscribe_slot(&counter, 3));
-        assert_eq!(counter.load(Ordering::Relaxed), 3);
     }
 
     /// A lagged invalidation bus means this subscriber may have missed its own

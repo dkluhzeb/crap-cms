@@ -28,7 +28,7 @@ use std::{fs, path::Path};
 use crap_cms::core::email::validate_no_crlf;
 use tempfile::tempdir;
 
-use crate::common::production_code;
+use crate::common::{is_test_module_file, production_code};
 
 /// (sink, anchor file, the escaping call that must be live there)
 const SINK_INVENTORY: &[(&str, &str, &str)] = &[
@@ -111,18 +111,21 @@ const MIN_SINK_ROWS: usize = 14;
 
 /// True when `needle` is live in `file`.
 ///
-/// Rust anchors are scanned as production code only (test modules and
-/// comments removed), so a needle can only be satisfied by code that runs.
+/// Rust anchors are scanned as production code only (test modules — inline
+/// or in a file of their own — and comments removed), so a needle can only be
+/// satisfied by code that runs.
 /// The admin JS anchor is scanned as written — the scrubber's rules are
 /// Rust's — so its needle carries enough context (`el.textContent =
 /// String(v)`) to be code and not prose.
 fn row_is_live(root: &Path, file: &str, needle: &str) -> bool {
-    let Ok(src) = fs::read_to_string(root.join(file)) else {
+    let path = root.join(file);
+
+    let Ok(src) = fs::read_to_string(&path) else {
         return false;
     };
 
     if Path::new(file).extension().is_some_and(|ext| ext == "rs") {
-        return production_code(&src).contains(needle);
+        return !is_test_module_file(&path) && production_code(&src).contains(needle);
     }
 
     src.contains(needle)

@@ -45,7 +45,7 @@ node slugs. Invalid slugs are rejected at load time.
 | `use_as_title` | string | `nil` | Field name to display as the row label in admin lists |
 | `default_sort` | string | `nil` | Default sort field. Prefix with `-` for descending (e.g., `"-created_at"`). Must name a sortable column of the collection and not a `hidden` field — checked at startup. For a viewer who may not read the field, the list falls back to the built-in order. |
 | `hidden` | boolean | `false` | Hide this collection from the admin sidebar |
-| `list_searchable_fields` | string[] | `{}` | Fields to search when using the admin list search bar |
+| `list_searchable_fields` | string[] | `{}` | Fields the full-text `search` matches (admin list search bar and every API surface). Each entry must be a text, textarea, richtext, email, code, select or radio field on the document row (a group sub-field as `group__field`) that is not `hidden`; anything else fails the load. Empty = every text-like field. See [Full-Text Search](../query-and-filters/overview.md#full-text-search). |
 | `list_columns` | string[] | `{}` | Default columns shown in the admin list view, in order. Entries are field names or the meta columns `created_at` / `updated_at` / `_status`. Empty = built-in default (`_status` if the collection has drafts, plus `created_at`). A per-user column selection overrides it. |
 
 ## `hooks`

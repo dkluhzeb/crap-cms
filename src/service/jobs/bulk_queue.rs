@@ -31,6 +31,7 @@ use crate::{
     service::{
         AppInfra, FieldReadStrip, RunnerReadHooks, ServiceContext, ServiceError,
         collections::{delete_scope, reject_unreadable_bulk_filters},
+        validate_user_filters,
     },
 };
 
@@ -273,8 +274,10 @@ pub fn check_queue_access(
 }
 
 /// The filters a queued `update_many` / `delete_many` matches its documents
-/// by, decoded through the chokepoint execution decodes them with and
-/// normalized as the operation normalizes them. Empty without a `where`.
+/// by, decoded through the chokepoint execution decodes them with, and
+/// normalized and validated (system columns, `[query]` size limits) as the
+/// operation does — so a run execution would refuse is refused when queued.
+/// Empty without a `where`.
 fn queued_filters(
     def: &CollectionDefinition,
     data: &BulkJobData,
@@ -286,6 +289,7 @@ fn queued_filters(
     let mut filters = decode_where_json_str(json)
         .map_err(|e| ServiceError::HookError(format!("invalid where clause: {e}")))?;
     normalize_filter_fields(&mut filters, &def.fields);
+    validate_user_filters(&filters)?;
 
     Ok(filters)
 }
@@ -413,7 +417,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::{CrapConfig, DatabaseConfig},
+        config::{CrapConfig, DatabaseConfig, query_limits},
         core::{FieldAccess, FieldDefinition, FieldType, HookRef, collection::Auth},
         db::{migrate, pool},
         hooks::lifecycle::access::strip_read_access_data_aware,
@@ -547,6 +551,31 @@ mod tests {
 
         let hard = gate_definition(&def, &delete_job(true));
         assert_eq!(delete_scope(&hard).operation, "delete");
+    }
+
+    /// A queued `where` is validated as the operation validates it, so a run
+    /// execution would refuse — a system column, a clause over the `[query]`
+    /// limits — is refused when queued instead of failing later in the job.
+    #[test]
+    fn queued_filters_are_validated_at_queue_time() {
+        let def = CollectionDefinition::new("posts");
+        let with_where = |json: String| BulkJobData {
+            where_clause: Some(json),
+            ..delete_job(false)
+        };
+
+        let ok = queued_filters(&def, &with_where(r#"{"title":"x"}"#.to_string()));
+        assert_eq!(ok.expect("valid").len(), 1);
+
+        let system = queued_filters(&def, &with_where(r#"{"_status":"x"}"#.to_string()));
+        assert!(system.is_err());
+
+        let terms = query_limits().max_filter_terms.get() + 1;
+        let groups: Vec<Value> = (0..terms)
+            .map(|i| json!({ "title": i.to_string() }))
+            .collect();
+        let wide = queued_filters(&def, &with_where(json!({ "or": groups }).to_string()));
+        assert!(matches!(wide, Err(ServiceError::Validation(_))));
     }
 
     #[test]

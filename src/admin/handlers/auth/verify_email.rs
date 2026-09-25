@@ -68,7 +68,7 @@ pub async fn verify_email(
     headers: HeaderMap,
     Query(query): Query<VerifyEmailQuery>,
 ) -> impl IntoResponse {
-    let ip = client_ip(&headers, &addr, &state.config.server);
+    let client = client_ip(&headers, &addr, &state.config.server);
 
     // Rate limit by IP to prevent brute-forcing verification tokens. Atomically
     // record this attempt and bail if it puts the IP over the threshold — one
@@ -83,7 +83,7 @@ pub async fn verify_email(
     let ip_verify_limiter = state
         .ip_forgot_password_limiter
         .rescoped(IP_VERIFY_EMAIL_KEYSPACE);
-    if ip_verify_limiter.check_and_block(&ip) {
+    if ip_verify_limiter.check_and_block_ip(&client) {
         return Redirect::to(paths::LOGIN);
     }
 

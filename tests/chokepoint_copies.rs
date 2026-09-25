@@ -21,7 +21,8 @@
 //! `common::production_code` — every `#[cfg(…test…)]`-gated item is blanked
 //! (only that item: a gated helper in the middle of a file hides nothing after
 //! it), comments are removed, line numbers are kept — and by skipping
-//! test-only files (`tests.rs`, `*_tests.rs`, `test_*.rs`, `*_test.rs`). Treat
+//! out-of-line test modules (`common::is_test_module_file`: a file its parent
+//! declares with a test-gated `mod name;`, or nested inside one). Treat
 //! these as a high-signal tripwire for the obvious regression, not a proof of
 //! total coverage.
 
@@ -34,7 +35,7 @@ use regex::Regex;
 
 mod common;
 
-use common::production_code;
+use common::{is_test_module_file, production_code};
 
 // ── the inventory ────────────────────────────────────────────────────────────
 
@@ -465,7 +466,8 @@ impl Chokepoint {
     }
 }
 
-/// Collect every `.rs` file under `dir` that is not test-only, recursively.
+/// Collect every `.rs` file under `dir` that is not an out-of-line test
+/// module, recursively.
 fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -476,27 +478,10 @@ fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
         if path.is_dir() {
             rs_files(&path, out);
-        } else if path.extension().is_some_and(|ext| ext == "rs") && !is_test_only_file(&path) {
+        } else if path.extension().is_some_and(|ext| ext == "rs") && !is_test_module_file(&path) {
             out.push(path);
         }
     }
-}
-
-/// True for a file that exists only for tests — a `#[cfg(test)] mod` in its own
-/// file carries no gate of its own to truncate at.
-fn is_test_only_file(path: &Path) -> bool {
-    if path.components().any(|c| c.as_os_str() == "tests") {
-        return true;
-    }
-
-    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-        return false;
-    };
-
-    stem == "tests"
-        || stem.starts_with("test_")
-        || stem.ends_with("_test")
-        || stem.ends_with("_tests")
 }
 
 /// `path` relative to the crate root, in forward-slash form.

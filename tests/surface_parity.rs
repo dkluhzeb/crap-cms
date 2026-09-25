@@ -39,7 +39,7 @@ use std::{
 
 mod common;
 
-use common::production_code;
+use common::{is_test_module_file, production_code};
 
 /// Surface roots whose handlers must delegate document CRUD to the service
 /// layer, each paired with the minimum number of `.rs` files the scan must find
@@ -111,14 +111,21 @@ const FORBIDDEN_CALLS: &[&str] = &[
 const ALLOWLIST: &[(&str, &str)] = &[
     // ── Field-context enrichment (relationship/join/upload display labels) ──
     // The enrichment label reads are ACCESS-GATED here: `gated_find_by_id` /
-    // `gated_find` AND the target collection's published∪draft view filter
-    // (`resolve_view_scope`, downgraded to the viewer's access) into the query
-    // before reading — so a viewer never sees the label, id, or count of a
-    // target they cannot read. This is a deliberate lightweight gated read
+    // `gated_find` / `gated_count` AND the target collection's published∪draft
+    // view filter (`resolve_view_scope`, downgraded to the viewer's access) into
+    // the query before reading — so a viewer never sees the label, id, or count
+    // of a target they cannot read. This is a deliberate lightweight gated read
     // (labels only), kept out of the populating `service::find_documents` path.
+    // The count shares `gated_find`'s exact filter list, so the "N more" total
+    // always counts the rows the list reads — a service count resolving its own
+    // scope could disagree with it.
     (
         "admin/handlers/field_context/enrich/gated.rs",
         "query::find(",
+    ),
+    (
+        "admin/handlers/field_context/enrich/gated.rs",
+        "query::count(",
     ),
     // The `me` endpoint reads the authenticated user's own record.
     ("api/handlers/auth/me.rs", "query::find_by_id("),
@@ -130,7 +137,8 @@ fn is_allowlisted(rel_path: &str, call: &str) -> bool {
         .any(|(suffix, allowed_call)| rel_path.ends_with(suffix) && *allowed_call == call)
 }
 
-/// Collect `.rs` files under `dir`, recursively.
+/// Collect production `.rs` files under `dir`, recursively — an out-of-line
+/// test module is test code, not a surface.
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -139,7 +147,7 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
         let path = entry.path();
         if path.is_dir() {
             rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
+        } else if path.extension().is_some_and(|e| e == "rs") && !is_test_module_file(&path) {
             out.push(path);
         }
     }

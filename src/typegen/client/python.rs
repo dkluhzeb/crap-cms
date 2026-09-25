@@ -259,6 +259,27 @@ mod tests {
         def
     }
 
+    /// Regression: a slug `PascalCase`ing onto a keyword (`class None:`, a
+    /// syntax error) or a `typing` import (`class Optional:`, shadowing every
+    /// later annotation) and a field named like an annotation builtin
+    /// (`str`) broke the module. They are renamed, wire names kept.
+    #[test]
+    fn python_never_shadows_keywords_or_annotation_names() {
+        let mut registry = Registry::new();
+        registry.register_collection(make_col("none", vec![text_field("str", false)]));
+        registry.register_collection(make_col("optional", vec![text_field("name", false)]));
+
+        let out = render(&registry);
+
+        assert!(out.contains("class None_:"), "{out}");
+        assert!(out.contains("class Optional_:"), "{out}");
+        assert!(
+            out.contains("str_: Optional[str] = None  # wire: str"),
+            "{out}"
+        );
+        assert!(!out.contains("class None:"), "{out}");
+    }
+
     /// Identifier safety: a digit-leading slug/field, a keyword field, and a
     /// required list field must all produce valid Python — every attribute of
     /// a read class defaults to `None`.

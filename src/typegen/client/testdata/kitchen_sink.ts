@@ -3,12 +3,23 @@
 /** A localized field read with `locale = "all"`: one value per locale code, `null` where a locale has none. */
 export type Localized<T> = { [locale: string]: T | null };
 
-/** Input data for creating a N2fa; an update accepts any subset (`Partial<N2faData>`) */
+/** An update (or draft save) payload for a `…Data` input `T`: any subset of its keys and of each group's sub-fields; a key not sent keeps its stored value. An array or blocks row is sent whole. */
+export type Update<T> = {
+  [K in keyof T]?: T[K] extends infer V
+    ? V extends readonly unknown[]
+      ? V
+      : V extends object
+        ? Update<V>
+        : V
+    : never;
+};
+
+/** Input data for creating a N2fa; an update accepts any subset (`Update<N2faData>`). `null` clears an optional field */
 export interface N2faData {
   type: string;
-  "2fa"?: string;
-  end?: string;
-  private?: string;
+  "2fa"?: string | null;
+  end?: string | null;
+  private?: string | null;
 }
 
 /** N2fa document returned from the API */
@@ -43,11 +54,11 @@ export interface MediaSizesThumbnailFormatsWebp {
   url?: string | null;
 }
 
-/** Input data for creating a Media; an update accepts any subset (`Partial<MediaData>`) */
+/** Input data for creating a Media; an update accepts any subset (`Update<MediaData>`). `null` clears an optional field */
 export interface MediaData {
-  focal_x?: number;
-  focal_y?: number;
-  alt?: string;
+  focal_x?: number | null;
+  focal_y?: number | null;
+  alt?: string | null;
 }
 
 /** Media document returned from the API */
@@ -71,15 +82,15 @@ export interface MediaDocument {
 
 export interface PostsSeoData {
   meta_title: string;
-  meta_desc?: string;
+  meta_desc?: string | null;
 }
 
 export interface PostsItemsData {
   id?: string;
   label: string;
   meta?: PostsItemsMetaData;
-  notes?: PostsItemsNotesData[];
-  secret?: string;
+  notes?: PostsItemsNotesData[] | null;
+  secret?: string | null;
 }
 
 export interface PostsItemsMetaData {
@@ -87,7 +98,7 @@ export interface PostsItemsMetaData {
 }
 
 export interface PostsItemsNotesData {
-  body?: string;
+  body?: string | null;
 }
 
 export interface PostsSeo {
@@ -110,36 +121,36 @@ export interface PostsItemsNotes {
   body?: string | null;
 }
 
-/** Input data for creating a Posts; an update accepts any subset (`Partial<PostsData>`) */
+/** Input data for creating a Posts; an update or a draft save (`draft: true`, required fields not enforced) accepts any subset (`Update<PostsData>`). `null` clears an optional field */
 export interface PostsData {
   title: string;
-  summary?: string;
-  published_at?: string;
-  published_at_tz?: string;
-  snippet?: string;
-  snippet_lang?: string;
-  body?: unknown;
-  teaser?: string;
-  scores?: number[];
-  keywords?: string[];
-  active?: boolean;
-  data?: unknown;
-  internal_note?: string;
+  summary?: string | null;
+  published_at?: string | null;
+  published_at_tz?: string | null;
+  snippet?: string | null;
+  snippet_lang?: string | null;
+  body?: unknown | null;
+  teaser?: string | null;
+  scores?: number[] | null;
+  keywords?: string[] | null;
+  active?: boolean | null;
+  data?: unknown | null;
+  internal_note?: string | null;
   status: "draft" | "published";
-  layout?: "grid" | "list";
-  categories?: ("news" | "guides")[];
+  layout?: "grid" | "list" | null;
+  categories?: ("news" | "guides")[] | null;
   author: string;
-  tags?: string[];
-  cover?: string;
-  related?: string[];
-  featured?: string;
+  tags?: string[] | null;
+  cover?: string | null;
+  related?: string[] | null;
+  featured?: string | null;
   seo?: PostsSeoData;
-  items?: PostsItemsData[];
-  content?: Record<string, unknown>[];
+  items?: PostsItemsData[] | null;
+  content?: Record<string, unknown>[] | null;
   extra?: Record<string, unknown>;
-  raw_rows?: Record<string, unknown>[];
-  byline?: string;
-  aside?: string;
+  raw_rows?: Record<string, unknown>[] | null;
+  byline?: string | null;
+  aside?: string | null;
   tab_note: string;
 }
 
@@ -230,7 +241,7 @@ export interface PostsLocalizedDocument {
   updated_at?: string;
 }
 
-/** Input data for creating a Tags; an update accepts any subset (`Partial<TagsData>`) */
+/** Input data for creating a Tags; an update accepts any subset (`Update<TagsData>`). `null` clears an optional field */
 export interface TagsData {
   name: string;
 }
@@ -245,7 +256,7 @@ export interface TagsDocument {
   updated_at?: string;
 }
 
-/** Input data for creating a Users; an update accepts any subset (`Partial<UsersData>`) */
+/** Input data for creating a Users; an update accepts any subset (`Update<UsersData>`). `null` clears an optional field */
 export interface UsersData {
   email: string;
   name: string;
@@ -276,10 +287,10 @@ export interface SettingsNav {
   url?: string | null;
 }
 
-/** Input data for the Settings global; an update accepts any subset */
+/** Input data for the Settings global; an update or a draft save (`draft: true`, required fields not enforced) accepts any subset (`Update<SettingsData>`). `null` clears an optional field */
 export interface SettingsData {
   site_name: string;
-  nav?: SettingsNavData[];
+  nav?: SettingsNavData[] | null;
 }
 
 /** Settings global document */

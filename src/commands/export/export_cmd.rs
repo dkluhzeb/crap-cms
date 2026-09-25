@@ -21,7 +21,7 @@ use crate::{
         CollectionDefinition, Document, Registry, flatten_group_fields, nest_group_fields,
         write_atomically,
     },
-    db::{DbConnection, LocaleContext, query},
+    db::{DbConnection, LocaleContext, UnboundedStatements, query},
 };
 
 /// One collection an export reads.
@@ -173,6 +173,10 @@ pub fn export(
         registry,
         pool,
     } = open_project(config_dir)?;
+
+    // Reads every row of every collection: maintenance whose statements may
+    // legitimately outlast the statement timeout.
+    let _unbounded = UnboundedStatements::lift();
 
     let conn = pool.get().context("Failed to get database connection")?;
 

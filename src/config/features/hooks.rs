@@ -48,12 +48,14 @@ pub struct HooksConfig {
     /// Accepts integer bytes or human-readable string ("10MB", "1GB").
     #[serde(with = "serde_filesize")]
     pub http_max_response_bytes: u64,
-    /// Directories beyond the config directory that Lua `io` file access may
-    /// reach (e.g. the directory a Lua filesystem storage backend writes to).
-    /// Relative entries resolve against the config directory. The config
-    /// directory itself is always allowed; its `data/` and `backups/`
-    /// directories, `crap.toml`, the database and the log directory never
-    /// are. Default: `[]`.
+    /// The directories Lua `io` may write to — and read — (e.g. the directory
+    /// a Lua filesystem storage backend writes to). Relative entries resolve
+    /// against the config directory. The config directory itself is
+    /// read-only to Lua; an entry may not contain it or lie inside its code
+    /// directories (`hooks/`, `templates/`, `translations/`, `static/`, …),
+    /// and `require` never loads a module from one. The config directory's
+    /// `data/` and `backups/` directories, `crap.toml`, the database and the
+    /// log directory are never reachable. Default: `[]`.
     pub io_roots: Vec<String>,
 }
 

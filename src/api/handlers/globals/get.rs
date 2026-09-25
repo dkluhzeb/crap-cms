@@ -12,7 +12,7 @@ use crate::{
         handlers::{ContentService, proto::document_to_proto},
     },
     core::collection::Surface,
-    db::LocaleContext,
+    db::{LocaleContext, query},
     service::op::{self, Credentials, GetGlobal, GetGlobalArgs, Principal, TargetRef},
 };
 
@@ -35,6 +35,11 @@ impl ContentService {
         let args = GetGlobalArgs::builder()
             .locale_ctx(locale_ctx)
             .include_drafts(req.draft.unwrap_or(false))
+            .depth(query::clamp_depth(
+                req.depth,
+                self.default_depth,
+                self.max_depth,
+            ))
             .build();
 
         let principal = Principal::Credentials(Credentials {

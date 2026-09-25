@@ -177,6 +177,7 @@ field definitions.
 |-------|------|----------|----------|-------------|
 | `locale` | locale (string) |  | gRPC, MCP, Lua | Locale code (e.g. 'en', 'de') or 'all' for all locales |
 | `draft` | boolean |  | gRPC, MCP, Lua | Read unpublished (draft) content (default: false) |
+| `depth` | integer |  | gRPC, MCP, Lua | Relationship population depth |
 
 ### `update_global`
 

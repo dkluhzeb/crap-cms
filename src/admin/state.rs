@@ -4,7 +4,7 @@
 
 use std::{
     path::PathBuf,
-    sync::{Arc, OnceLock, atomic::AtomicUsize},
+    sync::{Arc, OnceLock},
 };
 
 use handlebars::Handlebars;
@@ -13,7 +13,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::CrapConfig,
-    core::{JwtSecret, SharedEmailProvider, SharedPasswordProvider, rate_limit::LoginRateLimiter},
+    core::{
+        JwtSecret, LiveSlots, SharedEmailProvider, SharedPasswordProvider,
+        rate_limit::LoginRateLimiter,
+    },
     mcp::McpServer,
     service::AppInfra,
 };
@@ -58,10 +61,9 @@ pub struct AdminState {
     pub translations: Arc<Translations>,
     /// Token used to signal shutdown to the admin server.
     pub shutdown: CancellationToken,
-    /// Current number of active SSE connections (for connection limiting).
-    pub sse_connections: Arc<AtomicUsize>,
-    /// Maximum allowed concurrent SSE connections. 0 = unlimited.
-    pub max_sse_connections: usize,
+    /// Slots of the SSE live-update endpoint: `[live] max_sse_connections`
+    /// in all, `[live] max_connections_per_client` per client.
+    pub sse_slots: LiveSlots,
     /// The password provider for hashing and verification.
     pub password_provider: SharedPasswordProvider,
     /// Per-subscriber SSE send timeout in milliseconds.

@@ -23,6 +23,13 @@ to `[depth] default_depth` from `crap.toml` (default: `1`), clamped to
 | `crap.collections.find()` (Lua) | `depth.default_depth` (default: `1`) |
 | `crap.collections.find_by_id()` (Lua) | `depth.default_depth` (default: `1`) |
 | MCP `find_*` / `find_by_id_*` | `depth.default_depth` (default: `1`) |
+| `GetGlobal` (gRPC) | `depth.default_depth` (default: `1`) |
+| `crap.globals.get()` (Lua) | `depth.default_depth` (default: `1`) |
+| MCP `global_read_*` | `depth.default_depth` (default: `1`) |
+
+A global read populates its relationship and upload fields exactly as a
+collection read populates a document's (the admin edit form reads with
+`depth = 0` and labels its references itself).
 
 To make list endpoints return bare IDs, either pass `depth = 0` explicitly
 or set `[depth] default_depth = 0` project-wide.
@@ -78,13 +85,48 @@ local result = crap.collections.posts.find({ depth = 1 })
 
 -- FindByID with depth
 local post = crap.collections.posts.find_by_id(id, { depth = 2 })
+
+-- A global read with depth
+local site = crap.globals.site_settings.get({ depth = 1 })
 ```
 
 ## Circular Reference Protection
 
-The population algorithm tracks visited `(collection, id)` pairs. If a document has already been visited in the current recursion path, it's kept as a plain ID string instead of being populated again.
+Population tracks the `(collection, id)` pairs on the current **path** — the
+documents between the one being populated and the top of the read. A
+reference back to a document on that path is kept as a plain ID string
+instead of being populated again; the same document reached through a
+different branch (say a post's `author` and its `editor` are the same user) is
+populated in each branch.
 
-This prevents infinite loops when collections reference each other (e.g., posts → users → posts).
+This prevents infinite loops when collections reference each other (e.g.,
+posts → users → posts), and it gives every read surface the same shape: a
+`Find` and a `FindByID` of the same document return the same tree at every
+depth.
+
+## What a Populated Document Contains
+
+A populated document reads exactly as a direct read of it by the same reader
+would:
+
+- **Access** — the target collection's `read` access decides whether it is
+  shown at all (a hidden has-one target is `null`, a hidden has-many entry is
+  dropped); its fields' `access.read` rules and `hidden` flags are applied to
+  it.
+- **Drafts** — with `draft = true`, a target whose latest version is a
+  pending draft shows that draft when the reader has the **target's** draft
+  access (bounded by its draft rule's row constraint); otherwise its published
+  content. Without `draft = true` a draft-only target is never embedded.
+- **Read hooks** — the target collection's `before_read` hooks run once per
+  target collection per read (with the reader's user and locale); one that
+  aborts hides that collection's populated documents, as a denied read does.
+  Its field and collection `after_read` hooks then run on each populated
+  document, with the embedding read's operation (`find` / `find_by_id`, or
+  `get` when a global read embeds it) — at every depth, fail-open like every
+  `after_read`.
+- **`collection`** — every populated document carries a `collection` key
+  naming its collection (it tells polymorphic targets apart). The name
+  `collection` is reserved and cannot be a field name.
 
 ## Performance
 
@@ -94,7 +136,9 @@ Population adds queries beyond the main find/find_by_id. How many depends on the
 
 - **Batch fetching:** `Find` with `depth >= 1` collects all referenced IDs across all returned documents per relationship field and fetches them in a single `IN (...)` query. This means one extra query per relationship field, regardless of how many documents reference it.
 - **Recursive batching:** At `depth >= 2`, the same batch strategy applies recursively — populated documents' relationships are batch-fetched at each depth level.
-- **Per-document fetching:** `FindByID` populates a single document. Join fields (reverse lookups) also use per-document queries since they require a `WHERE` clause per parent.
+- **Per-document fetching:** `FindByID` populates a single document.
+- **Join fields:** a `Find` looks a join field up for every returned document
+  in one query, keeping at most the join's `limit` per document (default 10).
 
 ### Query Cost
 
@@ -105,7 +149,9 @@ Population adds queries beyond the main find/find_by_id. How many depends on the
 | `depth=1`, `FindByID`, M relationship fields | M queries |
 | `depth=2`, `Find`, M fields at level 1, K fields at level 2 | M + (M × K) queries |
 
-Join fields add one query per document per join field at each depth level.
+Join fields add one query per join field at each depth level (`Find`), or
+per document (`FindByID`). A document referenced from several places is
+fetched once per level but populated in each place it appears.
 
 ### Cache Backend
 

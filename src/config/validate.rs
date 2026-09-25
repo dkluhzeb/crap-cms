@@ -98,10 +98,6 @@ impl CrapConfig {
             bail!("admin_port and grpc_port must be different");
         }
 
-        if self.server.request_timeout == Some(0) {
-            bail!("server.request_timeout must be > 0 (or omitted to disable)");
-        }
-
         if self.server.grpc_timeout == Some(0) {
             bail!("server.grpc_timeout must be > 0 (or omitted to disable)");
         }
@@ -131,6 +127,33 @@ impl CrapConfig {
         }
 
         self.validate_trusted_proxies()?;
+        self.validate_connection_limits()?;
+
+        Ok(())
+    }
+
+    /// Validate the listener and pre-auth limits: each must be positive — a
+    /// zero would refuse every connection, stream or login form.
+    fn validate_connection_limits(&self) -> Result<()> {
+        if self.server.auth_body_limit == 0 {
+            bail!("server.auth_body_limit must be > 0");
+        }
+
+        if self.server.max_connections == Some(0) {
+            bail!("server.max_connections must be > 0 (or omitted to derive it)");
+        }
+
+        if self.server.header_read_timeout == 0 {
+            bail!("server.header_read_timeout must be > 0");
+        }
+
+        if self.server.grpc_max_concurrent_streams == 0 {
+            bail!("server.grpc_max_concurrent_streams must be > 0");
+        }
+
+        if self.server.grpc_keepalive_interval == 0 {
+            bail!("server.grpc_keepalive_interval must be > 0");
+        }
 
         Ok(())
     }
@@ -818,6 +841,24 @@ mod tests {
     }
 
     #[test]
+    fn validate_connection_limits_reject_zero() {
+        let cases: [fn(&mut CrapConfig); 5] = [
+            |c| c.server.auth_body_limit = 0,
+            |c| c.server.max_connections = Some(0),
+            |c| c.server.header_read_timeout = 0,
+            |c| c.server.grpc_max_concurrent_streams = 0,
+            |c| c.server.grpc_keepalive_interval = 0,
+        ];
+
+        for zero_out in cases {
+            let mut config = CrapConfig::default();
+            zero_out(&mut config);
+
+            assert!(config.validate().is_err());
+        }
+    }
+
+    #[test]
     fn validate_admin_port_zero_errors() {
         let mut config = CrapConfig::default();
         config.server.admin_port = 0;
@@ -993,12 +1034,13 @@ mod tests {
         assert!(config.validate().is_ok());
     }
 
+    /// `0` is the documented "no deadline" setting of both request timeouts.
     #[test]
-    fn validate_rejects_request_timeout_zero() {
+    fn validate_accepts_zero_request_and_upload_timeouts() {
         let mut config = CrapConfig::default();
-        config.server.request_timeout = Some(0);
-        let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("request_timeout"));
+        config.server.request_timeout = 0;
+        config.server.upload_timeout = 0;
+        assert!(config.validate().is_ok());
     }
 
     #[test]
@@ -1012,7 +1054,6 @@ mod tests {
     #[test]
     fn validate_timeout_none_passes() {
         let mut config = CrapConfig::default();
-        config.server.request_timeout = None;
         config.server.grpc_timeout = None;
         assert!(config.validate().is_ok());
     }

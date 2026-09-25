@@ -5,7 +5,7 @@ use axum::{
     routing::{delete as delete_route, patch, post},
 };
 
-use crate::admin::{AdminState, upload_body_limit};
+use crate::admin::{AdminState, UPLOAD_API_ITEM_ROUTE, UPLOAD_API_ROUTE, upload_body_limit};
 
 use super::{create, delete, update};
 
@@ -18,13 +18,13 @@ pub fn upload_router(state: AdminState) -> Router<AdminState> {
 
     Router::new()
         .route(
-            "/upload/{slug}",
+            UPLOAD_API_ROUTE,
             post(create::create_upload).route_layer(upload_limit()),
         )
         .route(
-            "/upload/{slug}/{id}",
+            UPLOAD_API_ITEM_ROUTE,
             patch(update::update_upload).route_layer(upload_limit()),
         )
-        .route("/upload/{slug}/{id}", delete_route(delete::delete_upload))
+        .route(UPLOAD_API_ITEM_ROUTE, delete_route(delete::delete_upload))
         .with_state(state)
 }

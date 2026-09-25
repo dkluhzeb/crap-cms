@@ -179,12 +179,19 @@ fn register_global_functions(lua: &Lua, crap: &Table, ctx: &CrudRegisterCtx<'_>)
     let CrudRegisterCtx {
         registry,
         locale_config,
+        depth_config,
         ..
     } = *ctx;
 
     let globals_table: Table = crap.get("globals")?;
 
-    globals::get::register_globals_get(lua, &globals_table, Arc::clone(registry), locale_config)?;
+    globals::get::register_globals_get(
+        lua,
+        &globals_table,
+        Arc::clone(registry),
+        locale_config,
+        depth_config,
+    )?;
     globals::update::register_globals_update(
         lua,
         &globals_table,

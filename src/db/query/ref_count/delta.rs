@@ -1,13 +1,41 @@
 //! Ref-count delta computation and application.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    error::Error,
+    fmt,
+};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 use tracing::{debug, trace, warn};
 
 use crate::db::{DbConnection, DbValue, query::helpers::placeholder_list};
 
 use super::outgoing_ref::OutgoingRef;
+
+/// A write refused for referencing documents of `collection` it may not point
+/// at: `ids` do not exist — or, for a live write, are in the trash. Both read
+/// the same, so a writer learns nothing about a document it may not see.
+/// Typed so the write layer can report it on the fields holding the
+/// references (see [`anchor_to_fields`](super::anchor_to_fields)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnavailableReferences {
+    pub collection: String,
+    pub ids: Vec<String>,
+}
+
+impl fmt::Display for UnavailableReferences {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "cannot reference {}/{}: no such document",
+            self.collection,
+            self.ids.join(", ")
+        )
+    }
+}
+
+impl Error for UnavailableReferences {}
 
 /// Compute ref count deltas between old and new outgoing ref sets.
 pub(super) fn to_delta_map(
@@ -52,12 +80,19 @@ pub(super) fn apply_deltas(
     apply_deltas_with(conn, deltas, MissingTarget::Reject)
 }
 
-/// What an increment against a vanished target means to the caller.
+/// What an increment against an unavailable target means to the caller.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum MissingTarget {
-    /// A live write: the caller is about to persist a reference to a row that
-    /// no longer exists, so the transaction must roll back.
+    /// A live write: a NEW reference to a document that does not exist or is
+    /// in the trash is refused, so the transaction rolls back. (A trashed
+    /// document is hidden from every read, and a reference would pin it in
+    /// the trash — a referenced document is never purged.)
     Reject,
+    /// Stored references replayed onto a fresh copy of their documents (an
+    /// import): a missing target is refused, but a trashed one is kept — the
+    /// reference was stored before its target was trashed, as a document
+    /// whose target is trashed later keeps its reference.
+    RejectMissing,
     /// A repair replay over existing rows (the ref-count backfill): the
     /// dangling reference is already stored; skip it with a warning rather
     /// than refusing to start.
@@ -85,6 +120,13 @@ pub(super) fn apply_deltas_with(
     }
 
     for ((collection, delta), ids) in &groups {
+        // A new reference to a document a live write may not point at is
+        // refused before anything counts it. The check locks the targets it
+        // reads (Postgres), so none can move to the trash before the UPDATE.
+        if *delta > 0 && on_missing == MissingTarget::Reject {
+            refuse(collection, unavailable_ids(conn, collection, ids, true)?)?;
+        }
+
         let in_clause = placeholder_list(conn, ids.len());
 
         let clamped = conn.greatest_expr("0", &format!("_ref_count + ({delta})"));
@@ -97,24 +139,23 @@ pub(super) fn apply_deltas_with(
             format!("Failed to batch-update _ref_count on {collection} by {delta}")
         })?;
 
-        // Increment against vanished targets is a hard error on a live write:
-        // the caller is about to persist references to rows that no longer
-        // exist. Bail so the enclosing transaction rolls back, preventing
-        // dangling refs. A repair replay skips them instead (they are already
-        // dangling; refusing would block startup on data it cannot fix).
+        // An increment against vanished targets: a write replaying stored
+        // references refuses it, so the enclosing transaction rolls back
+        // instead of storing dangling refs. A repair replay skips them (they
+        // are already dangling; refusing would block startup on data it
+        // cannot fix).
         if *delta > 0 && affected < ids.len() {
-            let missing = find_missing_ids(conn, collection, ids);
+            let missing = unavailable_ids(conn, collection, ids, false)?;
 
-            if on_missing == MissingTarget::Reject {
-                bail!(
-                    "cannot reference {collection}/{missing}: target no longer exists \
-                     (concurrently hard-deleted)"
-                );
+            if on_missing != MissingTarget::Skip {
+                refuse(collection, missing)?;
+                continue;
             }
 
             warn!(
-                "Ref-count backfill: {collection}/{missing} no longer exists — a dangling \
-                 reference was skipped (clear or update the referencing document)"
+                "Ref-count backfill: {collection}/{} no longer exists — a dangling \
+                 reference was skipped (clear or update the referencing document)",
+                missing.join(", ")
             );
         }
 
@@ -138,28 +179,55 @@ pub(super) fn apply_deltas_with(
     Ok(())
 }
 
-/// Find which ids from a batch are missing from the table. Used only on
-/// the error path to produce a specific error message.
-fn find_missing_ids(conn: &dyn DbConnection, collection: &str, ids: &[&str]) -> String {
-    let in_clause = placeholder_list(conn, ids.len());
-    let sql = format!("SELECT id FROM \"{collection}\" WHERE id IN ({in_clause})");
+/// Refuse the write when `unavailable` names any document.
+fn refuse(collection: &str, unavailable: Vec<String>) -> Result<()> {
+    if unavailable.is_empty() {
+        return Ok(());
+    }
 
+    Err(UnavailableReferences {
+        collection: collection.to_string(),
+        ids: unavailable,
+    }
+    .into())
+}
+
+/// The ids among `ids` a reference may not point at: those with no row, and —
+/// with `trashed_too` — those in the trash. On Postgres the rows read are
+/// locked for the rest of the transaction.
+///
+/// Reads every column rather than naming `_deleted_at`, so it answers for a
+/// collection without a trash column too.
+fn unavailable_ids(
+    conn: &dyn DbConnection,
+    collection: &str,
+    ids: &[&str],
+    trashed_too: bool,
+) -> Result<Vec<String>> {
+    let in_clause = placeholder_list(conn, ids.len());
+    let lock = if conn.is_postgres() {
+        " FOR UPDATE"
+    } else {
+        ""
+    };
+    let sql = format!("SELECT * FROM \"{collection}\" WHERE id IN ({in_clause}){lock}");
     let params: Vec<DbValue> = ids.iter().map(|id| DbValue::Text(id.to_string())).collect();
 
-    let Ok(rows) = conn.query_all(&sql, &params) else {
-        return ids.join(", ");
-    };
+    let rows = conn
+        .query_all(&sql, &params)
+        .with_context(|| format!("Failed to read reference targets in {collection}"))?;
 
-    let found: HashSet<String> = rows
+    let available: HashSet<String> = rows
         .iter()
-        .filter_map(|r| r.get_string("id").ok())
+        .filter(|row| !trashed_too || row.get_named("_deleted_at").is_none_or(DbValue::is_null))
+        .filter_map(|row| row.get_string("id").ok())
         .collect();
 
-    ids.iter()
-        .filter(|id| !found.contains(**id))
-        .copied()
-        .collect::<Vec<_>>()
-        .join(", ")
+    Ok(ids
+        .iter()
+        .filter(|id| !available.contains(**id))
+        .map(|id| (*id).to_string())
+        .collect())
 }
 
 #[cfg(test)]
@@ -292,6 +360,51 @@ mod tests {
         );
     }
 
+    /// Regression: a write could reference a TRASHED document — the update
+    /// matched the soft-deleted row — so every read then hid the target while
+    /// the new reference pinned it in the trash; the success-or-failure answer
+    /// also told a writer whether an id existed. A trashed target is refused
+    /// with exactly the wording of a missing one.
+    #[test]
+    fn apply_deltas_refuses_a_trashed_target_like_a_missing_one() {
+        let mut media = CollectionDefinition::new("media");
+        media.soft_delete = true;
+        let (_tmp, pool, _) = setup_db(&[media], &no_locale());
+        let conn = pool.get().unwrap();
+
+        insert_doc(&conn, "media", "m_trashed");
+        insert_doc(&conn, "media", "m_live");
+        conn.execute(
+            "UPDATE media SET _deleted_at = '2026-01-01T00:00:00.000Z' WHERE id = 'm_trashed'",
+            &[],
+        )
+        .unwrap();
+
+        let refuse = |id: &str| {
+            let deltas = HashMap::from([(("media".to_string(), id.to_string()), 1i64)]);
+            let err = apply_deltas(&conn, &deltas).unwrap_err();
+            let typed = err
+                .downcast_ref::<UnavailableReferences>()
+                .expect("a typed refusal");
+            assert_eq!(typed.ids, vec![id.to_string()]);
+            format!("{err:#}")
+        };
+
+        let trashed = refuse("m_trashed");
+        let missing = refuse("m_missing");
+
+        assert_eq!(
+            trashed.replace("m_trashed", "ID"),
+            missing.replace("m_missing", "ID"),
+            "a trashed and a missing target read the same"
+        );
+        assert_eq!(get_ref_count_val(&conn, "media", "m_trashed"), 0);
+
+        let live = HashMap::from([(("media".to_string(), "m_live".to_string()), 1i64)]);
+        apply_deltas(&conn, &live).expect("a live target is referenced");
+        assert_eq!(get_ref_count_val(&conn, "media", "m_live"), 1);
+    }
+
     /// Decrement against a missing target is a tolerated no-op — the target
     /// is gone so there's nothing to adjust. Only hard-delete decrements, and
     /// a concurrent hard-delete already removed the row.
@@ -342,5 +455,36 @@ mod tests {
         deltas.insert(("media".to_string(), "m_missing".to_string()), 1i64);
 
         apply_deltas(&conn, &deltas).expect_err("batch must fail if any increment target missing");
+    }
+
+    /// Regression: an import replays the references its documents stored —
+    /// including one whose target was trashed after it was referenced, which
+    /// the export carries trashed. Refusing it (as a live write refuses a NEW
+    /// reference to a trashed document) made such an export impossible to
+    /// import. A missing target is still refused.
+    #[test]
+    fn replaying_stored_references_keeps_a_trashed_target() {
+        let mut media = CollectionDefinition::new("media");
+        media.soft_delete = true;
+        let (_tmp, pool, _) = setup_db(&[media], &no_locale());
+        let conn = pool.get().unwrap();
+
+        insert_doc(&conn, "media", "m_trashed");
+        conn.execute(
+            "UPDATE media SET _deleted_at = '2026-01-01T00:00:00.000Z' WHERE id = 'm_trashed'",
+            &[],
+        )
+        .unwrap();
+
+        let replay = |id: &str| {
+            let deltas = HashMap::from([(("media".to_string(), id.to_string()), 1i64)]);
+            apply_deltas_with(&conn, &deltas, MissingTarget::RejectMissing)
+        };
+
+        replay("m_trashed").expect("a stored reference to a trashed target is kept");
+        assert_eq!(get_ref_count_val(&conn, "media", "m_trashed"), 1);
+
+        let err = replay("m_missing").expect_err("a missing target is refused");
+        assert!(err.downcast_ref::<UnavailableReferences>().is_some());
     }
 }

@@ -1,55 +1,35 @@
-//! Batch relationship population dispatch across multiple documents.
+//! Batch relationship population across multiple documents.
+//!
+//! References are collected across the whole batch and fetched with one query
+//! per target collection, but every stored reference is then populated along
+//! its OWN ancestor path — the documents between it and the read's top level.
+//! A document reached through two parents is expanded under each, and only a
+//! reference back to a document on its own path stays an id: exactly the tree
+//! the single-document path builds, so a list read and a read by id return the
+//! same shape for the same document at every depth.
+
+use std::mem;
 
 use anyhow::Result;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
 
-use crate::core::cache::CacheBackend;
 use crate::core::{
-    CollectionDefinition, Document, FieldDefinition, FieldType,
-    field::{JoinConfig, flatten_array_sub_fields},
-    upload,
+    CollectionDefinition, Document, FieldType, cache::CacheBackend, field::flatten_array_sub_fields,
 };
 use crate::db::query::populate::{
-    CachedDoc, PopulateContext, PopulateCtx, PopulateOpts, Singleflight, document_to_json,
+    CachedDoc, PopulateContext, PopulateCtx, PopulateOpts, Singleflight, Visited, document_to_json,
+    join::{document_join_fields, fetch_join_children},
+    single::nested,
 };
 
-/// The full triple needed to populate a single join field: the field
-/// definition itself, its parsed [`JoinConfig`], and the resolved target
-/// collection definition. Always constructed together at the
-/// `populate_join_fields` loop site — bundling them keeps the helper
-/// signatures under clippy's `too_many_arguments` threshold and the
-/// call sites readable.
-struct JoinTarget<'a> {
-    field: &'a FieldDefinition,
-    config: &'a JoinConfig,
-    target_def: &'a CollectionDefinition,
-}
-use crate::db::{
-    Filter, FilterClause, FilterOp, FindQuery,
-    query::{hydrate_documents, read},
-};
+use super::refs::populate_reference_field;
 
-use crate::db::query::populate::helpers::{resolve_views, target_row_visible};
-use crate::db::query::populate::single::nested;
-
-use super::nonpoly::{self, BatchTarget};
-use super::poly;
-
-/// Coerce a doc-field `Value` to the string form used as a join-key bucket
-/// label. Strings, numbers, and bools all become valid scalar keys; missing
-/// values, arrays, and objects are non-scalar and cannot identify a single
-/// parent row, so they are dropped.
-///
-/// Replaces an earlier `other.to_string().trim_matches('"')` hack that
-/// silently produced garbage (e.g. `"[1,2]"`) for non-scalar inputs.
-fn join_key_from_value(v: Option<&Value>) -> Option<String> {
-    match v? {
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        Value::Bool(b) => Some(b.to_string()),
-        Value::Null | Value::Array(_) | Value::Object(_) => None,
-    }
+/// One level of a batch populate: the collection its documents belong to, the
+/// shared populate context at this level's depth, and the read's `select`.
+struct Level<'a> {
+    ctx: &'a PopulateContext<'a>,
+    pctx: PopulateCtx<'a>,
+    select: Option<&'a [String]>,
 }
 
 /// Batch-populate relationship fields across a slice of documents.
@@ -63,11 +43,11 @@ pub(crate) fn populate_relationships_batch_cached(
     cache: &dyn CacheBackend,
 ) -> Result<()> {
     // Fresh singleflight for this batch. The batch path already collapses
-    // per-collection fetches via `find_by_ids`, so per-id dedup matters mainly
-    // for nested container recursion into single-doc paths.
+    // per-collection fetches, so per-id dedup matters mainly for nested
+    // container recursion into single-doc paths.
     let singleflight = Singleflight::new();
 
-    populate_relationships_batch_cached_inner(ctx, docs, opts, cache, &singleflight)
+    populate_relationships_batch_cached_with_singleflight(ctx, docs, opts, cache, &singleflight)
 }
 
 /// Variant of [`populate_relationships_batch_cached`] that accepts an
@@ -88,68 +68,108 @@ pub fn populate_relationships_batch_cached_with_singleflight(
     cache: &dyn CacheBackend,
     singleflight: &Singleflight<CachedDoc>,
 ) -> Result<()> {
-    populate_relationships_batch_cached_inner(ctx, docs, opts, cache, singleflight)
+    let ancestors = vec![Visited::new(); docs.len()];
+
+    populate_batch_with_paths(ctx, docs, opts, (cache, singleflight), &ancestors)
 }
 
-fn populate_relationships_batch_cached_inner(
-    ctx: &PopulateContext<'_>,
-    docs: &mut [Document],
-    opts: &PopulateOpts<'_>,
-    cache: &dyn CacheBackend,
-    singleflight: &Singleflight<CachedDoc>,
-) -> Result<()> {
-    let mut visited: HashSet<(String, String)> = HashSet::new();
-
-    populate_batch_with_visited(ctx, docs, opts, cache, singleflight, &mut visited)
-}
-
-/// Core of the batch populate, taking a caller-seeded `visited` set so
-/// nested batch invocations (join children, relationship targets) inherit
-/// their ancestors' cycle guard. Seeds the current docs into `visited` itself.
+/// Core of the batch populate. `ancestors[i]` is the path above `docs[i]` —
+/// every `(collection, id)` between it and the read's top level; each document
+/// populates its references along that path plus itself.
 ///
-/// EVERY recursion site goes through here rather than through the public
-/// entry, which seeds a fresh empty set: a recursion that starts over cannot
-/// see the ancestors it came from, so a mutual reference expands once per
-/// remaining depth level instead of stopping at the first repeat.
-pub(super) fn populate_batch_with_visited(
+/// A document already on its own path (a join child that is also one of its
+/// ancestors) is embedded as it is, not expanded again — as the
+/// single-document path does.
+pub(super) fn populate_batch_with_paths(
     ctx: &PopulateContext<'_>,
     docs: &mut [Document],
     opts: &PopulateOpts<'_>,
-    cache: &dyn CacheBackend,
-    singleflight: &Singleflight<CachedDoc>,
-    visited: &mut HashSet<(String, String)>,
+    (cache, singleflight): (&dyn CacheBackend, &Singleflight<CachedDoc>),
+    ancestors: &[Visited],
 ) -> Result<()> {
     if opts.depth <= 0 || docs.is_empty() {
         return Ok(());
     }
 
-    for doc in docs.iter() {
-        visited.insert((ctx.collection_slug.to_string(), doc.id.to_string()));
+    let expand: Vec<usize> = (0..docs.len())
+        .filter(|&i| !ancestors[i].contains(&visit_key(ctx.collection_slug, &docs[i])))
+        .collect();
+
+    let mut work: Vec<Document> = expand
+        .iter()
+        .map(|&i| mem::replace(&mut docs[i], Document::new(String::new())))
+        .collect();
+
+    let paths: Vec<Visited> = expand
+        .iter()
+        .zip(&work)
+        .map(|(&i, doc)| own_path(&ancestors[i], ctx.collection_slug, doc))
+        .collect();
+
+    let level = Level {
+        ctx,
+        pctx: PopulateCtx {
+            conn: ctx.conn,
+            registry: ctx.registry,
+            effective_depth: opts.depth,
+            root_id: "",
+            locale_ctx: opts.locale_ctx,
+            published_only: opts.published_only,
+            cache,
+            singleflight,
+            join_access: opts.join_access,
+            user: opts.user,
+        },
+        select: opts.select,
+    };
+
+    let populated = populate_level(&level, &mut work, &paths);
+
+    for (&i, doc) in expand.iter().zip(work) {
+        docs[i] = doc;
     }
 
-    populate_flat_relationships(ctx, docs, opts, cache, singleflight, visited)?;
-    populate_nested_containers(ctx, docs, opts, cache, singleflight, visited)?;
-    populate_join_fields(ctx, docs, opts, cache, visited)?;
+    populated
+}
 
-    Ok(())
+/// Populate one level: relationship/upload fields (through layout wrappers),
+/// the ones inside groups/arrays/blocks, then the join fields.
+fn populate_level(level: &Level<'_>, docs: &mut [Document], paths: &[Visited]) -> Result<()> {
+    populate_flat_relationships(level, docs, paths)?;
+    populate_nested_containers(level, docs, paths)?;
+    populate_join_fields(level, docs, paths)
+}
+
+/// The cycle-guard key of a document of `collection`.
+fn visit_key(collection: &str, doc: &Document) -> (String, String) {
+    (collection.to_string(), doc.id.to_string())
+}
+
+/// `doc`'s own path: its ancestors plus itself.
+fn own_path(ancestors: &Visited, collection: &str, doc: &Document) -> Visited {
+    let mut path = ancestors.clone();
+    path.insert(visit_key(collection, doc));
+    path
+}
+
+/// Whether the read's `select` keeps `name`.
+fn selected(select: Option<&[String]>, name: &str) -> bool {
+    select.is_none_or(|sel| sel.iter().any(|s| s == name))
 }
 
 /// Populate non-join relationship/upload fields (flattened through transparent containers).
 fn populate_flat_relationships(
-    ctx: &PopulateContext<'_>,
+    level: &Level<'_>,
     docs: &mut [Document],
-    opts: &PopulateOpts<'_>,
-    cache: &dyn CacheBackend,
-    singleflight: &Singleflight<CachedDoc>,
-    visited: &HashSet<(String, String)>,
+    paths: &[Visited],
 ) -> Result<()> {
-    for field in flatten_array_sub_fields(&ctx.def.fields) {
-        if field.field_type != FieldType::Relationship && field.field_type != FieldType::Upload {
-            continue;
-        }
+    let registry = level.pctx.registry;
 
-        if let Some(sel) = opts.select
-            && !sel.iter().any(|s| s == &field.name)
+    for field in flatten_array_sub_fields(level.ctx.fields) {
+        if !matches!(
+            field.field_type,
+            FieldType::Relationship | FieldType::Upload
+        ) || !selected(level.select, &field.name)
         {
             continue;
         }
@@ -158,672 +178,148 @@ fn populate_flat_relationships(
             continue;
         };
 
-        let effective_depth = rel.cap_depth(opts.depth);
+        let effective_depth = rel.cap_depth(level.pctx.effective_depth);
 
-        if effective_depth <= 0 {
+        if effective_depth <= 0
+            || (!rel.is_polymorphic() && registry.get_collection(&rel.collection).is_none())
+        {
             continue;
         }
 
         let pctx = PopulateCtx {
-            conn: ctx.conn,
-            registry: ctx.registry,
             effective_depth,
-            // Batch flat population spans many docs and never resolves a join.
-            root_id: "",
-            locale_ctx: opts.locale_ctx,
-            published_only: opts.published_only,
-            cache,
-            singleflight,
-            join_access: opts.join_access,
-            user: opts.user,
+            ..level.pctx
         };
 
-        if rel.is_polymorphic() {
-            if rel.has_many {
-                poly::batch_poly_has_many(&pctx, docs, &field.name, visited)?;
-            } else {
-                poly::batch_poly_has_one(&pctx, docs, &field.name, visited)?;
-            }
-        } else {
-            let rel_def = match ctx.registry.get_collection(&rel.collection) {
-                Some(d) => d.clone(),
-                None => continue,
-            };
-
-            let target = BatchTarget {
-                collection: &rel.collection,
-                def: &rel_def,
-                visited,
-            };
-
-            if rel.has_many {
-                nonpoly::batch_nonpoly_has_many(&pctx, docs, &field.name, &target)?;
-            } else {
-                nonpoly::batch_nonpoly_has_one(&pctx, docs, &field.name, &target)?;
-            }
-        }
+        populate_reference_field(&pctx, docs, paths, (&field.name, rel))?;
     }
 
     Ok(())
 }
 
-/// Populate relationship fields inside nested containers (Groups/Blocks/Arrays).
+/// Populate relationship fields inside nested containers (Groups/Blocks/Arrays),
+/// each document along its own path.
 fn populate_nested_containers(
-    ctx: &PopulateContext<'_>,
+    level: &Level<'_>,
     docs: &mut [Document],
-    opts: &PopulateOpts<'_>,
-    cache: &dyn CacheBackend,
-    singleflight: &Singleflight<CachedDoc>,
-    visited: &HashSet<(String, String)>,
+    paths: &[Visited],
 ) -> Result<()> {
-    for doc in docs.iter_mut() {
-        let mut doc_visited = visited.clone();
+    for (doc, path) in docs.iter_mut().zip(paths) {
+        let mut path = path.clone();
         // This doc's id anchors any reverse-join nested in its containers.
         let root_id = doc.id.to_string();
         let nested_pctx = PopulateCtx {
-            conn: ctx.conn,
-            registry: ctx.registry,
-            effective_depth: opts.depth,
             root_id: &root_id,
-            locale_ctx: opts.locale_ctx,
-            published_only: opts.published_only,
-            cache,
-            singleflight,
-            join_access: opts.join_access,
-            user: opts.user,
+            ..level.pctx
         };
 
-        nested::populate_containers_in_doc(&nested_pctx, doc, &ctx.def.fields, &mut doc_visited)?;
+        nested::populate_containers_in_doc(&nested_pctx, doc, level.ctx.fields, &mut path)?;
     }
 
     Ok(())
 }
 
-/// Populate reverse-lookup join fields across all `docs` in a batch.
-///
-/// For each join field, collects every parent doc's id, issues a single
-/// `find(on_field IN (ids…))`, buckets results by `on_field`, and emits a
-/// per-parent array. This replaces the previous per-parent-doc query pattern
-/// (N+1 on the number of parents) — critical for `find_deep` throughput.
-fn populate_join_fields(
-    ctx: &PopulateContext<'_>,
-    docs: &mut [Document],
-    opts: &PopulateOpts<'_>,
-    cache: &dyn CacheBackend,
-    visited: &HashSet<(String, String)>,
-) -> Result<()> {
-    if opts.depth <= 0 || docs.is_empty() {
-        return Ok(());
-    }
-
-    for field in &ctx.def.fields {
-        if !is_eligible_join_field(field, opts.select) {
-            continue;
-        }
-        let Some(config) = &field.join else { continue };
-        let Some(target_def) = ctx.registry.get_collection(&config.collection).cloned() else {
+/// Populate the batch's document-level join fields: one grouped lookup per
+/// join for every parent, each child then populated along its parent's path.
+fn populate_join_fields(level: &Level<'_>, docs: &mut [Document], paths: &[Visited]) -> Result<()> {
+    for field in document_join_fields(level.ctx.fields, level.select) {
+        let Some(join) = &field.join else {
             continue;
         };
 
-        let target = JoinTarget {
-            field,
-            config,
-            target_def: &target_def,
-        };
-        populate_single_join_field(ctx, docs, opts, cache, visited, &target)?;
-    }
-
-    Ok(())
-}
-
-/// Is this field a `Join` field that the caller wants populated (i.e. either
-/// no `select` filter, or `select` lists this field name)?
-fn is_eligible_join_field(field: &FieldDefinition, select: Option<&[String]>) -> bool {
-    field.field_type == FieldType::Join
-        && field.join.is_some()
-        && select.is_none_or(|sel| sel.iter().any(|s| s == &field.name))
-}
-
-/// Populate one join field across every parent doc in the batch.
-///
-/// Pipeline: access check → collect parent ids → batched `IN` query →
-/// hydrate + recursive populate each matched doc → bucket by `on` value →
-/// assign one array per parent.
-fn populate_single_join_field(
-    ctx: &PopulateContext<'_>,
-    docs: &mut [Document],
-    opts: &PopulateOpts<'_>,
-    cache: &dyn CacheBackend,
-    visited: &HashSet<(String, String)>,
-    target: &JoinTarget<'_>,
-) -> Result<()> {
-    // Resolve the target's view access (read + draft) once per field. Matched
-    // children are filtered per-row below by the independent-views model — a
-    // published child needs `read`, a draft child needs drafts requested
-    // (`!published_only`) AND the target's `draft` access.
-    let views = resolve_views(
-        opts.join_access,
-        opts.user,
-        &target.target_def.slug,
-        target.target_def,
-    )?;
-
-    // Collect unique parent ids. Order-preserving so output is deterministic.
-    let mut parent_ids: Vec<String> = Vec::with_capacity(docs.len());
-    let mut seen_ids: HashSet<String> = HashSet::new();
-    for doc in docs.iter() {
-        let id = doc.id.to_string();
-        if seen_ids.insert(id.clone()) {
-            parent_ids.push(id);
-        }
-    }
-
-    let filters = vec![FilterClause::Single(Filter {
-        field: target.config.on.clone(),
-        op: FilterOp::In(parent_ids),
-    })];
-    let fq = FindQuery::builder().filters(filters).build();
-
-    let Ok(matched_docs) = read::find(
-        ctx.conn,
-        &target.config.collection,
-        target.target_def,
-        &fq,
-        opts.locale_ctx,
-    ) else {
-        assign_empty_array(docs, &target.field.name);
-        return Ok(());
-    };
-
-    // Per-row visibility filter (RAW fields, before hydration): drop children
-    // the viewer may not see. `find` already excluded trashed rows.
-    let visible: Vec<Document> = matched_docs
-        .into_iter()
-        .filter(|d| target_row_visible(&views, d, opts.published_only, target.target_def))
-        .collect();
-
-    let prepared = prepare_join_children(ctx, opts, cache, visited, target, visible)?;
-
-    // Bucket matched docs by their `on` field value so we can emit one
-    // array per parent. A single matched doc only belongs to one parent
-    // (the `on` column is a scalar foreign-key field).
-    let mut buckets: HashMap<String, Vec<Value>> = HashMap::new();
-    for matched_doc in &prepared {
-        let Some(key) = join_key_from_value(matched_doc.fields.get(&target.config.on)) else {
+        let Some(target_def) = level.pctx.registry.get_collection(&join.collection) else {
             continue;
         };
-        buckets.entry(key).or_default().push(document_to_json(
-            matched_doc,
-            Some(&target.config.collection),
-        ));
-    }
 
-    for doc in docs.iter_mut() {
-        let arr = buckets.remove(&doc.id.to_string()).unwrap_or_default();
-        doc.fields
-            .insert(target.field.name.clone(), Value::Array(arr));
-    }
+        let parent_ids = docs.iter().map(|doc| doc.id.to_string()).collect();
+        let buckets = fetch_join_children(&level.pctx, join, target_def, parent_ids)?;
 
-    Ok(())
-}
+        let mut children = JoinChildren::default();
 
-/// Hydrate + recursively populate the matched join children, at depth-1.
-/// Children all belong to one target collection, so hydration is ONE batched
-/// pass and the recursive populate is ONE batch invocation (seeded with the
-/// ancestors' visited set) — previously both ran per child.
-fn prepare_join_children(
-    ctx: &PopulateContext<'_>,
-    opts: &PopulateOpts<'_>,
-    cache: &dyn CacheBackend,
-    visited: &HashSet<(String, String)>,
-    target: &JoinTarget<'_>,
-    matched_docs: Vec<Document>,
-) -> Result<Vec<Document>> {
-    let mut prepared = matched_docs;
-    if prepared.is_empty() {
-        return Ok(prepared);
-    }
-
-    hydrate_documents(
-        ctx.conn,
-        &target.config.collection,
-        &target.target_def.fields,
-        &mut prepared,
-        None,
-        opts.locale_ctx,
-    )?;
-
-    for doc in &mut prepared {
-        upload::shape_read_document(target.target_def, doc);
-    }
-
-    let mut nested_visited = visited.clone();
-    let child_singleflight = Singleflight::new();
-
-    populate_batch_with_visited(
-        &PopulateContext {
-            conn: ctx.conn,
-            registry: ctx.registry,
-            collection_slug: &target.config.collection,
-            def: target.target_def,
-        },
-        &mut prepared,
-        &PopulateOpts {
-            depth: opts.depth - 1,
-            select: None,
-            locale_ctx: opts.locale_ctx,
-            published_only: opts.published_only,
-            join_access: opts.join_access,
-            user: opts.user,
-        },
-        cache,
-        &child_singleflight,
-        &mut nested_visited,
-    )?;
-
-    Ok(prepared)
-}
-
-/// Write `[]` to `field_name` on every parent doc — used on access-denied
-/// or query failure, so callers always get a value-typed array (never a
-/// missing key) for join fields.
-fn assign_empty_array(docs: &mut [Document], field_name: &str) {
-    for doc in docs.iter_mut() {
-        doc.fields
-            .insert(field_name.to_string(), Value::Array(Vec::new()));
-    }
-}
-
-#[cfg(test)]
-mod join_key_tests {
-    use serde_json::json;
-
-    use super::join_key_from_value;
-
-    #[test]
-    fn string_passes_through() {
-        assert_eq!(
-            join_key_from_value(Some(&json!("abc"))),
-            Some("abc".to_string())
-        );
-    }
-
-    #[test]
-    fn integer_stringifies_without_quotes() {
-        assert_eq!(
-            join_key_from_value(Some(&json!(42))),
-            Some("42".to_string())
-        );
-    }
-
-    #[test]
-    fn float_stringifies_without_quotes() {
-        // Note: this exists mainly to pin behavior; floats as join keys are
-        // a usage smell, but we mirror what the legacy code produced.
-        let key = join_key_from_value(Some(&json!(1.5)));
-        assert_eq!(key.as_deref(), Some("1.5"));
-    }
-
-    #[test]
-    fn bool_stringifies() {
-        assert_eq!(
-            join_key_from_value(Some(&json!(true))),
-            Some("true".to_string())
-        );
-    }
-
-    /// Regression: arrays and objects are not scalar join keys. The earlier
-    /// `other.to_string().trim_matches('"')` produced strings like `"[1,2]"`
-    /// that would never match a parent ID. Skip them instead.
-    #[test]
-    fn array_and_object_are_rejected() {
-        assert_eq!(join_key_from_value(Some(&json!([1, 2]))), None);
-        assert_eq!(join_key_from_value(Some(&json!({"k": "v"}))), None);
-    }
-
-    #[test]
-    fn null_and_missing_are_rejected() {
-        assert_eq!(join_key_from_value(Some(&json!(null))), None);
-        assert_eq!(join_key_from_value(None), None);
-    }
-}
-
-#[cfg(all(test, feature = "sqlite"))]
-mod tests {
-    use anyhow::Result as AnyResult;
-    use serde_json::json;
-
-    use super::*;
-    use crate::core::HookRef;
-    use crate::core::Registry;
-    use crate::core::cache::NoneCache;
-    use crate::db::AccessResult;
-    use crate::db::query::populate::JoinAccessCheck;
-    use crate::db::query::populate::test_helpers::{
-        make_authors_def_with_join, make_posts_def_for_join, setup_join_db,
-    };
-
-    /// Regression for the join-field N+1: batch populate across N parent docs
-    /// must produce correct per-parent buckets. Before this change, the code
-    /// issued one `find()` per parent; correctness was preserved but query
-    /// count scaled with N. After the fix: one `IN (…)` query per field,
-    /// results bucketed by the `on_field` value.
-    #[test]
-    fn batch_join_field_buckets_per_parent() {
-        let conn = setup_join_db();
-        let authors_def = make_authors_def_with_join();
-        let posts_def = make_posts_def_for_join();
-
-        let mut registry = Registry::new();
-        registry.register_collection(authors_def.clone());
-        registry.register_collection(posts_def);
-
-        // Two authors as parents: a1 (has posts p1, p2), a2 (has post p3).
-        let mut docs = vec![
-            {
-                let mut d = Document::new("a1".to_string());
-                d.fields.insert("name".to_string(), json!("Alice"));
-                d
-            },
-            {
-                let mut d = Document::new("a2".to_string());
-                d.fields.insert("name".to_string(), json!("Bob"));
-                d
-            },
-        ];
-
-        populate_relationships_batch_cached(
-            &PopulateContext {
-                conn: &conn,
-                registry: &registry,
-                collection_slug: "authors",
-                def: &authors_def,
-            },
-            &mut docs,
-            &PopulateOpts {
-                depth: 1,
-                select: None,
-                locale_ctx: None,
-                published_only: false,
-                join_access: None,
-                user: None,
-            },
-            &NoneCache,
-        )
-        .unwrap();
-
-        // a1 sees exactly its two posts.
-        let a1_posts = docs[0]
-            .fields
-            .get("posts")
-            .and_then(|v| v.as_array())
-            .expect("a1 should get a posts array");
-        assert_eq!(a1_posts.len(), 2, "a1 has 2 posts");
-        let a1_titles: Vec<&str> = a1_posts
-            .iter()
-            .filter_map(|v| v.get("title").and_then(|t| t.as_str()))
-            .collect();
-        assert!(a1_titles.contains(&"First Post"));
-        assert!(a1_titles.contains(&"Second Post"));
-
-        // a2 sees only its own post — no leakage from a1.
-        let a2_posts = docs[1]
-            .fields
-            .get("posts")
-            .and_then(|v| v.as_array())
-            .expect("a2 should get a posts array");
-        assert_eq!(a2_posts.len(), 1, "a2 has 1 post");
-        assert_eq!(
-            a2_posts[0].get("title").and_then(|t| t.as_str()),
-            Some("Other Post")
-        );
-    }
-
-    /// Batch path: an author with no matching posts must get an empty array,
-    /// not a missing field. Before the batch rewrite this worked by accident
-    /// because each parent ran its own query; after the rewrite the bucket
-    /// lookup must still emit `[]` for no-match cases.
-    #[test]
-    fn batch_join_field_empty_bucket_for_parent_with_no_matches() {
-        let conn = setup_join_db();
-        let authors_def = make_authors_def_with_join();
-        let posts_def = make_posts_def_for_join();
-
-        let mut registry = Registry::new();
-        registry.register_collection(authors_def.clone());
-        registry.register_collection(posts_def);
-
-        // a99 is a parent with no matching posts — the setup_join_db fixture
-        // has no posts with author='a99'.
-        let mut docs = vec![{
-            let mut d = Document::new("a99".to_string());
-            d.fields.insert("name".to_string(), json!("Nobody"));
-            d
-        }];
-
-        populate_relationships_batch_cached(
-            &PopulateContext {
-                conn: &conn,
-                registry: &registry,
-                collection_slug: "authors",
-                def: &authors_def,
-            },
-            &mut docs,
-            &PopulateOpts {
-                depth: 1,
-                select: None,
-                locale_ctx: None,
-                published_only: false,
-                join_access: None,
-                user: None,
-            },
-            &NoneCache,
-        )
-        .unwrap();
-
-        let posts = docs[0]
-            .fields
-            .get("posts")
-            .and_then(|v| v.as_array())
-            .expect("posts must still be present as an empty array");
-        assert!(
-            posts.is_empty(),
-            "no-match parent must render as empty array, not missing"
-        );
-    }
-
-    /// Regression (B2): join-children preparation is batched — ONE hydrate
-    /// query per join-shaped child field and ONE child-populate pass for the
-    /// whole batch, regardless of how many parents or children matched.
-    /// Before, `prepare_join_children` hydrated and populated each child in
-    /// a loop (one array query PER CHILD here).
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn batch_join_children_hydrate_query_count_is_constant() {
-        use crate::core::field::JoinConfig;
-        use crate::core::{FieldDefinition, Slug};
-        use crate::db::query::test_helpers::CountingConn;
-        use crate::db::{DbConnection as _, InMemoryConn};
-
-        let conn = InMemoryConn::open();
-        conn.execute_batch(
-            "CREATE TABLE authors (
-                 id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT
-             );
-             CREATE TABLE posts (
-                 id TEXT PRIMARY KEY, title TEXT, author TEXT,
-                 created_at TEXT, updated_at TEXT
-             );
-             CREATE TABLE posts_sections (
-                 id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, label TEXT
-             );
-             INSERT INTO posts VALUES
-                 ('p1', 'One', 'a1', '2024-01-01', '2024-01-01'),
-                 ('p2', 'Two', 'a1', '2024-01-01', '2024-01-01'),
-                 ('p3', 'Three', 'a2', '2024-01-01', '2024-01-01');
-             INSERT INTO posts_sections VALUES
-                 ('s1', 'p1', 0, 'Intro'), ('s2', 'p2', 0, 'Body'), ('s3', 'p3', 0, 'End');",
-        )
-        .unwrap();
-
-        let mut join_field = FieldDefinition::builder("posts", FieldType::Join).build();
-        join_field.join = Some(JoinConfig {
-            collection: Slug::new("posts"),
-            on: "author".to_string(),
-        });
-        let mut authors_def = CollectionDefinition::new("authors");
-        authors_def.fields = vec![
-            FieldDefinition::builder("name", FieldType::Text).build(),
-            join_field,
-        ];
-
-        let mut posts_def = CollectionDefinition::new("posts");
-        posts_def.fields = vec![
-            FieldDefinition::builder("title", FieldType::Text).build(),
-            FieldDefinition::builder("author", FieldType::Relationship)
-                .relationship(crate::core::RelationshipConfig::new("authors", false))
-                .build(),
-            FieldDefinition::builder("sections", FieldType::Array)
-                .fields(vec![
-                    FieldDefinition::builder("label", FieldType::Text).build(),
-                ])
-                .build(),
-        ];
-
-        let mut registry = Registry::new();
-        registry.register_collection(authors_def.clone());
-        registry.register_collection(posts_def);
-
-        let run = |parents: &[&str]| -> (usize, Vec<Document>) {
-            let counting = CountingConn::new(&conn);
-            let mut docs: Vec<Document> = parents
-                .iter()
-                .map(|id| {
-                    let mut d = Document::new((*id).to_string());
-                    d.fields.insert("name".to_string(), json!("x"));
-                    d
-                })
-                .collect();
-
-            populate_relationships_batch_cached(
-                &PopulateContext {
-                    conn: &counting,
-                    registry: &registry,
-                    collection_slug: "authors",
-                    def: &authors_def,
-                },
-                &mut docs,
-                &PopulateOpts {
-                    depth: 1,
-                    select: None,
-                    locale_ctx: None,
-                    published_only: false,
-                    join_access: None,
-                    user: None,
-                },
-                &NoneCache,
-            )
-            .unwrap();
-            (counting.reads(), docs)
-        };
-
-        let (reads_one, _) = run(&["a1"]);
-        let (reads_two, docs) = run(&["a1", "a2"]);
-
-        // Correctness: children carry their hydrated array rows, per parent
-        // (order-independent — the default sort ties on equal timestamps).
-        let a1_posts = docs[0]
-            .fields
-            .get("posts")
-            .and_then(|v| v.as_array())
-            .unwrap();
-        assert_eq!(a1_posts.len(), 2);
-        let a1_labels: Vec<&str> = a1_posts
-            .iter()
-            .filter_map(|p| p["sections"][0]["label"].as_str())
-            .collect();
-        assert!(a1_labels.contains(&"Intro") && a1_labels.contains(&"Body"));
-        let a2_posts = docs[1]
-            .fields
-            .get("posts")
-            .and_then(|v| v.as_array())
-            .unwrap();
-        assert_eq!(a2_posts[0]["sections"][0]["label"], "End");
-
-        assert_eq!(
-            reads_one, reads_two,
-            "join-children query count must not scale with parents/children"
-        );
-        assert_eq!(
-            reads_two, 2,
-            "one children find + one batched sections hydrate"
-        );
-    }
-
-    /// SEC-G guardrail preserved across the batch: Denied target access must
-    /// leave every parent with an empty array, not an unfiltered fetch.
-    #[test]
-    fn batch_join_field_denies_for_all_parents_when_target_read_denied() {
-        struct DenyAll;
-        impl JoinAccessCheck for DenyAll {
-            fn check(
-                &self,
-                _: Option<&HookRef>,
-                _: Option<&Document>,
-                _: &str,
-            ) -> AnyResult<AccessResult> {
-                Ok(AccessResult::Denied)
+        for (i, doc) in docs.iter().enumerate() {
+            for child in buckets.get(doc.id.as_ref()).into_iter().flatten() {
+                children.push(i, child.clone(), &paths[i]);
             }
         }
 
-        let conn = setup_join_db();
-        let authors_def = make_authors_def_with_join();
-        let posts_def = make_posts_def_for_join();
+        descend(
+            &level.pctx,
+            (&join.collection, target_def),
+            &mut children.docs,
+            &children.ancestors,
+        )?;
 
-        let mut registry = Registry::new();
-        registry.register_collection(authors_def.clone());
-        registry.register_collection(posts_def);
+        children.assign(docs, &field.name, &join.collection);
+    }
 
-        let mut docs = vec![
-            {
-                let mut d = Document::new("a1".to_string());
-                d.fields.insert("name".to_string(), json!("Alice"));
-                d
-            },
-            {
-                let mut d = Document::new("a2".to_string());
-                d.fields.insert("name".to_string(), json!("Bob"));
-                d
-            },
-        ];
+    Ok(())
+}
 
-        let deny = DenyAll;
-        populate_relationships_batch_cached(
-            &PopulateContext {
-                conn: &conn,
-                registry: &registry,
-                collection_slug: "authors",
-                def: &authors_def,
-            },
-            &mut docs,
-            &PopulateOpts {
-                depth: 1,
-                select: None,
-                locale_ctx: None,
-                published_only: false,
-                join_access: Some(&deny),
-                user: None,
-            },
-            &NoneCache,
-        )
-        .unwrap();
+/// The children of one join across a batch, each with its parent's index and
+/// path.
+#[derive(Default)]
+struct JoinChildren {
+    owners: Vec<usize>,
+    docs: Vec<Document>,
+    ancestors: Vec<Visited>,
+}
 
-        for (i, doc) in docs.iter().enumerate() {
-            let arr = doc.fields.get("posts").and_then(|v| v.as_array()).unwrap();
-            assert!(
-                arr.is_empty(),
-                "parent {i} must have empty posts under Denied"
-            );
+impl JoinChildren {
+    fn push(&mut self, owner: usize, child: Document, path: &Visited) {
+        self.owners.push(owner);
+        self.docs.push(child);
+        self.ancestors.push(path.clone());
+    }
+
+    /// Write each parent's children (every parent gets an array, empty when
+    /// it has none) under `field`, tagged with the target `collection`.
+    fn assign(self, docs: &mut [Document], field: &str, collection: &str) {
+        let mut lists: Vec<Vec<Value>> = vec![Vec::new(); docs.len()];
+
+        for (owner, child) in self.owners.into_iter().zip(self.docs) {
+            lists[owner].push(document_to_json(&child, Some(collection)));
+        }
+
+        for (doc, list) in docs.iter_mut().zip(lists) {
+            doc.fields.insert(field.to_string(), Value::Array(list));
         }
     }
+}
+
+/// Populate fetched targets of `collection` one level deeper, each along its
+/// own path (`ancestors[i]` for `docs[i]`), when the level's depth allows.
+pub(super) fn descend(
+    pctx: &PopulateCtx<'_>,
+    (collection, def): (&str, &CollectionDefinition),
+    docs: &mut [Document],
+    ancestors: &[Visited],
+) -> Result<()> {
+    if pctx.effective_depth - 1 <= 0 {
+        return Ok(());
+    }
+
+    // A fresh dedup table for the child level: an ancestor's own fetch may
+    // still be in flight, and re-entering its table could wait on a key this
+    // very call stack owns.
+    let child_singleflight = Singleflight::new();
+
+    populate_batch_with_paths(
+        &PopulateContext {
+            conn: pctx.conn,
+            registry: pctx.registry,
+            collection_slug: collection,
+            fields: &def.fields,
+        },
+        docs,
+        &PopulateOpts {
+            depth: pctx.effective_depth - 1,
+            select: None,
+            locale_ctx: pctx.locale_ctx,
+            published_only: pctx.published_only,
+            join_access: pctx.join_access,
+            user: pctx.user,
+        },
+        (pctx.cache, &child_singleflight),
+        ancestors,
+    )
 }

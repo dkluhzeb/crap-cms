@@ -45,6 +45,23 @@ Login and forgot-password endpoints enforce dual rate limiting — per-email and
 
 Forgot-password requests are similarly limited per-email (`max_forgot_password_attempts`) and per-IP (`max_ip_login_attempts` with `forgot_password_window_seconds`).
 
+Every attempt is counted against the **per-IP budget first**: an attempt from an
+IP that is already over its budget is refused without touching the per-email
+(or, for MFA, per-user) budget, so a blocked client cannot keep growing the
+per-email limiter with invented addresses. An email longer than 254 octets (the
+longest deliverable address) is refused outright — as invalid credentials on
+login, with the usual generic success on forgot-password and resend — before
+any limiter or database work, and is never echoed back into the page. Limiter
+keys are stored as fixed-size SHA-256 digests in every backend (memory and
+Redis), whatever the caller submitted.
+
+A password longer than `[auth.password_policy] max_length` bytes (default 128)
+— but never less than 1024 bytes — is refused at login before any lookup or
+hash, so an arbitrarily long input never reaches Argon2. The 1024-byte floor
+means lowering `max_length` never locks anyone out: the policy bounds a password
+when it is *set* (registration, reset, change), while existing passwords up to
+the floor keep working at login.
+
 The **email-verification** (`/admin/verify-email`) and **password-reset**
 (`/admin/reset-password`) endpoints — and their gRPC twins `VerifyEmail` and
 `ResetPassword` — are rate-limited **per-IP only**, because the account isn't
@@ -70,8 +87,16 @@ Rate limiting applies to login, forgot-password, email verification, password
 reset and verification-email resend, on the admin UI and gRPC alike. Two further
 budgets use the forgot-password window: **resend verification** allows
 `max_forgot_password_attempts` per email and `max_ip_login_attempts` per IP, and
-**MFA code issuance** allows `max_forgot_password_attempts` codes per user. Behind a reverse proxy, the admin UI reads the client IP from
-`X-Forwarded-For`.
+**MFA code issuance** allows `max_forgot_password_attempts` codes per user.
+
+Per-IP budgets key an IPv4 client by its address and an IPv6 client by its
+**/64 network** (an IPv4-mapped IPv6 address counts as the IPv4 address), so a
+host cannot mint fresh budgets by rotating addresses inside its own prefix.
+Behind a reverse proxy, the admin UI, custom routes and the gRPC API read the
+client IP from `X-Forwarded-For` — only when the TCP peer is listed in
+`[server] trusted_proxies`, and walking the header from the right so a
+client-written entry can never pick the address (see
+[`trusted_proxies`](../configuration/crap-toml.md#server)).
 
 ### CSRF Protection
 

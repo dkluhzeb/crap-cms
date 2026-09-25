@@ -30,8 +30,9 @@
 use std::collections::HashSet;
 
 use crate::{
+    config::query_limits,
     core::{CollectionDefinition, FieldDefinition, prefixed_name, walk_leaf_fields},
-    db::{Filter, FilterClause, FilterOp},
+    db::{Filter, FilterClause, FilterOp, query::filter::check_filter_limits},
     service::ServiceError,
 };
 
@@ -40,21 +41,28 @@ fn root_key(path: &str) -> &str {
     path.split('.').next().unwrap_or(path)
 }
 
-/// Validate that user-supplied filter clauses do not target system columns.
+/// Validate user-supplied filter clauses: within the `[query]` size limits,
+/// and not targeting system columns.
 ///
-/// Walks both top-level filters and nested OR groups. Returns the first offending
-/// field path wrapped in a [`ServiceError::HookError`] (which maps to
-/// `InvalidArgument` at the gRPC boundary and a user-facing message on all other
-/// surfaces).
+/// Every surface's user `where` (admin, gRPC, MCP, Lua CRUD, queued bulk ops)
+/// reaches the service through here, so this is the one place both rules are
+/// enforced. Access-constraint filters are composed in afterwards and are
+/// neither size-capped nor held to the system-column rule.
 ///
-/// Any field path whose first dot-segment starts with `_` is rejected. To reach
-/// system-scoped data (trash, drafts), callers must use the typed request flags;
-/// the service layer injects the corresponding system filters post-validation.
+/// Walks both top-level filters and nested OR groups. Any field path whose
+/// first dot-segment starts with `_` is rejected. To reach system-scoped data
+/// (trash, drafts), callers must use the typed request flags; the service layer
+/// injects the corresponding system filters post-validation.
 ///
 /// # Errors
 ///
-/// Returns `HookError` for the first filter whose first dot-segment starts with `_`.
+/// Returns `Validation` (naming `where`) for a clause over the size limits, and
+/// `HookError` for the first filter whose first dot-segment starts with `_`.
+/// Both map to `InvalidArgument` at the gRPC boundary and a user-facing message
+/// on all other surfaces.
 pub fn validate_user_filters(filters: &[FilterClause]) -> Result<(), ServiceError> {
+    check_filter_limits(filters, query_limits())?;
+
     filters.iter().try_for_each(walk_user_filter)
 }
 
@@ -357,6 +365,23 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("_locked"), "error: {msg}");
         assert!(msg.contains("system column"), "error: {msg}");
+    }
+
+    /// Regression: a user `where` of any width was accepted — thousands of `or`
+    /// alternatives, each evaluated per row, pinned a connection. The service
+    /// chokepoint now refuses one over `[query] max_filter_terms` with a typed
+    /// validation error (invalid-argument on every surface).
+    #[test]
+    fn validates_rejects_a_where_over_the_term_limit() {
+        let terms = query_limits().max_filter_terms.get() + 1;
+        let wide = FilterClause::Or((0..terms).map(|i| single(&format!("f{i}"))).collect());
+
+        let err = validate_user_filters(&[wide]).unwrap_err();
+
+        let ServiceError::Validation(ve) = err else {
+            panic!("expected a typed validation error, got {err:?}");
+        };
+        assert_eq!(ve.errors[0].field, "where");
     }
 
     /// Nested dot paths whose first segment is a user field are fine — the

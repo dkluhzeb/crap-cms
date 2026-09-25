@@ -40,6 +40,37 @@ If the disk fills up, log writes silently fail; size the log directory to tolera
 - **Image processing** for upload collections
 - **Live updates** via SSE and gRPC streaming
 
+## Exposure and Connection Limits
+
+Both listeners protect themselves without a proxy in front: each holds at most
+`[server] max_connections` connections open (by default derived from the
+open-file limit and logged at startup; `serve` raises the soft limit to the hard
+limit first, so raise the hard limit — systemd `LimitNOFILE`, `ulimit -Hn` — to
+raise it), a connection
+that has not sent complete request headers (admin) or the HTTP/2 preface (gRPC)
+within `header_read_timeout` (default 30s) is closed, an admin request must
+arrive and be answered within `request_timeout` (default 60s), the public login
+/ reset / MFA / callback routes accept at most `auth_body_limit` (default
+64KB), and the gRPC server caps streams per connection
+(`grpc_max_concurrent_streams`) and drops peers that stop answering keep-alive
+pings (`grpc_keepalive_interval`).
+
+With `[server] h2c = true` the admin listener also speaks HTTP/2 without TLS.
+Such a connection is pinged every 60 seconds and closed when the peer stops
+answering — but the HTTP/2 server has no idle timeout, so an idle connection
+whose client keeps answering the pings stays open, holding a `max_connections`
+slot, until the client closes it. Enable `h2c` only for a reverse proxy you run
+in front of the admin port (which is what the option is for), not for arbitrary
+clients.
+
+File uploads into upload collections have no deadline by default
+(`upload_timeout = 0`), so a large file on a slow link is never cut off; set
+`upload_timeout` when anonymous clients may upload. For any internet-facing
+deployment a buffering reverse proxy such as nginx or Caddy in front is still
+recommended. Behind a proxy, set `trust_proxy = true` and list the proxy's
+addresses in `trusted_proxies` so per-IP rate limits see the real client; see
+[`[server]`](../configuration/crap-toml.md#server).
+
 ## When to Scale
 
 A single server handles thousands of concurrent readers and hundreds of writes per second. This covers the vast majority of CMS workloads — content sites, editorial teams, headless API backends.

@@ -246,4 +246,20 @@ impl DbConnection for CountingConn<'_> {
     fn normalize_timestamp(&self, ts: &str) -> String {
         self.inner.normalize_timestamp(ts)
     }
+
+    fn in_transaction(&self) -> bool {
+        self.inner.in_transaction()
+    }
+
+    fn begin_in_place(&self) -> Result<()> {
+        self.inner.begin_in_place()
+    }
+
+    fn commit_in_place(&self) -> Result<()> {
+        self.inner.commit_in_place()
+    }
+
+    fn rollback_in_place(&self) -> Result<()> {
+        self.inner.rollback_in_place()
+    }
 }

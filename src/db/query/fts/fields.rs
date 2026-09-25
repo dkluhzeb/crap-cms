@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use crate::{
     config::LocaleConfig,
@@ -11,22 +11,11 @@ use crate::{
         richtext::SearchableAttrs,
     },
     db::query::{
-        column_is_localized,
+        fts::layout::fts_columns,
         helpers::{prefixed_name, walk_leaf_fields},
-        stored_columns,
     },
     hooks::lifecycle::access::collect_denials_flat,
 };
-
-/// Field types that live in separate tables and have no column on the parent table.
-const CONTAINER_FIELD_TYPES: &[FieldType] = &[
-    FieldType::Array,
-    FieldType::Blocks,
-    FieldType::Group,
-    FieldType::Row,
-    FieldType::Collapsible,
-    FieldType::Tabs,
-];
 
 /// Text-like field types eligible for default FTS indexing.
 fn is_text_like(field_type: &FieldType) -> bool {
@@ -48,28 +37,94 @@ fn is_text_like(field_type: &FieldType) -> bool {
 /// layout wrappers. Array/Blocks sub-fields are excluded (they live in join
 /// tables, not on the parent row).
 ///
-/// Container types (array, blocks, group, row, collapsible, tabs) are always
-/// excluded as their own names because they don't have columns on the parent table.
+/// A configured list is refused at definition time when an entry is not a
+/// searchable field ([`validate_searchable_fields`]); the same rule filters it
+/// here, so a definition built in code without that check still never indexes
+/// a column the index cannot read.
 #[must_use]
 pub fn get_fts_fields(def: &CollectionDefinition) -> Vec<String> {
     if !def.admin.list_searchable_fields.is_empty() {
-        // Only keep fields that actually exist as columns on the parent table.
-        // Exclude: container types (stored in separate tables), names that
-        // don't match any field definition at all, and API-hidden fields (a
-        // search hit would leak a value the read strip removes).
-        let hidden = column_prefixes(&def.fields, &|f| f.hidden);
-
         return def
             .admin
             .list_searchable_fields
             .iter()
-            .filter(|name| is_fts_eligible_field(name, &def.fields))
-            .filter(|name| !covered_by(&hidden, name))
+            .filter(|name| searchable_field_problem(name, &def.fields).is_none())
             .cloned()
             .collect();
     }
 
     collect_fts_defaults(&def.fields)
+}
+
+/// Refuse a collection whose `admin.list_searchable_fields` names anything but
+/// a searchable field on the document row — an unknown name (a typo), an
+/// array/blocks/group, a hidden field, or a field whose type holds no
+/// searchable text (see [`FieldType::is_searchable`]).
+///
+/// Dropping such an entry silently would search fewer fields than configured,
+/// and a list with no valid entry would build no index at all — every search
+/// would then return the whole collection.
+///
+/// # Errors
+///
+/// Returns an error naming the collection, the entry and why it cannot be
+/// searched.
+pub fn validate_searchable_fields(def: &CollectionDefinition) -> Result<()> {
+    for name in &def.admin.list_searchable_fields {
+        if let Some(problem) = searchable_field_problem(name, &def.fields) {
+            bail!(
+                "Collection '{}': admin.list_searchable_fields entry '{name}' {problem}",
+                def.slug
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Why the flat column name `name` cannot be searched, or `None` when it can.
+/// Resolves names as FTS indexes them (`walk_leaf_fields`): top-level and
+/// wrapper-promoted fields by bare name, group sub-fields as `group__field`.
+fn searchable_field_problem(name: &str, fields: &[FieldDefinition]) -> Option<String> {
+    let Some(field_type) = leaf_field_type(name, fields) else {
+        return Some(
+            "is not a field on the document row (name a group sub-field as \
+             `group__field`; array and blocks sub-fields cannot be searched)"
+                .to_string(),
+        );
+    };
+
+    if !field_type.is_searchable() {
+        return Some(format!(
+            "has type '{}'; only text, textarea, richtext, email, code, select and radio \
+             fields can be searched",
+            field_type.as_str()
+        ));
+    }
+
+    if covered_by(&column_prefixes(fields, &|f| f.hidden), name) {
+        return Some(
+            "is hidden (or inside a hidden group); hidden fields are never indexed, \
+             since a search hit would reveal the value"
+                .to_string(),
+        );
+    }
+
+    None
+}
+
+/// The type of the field whose flat column name is `name`.
+fn leaf_field_type(name: &str, fields: &[FieldDefinition]) -> Option<FieldType> {
+    let mut found = None;
+
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
+        if prefixed_name(prefix, &field.name) == name {
+            found = Some(field.field_type.clone());
+        }
+        Ok(())
+    });
+
+    found
 }
 
 /// Flat column names (and `group__` prefixes) whose field — or an ancestor —
@@ -93,23 +148,6 @@ fn covered_by(prefixes: &[String], name: &str) -> bool {
                 .strip_prefix(p.as_str())
                 .is_some_and(|rest| rest.starts_with("__"))
     })
-}
-
-/// Check if a field name refers to an FTS-eligible column. Resolves the same
-/// flat-column names FTS indexes (`walk_leaf_fields`): top-level and
-/// wrapper-promoted fields by bare name, group sub-fields as `group__field`.
-/// Array/Blocks (and the wrapper/group containers themselves) are not eligible.
-fn is_fts_eligible_field(name: &str, fields: &[FieldDefinition]) -> bool {
-    let mut eligible = false;
-    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
-        if prefixed_name(prefix, &field.name) == name
-            && !CONTAINER_FIELD_TYPES.contains(&field.field_type)
-        {
-            eligible = true;
-        }
-        Ok(())
-    });
-    eligible
 }
 
 /// Collect default FTS fields (text-like) — top level, group sub-fields (as
@@ -142,32 +180,16 @@ fn collect_fts_defaults(fields: &[FieldDefinition]) -> Vec<String> {
 ///
 /// # Errors
 ///
-/// Returns an error if any field name conflicts with locale-suffixed naming.
+/// Returns an error if any field name is not a plain identifier or conflicts
+/// with locale-suffixed naming.
 pub fn get_fts_columns(
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
 ) -> Result<Vec<String>> {
-    let logical_fields = get_fts_fields(def);
-
-    if logical_fields.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    if !locale_config.is_enabled() {
-        return Ok(logical_fields);
-    }
-
-    let mut columns = Vec::new();
-    for field_name in &logical_fields {
-        // `logical_fields` can include fields promoted through transparent
-        // layout wrappers (Row/Collapsible/Tabs), so the localized lookup must
-        // descend the same way — otherwise a localized field inside a wrapper is
-        // mis-resolved to a bare column instead of `field__locale`.
-        let localized = column_is_localized(field_name, &def.fields).unwrap_or(false);
-        columns.extend(stored_columns(field_name, localized, locale_config)?);
-    }
-
-    Ok(columns)
+    Ok(fts_columns(def, locale_config)?
+        .into_iter()
+        .map(|column| column.name)
+        .collect())
 }
 
 /// How an indexed rich text column's value is read for its text.
@@ -501,8 +523,9 @@ mod tests {
 
     #[test]
     fn get_fts_fields_excludes_nonexistent_from_searchable() {
-        // A field name in list_searchable_fields that doesn't match any field definition
-        // should be silently filtered out (e.g. scaffolded default "title" when no title exists).
+        // A name that doesn't match any field definition is refused at
+        // definition time (`validate_searchable_fields`); a definition built in
+        // code without that check still never indexes it.
         let mut def = simple_def(vec![
             FieldDefinition::builder("items", FieldType::Array)
                 .fields(vec![text_field("label")])
@@ -514,6 +537,90 @@ mod tests {
     }
 
     // ── Regression: fields inside layout wrappers ────────────────────
+
+    fn problem(def: &CollectionDefinition) -> String {
+        validate_searchable_fields(def)
+            .expect_err("refused")
+            .to_string()
+    }
+
+    /// Regression: a typo or a container name in `list_searchable_fields` was
+    /// only warned about and dropped — a list with no valid entry built no
+    /// index, so every search returned the whole collection. It is now a load
+    /// error naming the entry.
+    #[test]
+    fn unknown_and_container_entries_are_refused() {
+        let mut def = simple_def(vec![
+            text_field("title"),
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![text_field("label")])
+                .build(),
+        ]);
+
+        def.admin.list_searchable_fields = vec!["titel".into()];
+        let err = problem(&def);
+        assert!(
+            err.contains("'titel'") && err.contains("not a field"),
+            "{err}"
+        );
+
+        def.admin.list_searchable_fields = vec!["items".into()];
+        let err = problem(&def);
+        assert!(err.contains("'items'") && err.contains("array"), "{err}");
+
+        def.admin.list_searchable_fields = vec!["items__label".into()];
+        assert!(problem(&def).contains("not a field"));
+    }
+
+    /// Regression: a number (or checkbox) entry indexed `COALESCE(col, '')`,
+    /// which Postgres refuses for a numeric column — the server would not boot.
+    /// Every non-text type is refused at definition time on both backends.
+    #[test]
+    fn non_text_entries_are_refused() {
+        let mut def = simple_def(vec![
+            FieldDefinition::builder("price", FieldType::Number).build(),
+            FieldDefinition::builder("active", FieldType::Checkbox).build(),
+            FieldDefinition::builder("published", FieldType::Date).build(),
+        ]);
+
+        for name in ["price", "active", "published"] {
+            def.admin.list_searchable_fields = vec![name.into()];
+            let err = problem(&def);
+
+            assert!(
+                err.contains(&format!("'{name}'")) && err.contains("has type"),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn hidden_entries_are_refused() {
+        let mut def = simple_def(vec![
+            FieldDefinition::builder("secret", FieldType::Text)
+                .hidden(true)
+                .build(),
+        ]);
+        def.admin.list_searchable_fields = vec!["secret".into()];
+
+        assert!(problem(&def).contains("hidden"));
+    }
+
+    #[test]
+    fn text_bearing_entries_are_accepted() {
+        let mut def = simple_def(vec![
+            text_field("title"),
+            FieldDefinition::builder("status", FieldType::Select).build(),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![text_field("title")])
+                .build(),
+        ]);
+        def.admin.list_searchable_fields =
+            vec!["title".into(), "status".into(), "seo__title".into()];
+
+        validate_searchable_fields(&def).expect("valid");
+        assert_eq!(get_fts_fields(&def), vec!["title", "status", "seo__title"]);
+    }
 
     #[test]
     fn searchable_field_inside_row() {

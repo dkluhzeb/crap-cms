@@ -6,11 +6,11 @@ use anyhow::anyhow;
 use tracing::error;
 
 use crate::{
-    core::ValidationError,
+    core::{ValidationError, upload::ImageProcessingBusy},
     db::{
         ConstraintKind::{ForeignKey, Unique},
-        constraint_kind, is_transient,
-        query::DocumentNotFound,
+        StatementTimedOut, constraint_kind, is_transient,
+        query::{DocumentNotFound, ref_count::UnavailableReferences},
     },
     hooks::VmPoolExhausted,
 };
@@ -133,6 +133,19 @@ fn downcast_typed(e: &anyhow::Error) -> Option<ServiceError> {
         return Some(ServiceError::Validation(ve.clone()));
     }
 
+    // A statement interrupted for running past its time limit exceeded a
+    // configured limit — not a server fault a client should retry as is.
+    if let Some(timed_out) = e.downcast_ref::<StatementTimedOut>() {
+        return Some(ServiceError::LimitExceeded(timed_out.to_string()));
+    }
+
+    // A reference to a document the write may not point at, with no field of
+    // the write to report it on (a restore, a publish bringing it from its
+    // pending draft): the caller's mistake, not a server fault.
+    if let Some(refused) = e.downcast_ref::<UnavailableReferences>() {
+        return Some(ServiceError::HookError(refused.to_string()));
+    }
+
     e.downcast_ref::<DocumentNotFound>()
         .map(|dnf| ServiceError::NotFound(dnf.to_string()))
 }
@@ -245,11 +258,13 @@ impl ServiceError {
 ///
 /// Every exhausted-resource condition answers here, by downcast, not by
 /// wording: [`is_transient`] reads the driver's SQLSTATE / `SQLite` result
-/// code, and [`VmPoolExhausted`] is the Lua VM pool's checkout timeout — the
-/// structural twin of the DB pool's, and equally retryable. A pool that runs
-/// dry is a capacity signal (503 / `UNAVAILABLE`), never an internal fault.
+/// code, [`VmPoolExhausted`] is the Lua VM pool's checkout timeout — the
+/// structural twin of the DB pool's, and equally retryable — and
+/// [`ImageProcessingBusy`] is every image-processing slot staying taken. A
+/// resource that runs dry is a capacity signal (503 / `UNAVAILABLE`), never an
+/// internal fault.
 fn transient_cause(e: &anyhow::Error) -> bool {
-    is_transient(e) || e.downcast_ref::<VmPoolExhausted>().is_some()
+    is_transient(e) || e.is::<VmPoolExhausted>() || e.is::<ImageProcessingBusy>()
 }
 
 /// The transient conditions recognizable only from text, for causes that reach
@@ -340,7 +355,7 @@ fn strip_lua_traceback(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::{Context as _, anyhow};
+    use anyhow::{Context as _, Error, anyhow};
 
     use super::*;
     use crate::core::{FieldError, ValidationError};
@@ -356,6 +371,28 @@ mod tests {
             panic!("expected HookError");
         };
         assert_eq!(msg, "runtime error: hook error: title is taken");
+    }
+
+    /// A typed reference refusal no field anchored is a caller error on
+    /// every conversion path, not an internal fault.
+    #[test]
+    fn a_typed_reference_refusal_is_a_hook_error() {
+        let refused = || {
+            Error::from(UnavailableReferences {
+                collection: "authors".to_string(),
+                ids: vec!["ghost".to_string()],
+            })
+            .context("Failed to update ref counts")
+        };
+
+        assert!(matches!(
+            ServiceError::from(refused()),
+            ServiceError::HookError(m) if m.contains("authors/ghost")
+        ));
+        assert!(matches!(
+            ServiceError::classify(refused(), "postgres"),
+            ServiceError::HookError(m) if m.contains("authors/ghost")
+        ));
     }
 
     /// A reference to a vanished target is a caller error (400), not an
@@ -420,6 +457,20 @@ mod tests {
         let e = Err::<(), _>(anyhow!("database is locked"))
             .context("Failed to update document x in 'posts'")
             .unwrap_err();
+        assert!(matches!(
+            ServiceError::classify(e, "sqlite"),
+            ServiceError::Transient(_)
+        ));
+    }
+
+    /// Image processing at capacity is a capacity signal wherever it surfaces,
+    /// even when a layer has flattened it to `anyhow` and back.
+    #[test]
+    fn classify_image_processing_busy_as_transient() {
+        let e = Err::<(), _>(Error::new(ImageProcessingBusy))
+            .context("Failed to store upload")
+            .unwrap_err();
+
         assert!(matches!(
             ServiceError::classify(e, "sqlite"),
             ServiceError::Transient(_)
@@ -575,6 +626,28 @@ mod tests {
             panic!("expected NotFound");
         };
         assert!(msg.contains("missing"), "{msg}");
+    }
+
+    /// A statement interrupted for running past its time limit — the
+    /// timeout a context names or the operation's deadline — is a limit
+    /// exceeded, on both classification paths.
+    #[test]
+    fn a_timed_out_statement_is_a_limit_exceeded() {
+        let timed_out = || {
+            Err::<(), _>(anyhow!("interrupted"))
+                .context(StatementTimedOut)
+                .context("query failed: SELECT 1")
+                .unwrap_err()
+        };
+
+        assert!(matches!(
+            ServiceError::classify(timed_out(), "sqlite"),
+            ServiceError::LimitExceeded(_)
+        ));
+        assert!(matches!(
+            ServiceError::from(timed_out()),
+            ServiceError::LimitExceeded(_)
+        ));
     }
 
     #[test]

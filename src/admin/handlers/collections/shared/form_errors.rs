@@ -15,11 +15,11 @@ use crate::{
         handlers::{
             forms::FormData,
             shared::{
-                EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
-                editor_read_ctx, enrich_field_contexts, forbidden, get_user_doc,
-                is_non_default_locale, page_with_toast, paths, redirect_response,
-                split_sidebar_fields, toast_only_error, translate_validation_errors,
-                write_error_toast,
+                EnrichOptions, ErrorLabels, HxNav, PageRequest, apply_display_conditions,
+                build_field_contexts, editor_read_ctx, enrich_field_contexts, forbidden,
+                get_user_doc, is_non_default_locale, page_with_toast, paths, redirect_response,
+                split_sidebar_fields, translate_validation_errors, ui_locale_of,
+                write_error_response,
             },
         },
     },
@@ -292,11 +292,10 @@ struct ValidationRender<'a> {
 
 /// Re-render the form with validation errors (works for both create and edit).
 async fn render_form_validation_errors(p: &ValidationRender<'_>, ve: &ValidationError) -> Response {
-    let locale = p
-        .auth_user
-        .map_or("en", |Extension(au)| au.ui_locale.as_str());
+    let locale = ui_locale_of(p.auth_user);
 
-    let error_map = translate_validation_errors(ve, &p.state.translations, locale);
+    let labels = ErrorLabels::new(&p.def.fields, Some(p.form.raw()));
+    let error_map = translate_validation_errors(ve, &labels, &p.state.translations, locale);
 
     let toast_msg = file_error_message(ve)
         .unwrap_or_else(|| p.state.translations.get(locale, "validation.error_summary"));
@@ -407,17 +406,11 @@ pub(in crate::admin::handlers::collections) async fn handle_collection_write_err
                 return render_form_validation_errors(&render, ve).await;
             }
 
-            toast_only_error(&write_error_toast(
-                op_label(editing),
-                p.err,
-                p.state.infra.pool.kind(),
-            ))
+            write_error_response(p.state, ui_locale_of(p.auth_user), op_label(editing), p.err)
         }
-        WriteErrorResponse::Toast => toast_only_error(&write_error_toast(
-            op_label(editing),
-            p.err,
-            p.state.infra.pool.kind(),
-        )),
+        WriteErrorResponse::Toast => {
+            write_error_response(p.state, ui_locale_of(p.auth_user), op_label(editing), p.err)
+        }
     }
 }
 

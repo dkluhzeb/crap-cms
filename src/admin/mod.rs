@@ -4,6 +4,11 @@
 //!
 //! - **`server`** — Axum router setup, request middleware, server lifecycle.
 //!   Routes are wired up in [`server::build_router`].
+//! - **`routes`** — the route tables (collection / global method routers,
+//!   protected routes, public pre-authentication routes with their small
+//!   body cap) that [`server::build_router`] layers.
+//! - **`listener`** — the accept loop the server runs: connection cap,
+//!   header-read deadline, h2c protocol sniff, graceful drain.
 //! - **`server_builder`** — typed builder for the parameter bundle that
 //!   [`server::start`] consumes from `commands/serve`.
 //! - **`auth_middleware`** — JWT session validation (cookie-based), custom
@@ -59,8 +64,11 @@ mod csrf;
 pub mod custom_pages;
 pub mod custom_routes;
 pub mod handlers;
+mod listener;
 mod mcp_handler;
 pub mod mcp_sessions;
+mod request_deadline;
+mod routes;
 pub mod server;
 pub(crate) mod server_builder;
 mod state;
@@ -71,8 +79,12 @@ pub(crate) mod test_state;
 pub mod test_support;
 pub mod translations;
 
-pub(crate) use body_limit::{global_body_limit, upload_body_limit};
+pub(crate) use body_limit::{auth_body_limit, global_body_limit, target_slug, upload_body_limit};
 pub use csp_nonce::{CSP_NONCE, CspNonce, current_nonce_or_empty};
+pub(crate) use request_deadline::{
+    API_PREFIX, COLLECTION_ITEM_ROUTE, COLLECTION_ROUTE, UPLOAD_API_ITEM_ROUTE, UPLOAD_API_ROUTE,
+    request_deadline,
+};
 pub use state::AdminState;
 pub use translations::Translations;
 

@@ -10,6 +10,7 @@ mod create;
 mod delete;
 mod delete_event;
 mod event_row;
+mod group_values;
 mod pending_draft;
 mod update;
 mod update_many_single;

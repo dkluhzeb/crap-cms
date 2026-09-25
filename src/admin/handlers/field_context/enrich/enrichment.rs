@@ -170,7 +170,7 @@ fn enrich_single_field(
             enrich_tabs(tf, field_def, doc_fields, opts, enrich_ctx);
         }
         FieldContext::Join(jf) => {
-            enrich_join(jf, field_def, enrich_ctx, opts.doc_id);
+            enrich_join(jf, field_def, enrich_ctx);
         }
         FieldContext::Richtext(rf) => {
             types::enrich_richtext(rf, reg);
@@ -256,6 +256,7 @@ pub fn enrich_field_contexts(
         reg,
         rel_locale_ctx: rel_locale_ctx.as_ref(),
         user: opts.user,
+        doc_id: opts.doc_id,
         ancestor_readonly: false,
     };
 

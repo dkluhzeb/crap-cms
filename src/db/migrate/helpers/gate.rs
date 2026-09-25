@@ -81,13 +81,13 @@ pub(in crate::db::migrate) fn block_paths(defs: &[BlockDefinition], keep: KeepLe
 }
 
 /// A leaf's name and the shape of the value it stores: its type, `[]` when it
-/// holds a list, `@tz` when a zone is stored beside it. Each of the three
-/// decides how a conversion rewrites the value, so each has to change the
-/// fingerprint.
+/// holds a list (a scalar has-many or a has-many reference), `@tz` when a zone
+/// is stored beside it. Each of the three decides how a conversion rewrites
+/// the value, so each has to change the fingerprint.
 fn leaf_path(field: &FieldDefinition) -> String {
     let mut path = format!("{}:{}", field.name, field.field_type.as_str());
 
-    if field.has_many {
+    if field.is_list() {
         path.push_str("[]");
     }
 
@@ -103,7 +103,7 @@ mod tests {
     use std::slice;
 
     use super::*;
-    use crate::core::{FieldTab, FieldType};
+    use crate::core::{FieldTab, FieldType, RelationshipConfig};
 
     fn field(name: &str, field_type: FieldType) -> FieldDefinition {
         FieldDefinition::builder(name, field_type).build()
@@ -148,6 +148,27 @@ mod tests {
         assert_eq!(field_paths(&[plain], &keep_all), "tags:select");
         assert_eq!(field_paths(&[list], &keep_all), "tags:select[]");
         assert_eq!(field_paths(&[zoned], &keep_all), "starts:date@tz");
+    }
+
+    /// Regression: a reference's list-ness lives on its relationship config,
+    /// so turning `has_many` on or off left its path — and every gate built
+    /// from it — unchanged, and the pass reshaping its stored rows never ran.
+    #[test]
+    fn a_reference_path_carries_its_cardinality() {
+        let reference = |has_many: bool| {
+            FieldDefinition::builder("author", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("users", has_many))
+                .build()
+        };
+
+        assert_eq!(
+            field_paths(&[reference(false)], &keep_all),
+            "author:relationship"
+        );
+        assert_eq!(
+            field_paths(&[reference(true)], &keep_all),
+            "author:relationship[]"
+        );
     }
 
     /// Groups and arrays name their children, blocks name them per block type,

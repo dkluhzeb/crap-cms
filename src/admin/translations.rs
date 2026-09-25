@@ -179,6 +179,10 @@ fn apply_overlays(dir: &Path, locales: &mut HashMap<String, HashMap<String, Stri
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::HashSet, path::PathBuf};
+
+    use regex::Regex;
+
     use super::*;
 
     #[test]
@@ -362,5 +366,152 @@ mod tests {
         assert_eq!(t.get("fr", "save"), "Enregistrer");
         // Unknown key in fr should fallback to en
         assert_eq!(t.get("fr", "cancel"), "Cancel");
+    }
+
+    /// A shipped translation table, parsed strictly.
+    fn shipped(source: &str) -> HashMap<String, String> {
+        serde_json::from_str(source).expect("a shipped translation file is a flat string map")
+    }
+
+    /// The `{{param}}` names a translation interpolates.
+    fn placeholders(template: &str) -> HashSet<&str> {
+        template
+            .split("{{")
+            .skip(1)
+            .filter_map(|rest| rest.split_once("}}").map(|(name, _)| name))
+            .collect()
+    }
+
+    /// Every file below `dir` with extension `ext`, recursively.
+    fn files_with_ext(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+
+            if path.is_dir() {
+                files_with_ext(&path, ext, out);
+            } else if path.extension().is_some_and(|e| e == ext) {
+                out.push(path);
+            }
+        }
+    }
+
+    /// The crate root the shipped sources live under.
+    fn crate_root() -> &'static Path {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+    }
+
+    /// Whether `path` is a Rust file holding only tests: a `*tests.rs` file
+    /// or one below a `tests` directory of the crate.
+    fn is_test_file(path: &Path) -> bool {
+        let relative = path.strip_prefix(crate_root()).unwrap_or(path);
+
+        relative
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with("tests.rs"))
+            || relative.components().any(|c| c.as_os_str() == "tests")
+    }
+
+    /// The shipped (non-test) text of a source file: a Rust file up to its
+    /// first `#[cfg(test)]`, nothing of a test-only file.
+    fn shipped_text(path: &Path) -> String {
+        let text = fs::read_to_string(path).expect("read a source file");
+
+        if path.extension().is_none_or(|e| e != "rs") {
+            return text;
+        }
+        if is_test_file(path) {
+            return String::new();
+        }
+
+        text.split("#[cfg(test)]")
+            .next()
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// The shipped sources that name translation keys, by kind: the admin
+    /// templates, the admin JS components, and the Rust sources (their
+    /// `validation.*` and `email.subject.*` keys and the `success_*` login
+    /// notices).
+    fn shipped_sources() -> [(Regex, String); 3] {
+        let root = crate_root();
+
+        let text = |dir: &str, ext: &str| {
+            let mut files = Vec::new();
+            files_with_ext(&root.join(dir), ext, &mut files);
+            files
+                .iter()
+                .map(PathBuf::as_path)
+                .map(shipped_text)
+                .collect::<String>()
+        };
+
+        [
+            (
+                Regex::new(r#"[{(]t\s+"([^"]+)""#).unwrap(),
+                text("templates", "hbs"),
+            ),
+            (
+                Regex::new(r#"\bt\(\s*['"]([^'"]+)['"]"#).unwrap(),
+                text("static/components", "js"),
+            ),
+            (
+                Regex::new(r#""((?:validation\.|email\.subject\.|success_)[a-z0-9_]+)""#).unwrap(),
+                text("src", "rs"),
+            ),
+        ]
+    }
+
+    /// The built-in English and German tables parse, hold the same keys,
+    /// and interpolate the same params per key.
+    #[test]
+    fn shipped_locales_share_keys_and_placeholders() {
+        let en = shipped(DEFAULT_EN);
+        let de = shipped(DEFAULT_DE);
+
+        let en_keys: HashSet<&String> = en.keys().collect();
+        let de_keys: HashSet<&String> = de.keys().collect();
+        assert_eq!(en_keys, de_keys, "en.json and de.json key sets differ");
+
+        for (key, template) in &en {
+            assert_eq!(
+                placeholders(template),
+                placeholders(&de[key]),
+                "`{key}` interpolates different params in en and de"
+            );
+        }
+    }
+
+    /// Regression: a key a template, component or check names without a
+    /// shipped translation renders the raw key (`validation.reference_unavailable`
+    /// did). Every literal key the shipped sources name exists.
+    #[test]
+    fn every_key_the_sources_name_is_shipped() {
+        let en = shipped(DEFAULT_EN);
+
+        for (pattern, text) in shipped_sources() {
+            for key in pattern.captures_iter(&text).map(|c| c[1].to_string()) {
+                assert!(en.contains_key(&key), "`{key}` has no translation");
+            }
+        }
+    }
+
+    /// Every shipped key is named by a shipped source — as a quoted literal —
+    /// so no string is translated that nothing shows.
+    #[test]
+    fn every_shipped_key_is_used() {
+        let corpus: String = shipped_sources().into_iter().map(|(_, t)| t).collect();
+
+        for key in shipped(DEFAULT_EN).keys() {
+            assert!(
+                corpus.contains(&format!("\"{key}\"")) || corpus.contains(&format!("'{key}'")),
+                "`{key}` is shipped but never used"
+            );
+        }
     }
 }

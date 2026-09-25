@@ -3,7 +3,7 @@
 //! registry, translations) to drive a handler helper. Integration tests in
 //! `tests/admin_*.rs` build their own state via [`test_support`](super::test_support).
 
-use std::sync::{Arc, atomic::AtomicUsize};
+use std::sync::Arc;
 
 use r2d2_sqlite::SqliteConnectionManager;
 use tokio_util::sync::CancellationToken;
@@ -12,7 +12,7 @@ use crate::{
     admin::{AdminState, Translations, custom_pages::CustomPageRegistry},
     config::{CrapConfig, EmailConfig, UploadConfig},
     core::{
-        Registry, SharedTokenProvider,
+        LiveSlots, Registry, SharedTokenProvider,
         auth::{Argon2PasswordProvider, JwtTokenProvider},
         email::create_email_provider,
         rate_limit::LoginRateLimiter,
@@ -83,8 +83,7 @@ fn test_admin_state_full(default_deny: bool, registry: Registry) -> AdminState {
         ip_mfa_limiter: Arc::new(LoginRateLimiter::new(20, 300)),
         has_auth: false,
         translations,
-        sse_connections: Arc::new(AtomicUsize::new(0)),
-        max_sse_connections: 0,
+        sse_slots: LiveSlots::new(0, 0),
         shutdown: CancellationToken::new(),
         password_provider: Arc::new(Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,

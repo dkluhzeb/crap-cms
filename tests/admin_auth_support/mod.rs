@@ -17,7 +17,7 @@ use crap_cms::{
     admin::{AdminState, server::build_router, templates},
     config::CrapConfig,
     core::{
-        DocumentFields, JwtSecret, Registry, auth,
+        DocumentFields, JwtSecret, LiveSlots, Registry, auth,
         collection::{Auth, CollectionDefinition, GlobalDefinition, Labels},
         field::{FieldDefinition, FieldType, LocalizedString},
         rate_limit::LoginRateLimiter,
@@ -180,8 +180,7 @@ pub fn setup_app_in_dir(
         ip_mfa_limiter: Arc::clone(&ip_mfa_limiter),
         has_auth,
         translations,
-        sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        max_sse_connections: 0,
+        sse_slots: LiveSlots::new(0, 0),
         shutdown: CancellationToken::new(),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
