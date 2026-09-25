@@ -341,8 +341,13 @@ fn collection_tools(slug: &str, def: &CollectionDefinition) -> Vec<ToolDefinitio
         tools.push(tool(CrudOp::Undelete));
     }
 
-    if def.versions.is_some() {
+    // Unpublish moves `_status`, which only a drafts-enabled collection has;
+    // the service refuses it otherwise, so the tool is not offered.
+    if def.has_drafts() {
         tools.push(tool(CrudOp::Unpublish));
+    }
+
+    if def.versions.is_some() {
         tools.push(tool(CrudOp::ListVersions));
         tools.push(tool(CrudOp::RestoreVersion));
     }
@@ -688,10 +693,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::{CrapConfig, McpConfig},
+        config::{CrapConfig, McpConfig, McpJobTools},
         core::{
             CollectionDefinition, Registry, VersionsConfig,
-            collection::GlobalDefinition,
+            collection::{COLLECTION_OPERATIONS, GlobalDefinition},
             field::{FieldDefinition, FieldType},
         },
         db::{migrate, pool},
@@ -704,8 +709,6 @@ mod tests {
     /// would promise a dead end.
     #[test]
     fn queue_arg_follows_the_job_tools_tier() {
-        use crate::config::McpJobTools;
-
         let reg = make_registry();
         let queue_prop = |mode: McpJobTools| {
             let config = McpConfig {
@@ -788,6 +791,29 @@ mod tests {
             parse_tool_name("global_read_settings", &reg).map(|p| p.op),
             Some(ToolOp::ReadGlobal)
         );
+    }
+
+    /// Unpublish moves `_status`, which a collection versioned without drafts
+    /// does not have — the service refuses it, so the tool is not listed. The
+    /// version history tools stay.
+    #[test]
+    fn unpublish_tool_is_listed_only_with_drafts() {
+        let mut audit = CollectionDefinition::new("audit");
+        audit.versions = Some(VersionsConfig::new(false, 10));
+        let mut posts = CollectionDefinition::new("posts");
+        posts.versions = Some(VersionsConfig::new(true, 10));
+
+        let mut reg = Registry::new();
+        reg.register_collection(audit);
+        reg.register_collection(posts);
+
+        let tools = generate_tools(&reg, &McpConfig::default(), &McpExposure::default());
+        let listed = |name: &str| tools.iter().any(|t| t.name == name);
+
+        assert!(!listed("unpublish_audit"));
+        assert!(listed("list_versions_audit"));
+        assert!(listed("restore_version_audit"));
+        assert!(listed("unpublish_posts"));
     }
 
     #[test]
@@ -1251,8 +1277,6 @@ mod tests {
 
     #[test]
     fn default_op_description_adds_draft_and_soft_delete_hints() {
-        use crate::core::collection::VersionsConfig;
-
         let mut def = CollectionDefinition::new("posts");
         def.versions = Some(VersionsConfig::new(true, 0));
         def.soft_delete = true;
@@ -1332,8 +1356,6 @@ mod tests {
 
     #[test]
     fn collection_operation_names_stay_in_sync_with_crud_ops() {
-        use crate::core::collection::COLLECTION_OPERATIONS;
-
         let ops = [
             CrudOp::Create,
             CrudOp::CreateMany,

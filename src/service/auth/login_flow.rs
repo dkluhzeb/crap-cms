@@ -17,7 +17,7 @@ use tracing::error;
 
 use crate::{
     core::{
-        CollectionDefinition, Document,
+        Builder, CollectionDefinition, Document,
         auth::PasswordProvider,
         collection::{Activation, Auth, StrategyCfg, Surface},
     },
@@ -32,9 +32,17 @@ use crate::{
 };
 
 /// Verified credentials: the user document and its current session version.
+#[derive(Builder)]
 pub struct LoginVerified {
+    #[builder(required)]
     pub user: Document,
+    #[builder(required)]
     pub session_version: u64,
+    /// Whether the authentication already satisfies the second factor — set
+    /// by [`mfa_gate`] for an auth callback the collection exempts (its
+    /// identity provider enforces one). The session minted from it carries
+    /// the stamp.
+    pub mfa: bool,
 }
 
 /// Outcome of [`verify_login`].
@@ -121,10 +129,7 @@ pub fn verify_login(
                     infra,
                     &conn,
                     &gate_request(req),
-                    LoginVerified {
-                        user: result.user,
-                        session_version: result.session_version,
-                    },
+                    LoginVerified::builder(result.user, result.session_version).build(),
                 ));
             }
             // Recoverable — fall through to strategies (whose results are
@@ -186,10 +191,7 @@ fn strategy_login(
         return Ok(Some(LoginOutcome::Denied));
     };
 
-    let verified = LoginVerified {
-        user,
-        session_version,
-    };
+    let verified = LoginVerified::builder(user, session_version).build();
 
     Ok(Some(mfa_gate(infra, conn, &gate_request(req), verified)))
 }

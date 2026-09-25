@@ -1,6 +1,6 @@
 //! Migration tracking: list, record, remove, and manage migration files.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use std::{collections::HashSet, fs, path::Path};
 use tracing::info;
 
@@ -119,29 +119,44 @@ pub fn record_migration(conn: &dyn DbConnection, filename: &str) -> Result<()> {
 
 /// Remove a migration record (for rollback).
 ///
+/// Exactly one record must go. The applied list a rollback works from is read
+/// before its transaction, so two rollbacks racing each other (two operators,
+/// two deploy hooks on a Postgres cluster) would both run the same `down`; the
+/// second one's DELETE then matches nothing. Failing it rolls that second
+/// `down` back, the guard `up` gets from the table's primary key.
+///
 /// # Errors
 ///
-/// Returns a backend error if the DELETE fails.
+/// Returns a backend error if the DELETE fails, or an error when no record of
+/// `filename` is there to remove.
 pub fn remove_migration(conn: &dyn DbConnection, filename: &str) -> Result<()> {
-    conn.execute(
-        &format!(
-            "DELETE FROM _crap_migrations WHERE filename = {}",
-            conn.placeholder(1)
-        ),
-        &[DbValue::Text(filename.to_string())],
-    )
-    .with_context(|| format!("Failed to remove migration record {filename}"))?;
+    let removed = conn
+        .execute(
+            &format!(
+                "DELETE FROM _crap_migrations WHERE filename = {}",
+                conn.placeholder(1)
+            ),
+            &[DbValue::Text(filename.to_string())],
+        )
+        .with_context(|| format!("Failed to remove migration record {filename}"))?;
+
+    if removed != 1 {
+        bail!(
+            "Migration {filename} is no longer recorded as applied — another run rolled it \
+             back first; this rollback is undone"
+        );
+    }
 
     Ok(())
 }
 
-/// Drop all user tables (for `migrate fresh`). Drops everything except sqlite internals.
+/// Drop every user table, on the transaction `migrate fresh` recreates the
+/// schema on (see `sync::recreate_all`).
 ///
 /// # Errors
 ///
 /// Returns a backend error if listing tables or any DROP statement fails.
-pub fn drop_all_tables(pool: &DbPool) -> Result<()> {
-    let conn = pool.get().context("Failed to get DB connection")?;
+pub(super) fn drop_all_tables(conn: &dyn DbConnection) -> Result<()> {
     let tables = conn.list_user_tables()?;
 
     // Postgres refuses to drop a table other tables reference (join tables
@@ -186,6 +201,21 @@ mod tests {
         assert!(applied.contains("001_init.lua"));
         assert!(applied.contains("002_add_field.lua"));
         assert_eq!(applied.len(), 2);
+    }
+
+    /// Regression: two racing rollbacks both ran the same `down`, the second
+    /// one's DELETE matching nothing and committing anyway. Removing a record
+    /// that is not there fails, so that second rollback is undone.
+    #[test]
+    fn removing_an_absent_migration_record_fails() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        record_migration(&conn, "001_init.lua").unwrap();
+        remove_migration(&conn, "001_init.lua").unwrap();
+
+        let err = remove_migration(&conn, "001_init.lua").unwrap_err();
+        assert!(err.to_string().contains("001_init.lua"), "{err:#}");
     }
 
     #[test]
@@ -248,15 +278,14 @@ mod tests {
     #[test]
     fn drop_all_tables_cleans_everything() {
         let (_dir, pool) = in_memory_pool();
-        {
-            let conn = pool.get().unwrap();
-            conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", &[])
-                .unwrap();
-            conn.execute("CREATE TABLE users (id TEXT PRIMARY KEY)", &[])
-                .unwrap();
-        }
-        drop_all_tables(&pool).unwrap();
         let conn = pool.get().unwrap();
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", &[])
+            .unwrap();
+        conn.execute("CREATE TABLE users (id TEXT PRIMARY KEY)", &[])
+            .unwrap();
+
+        drop_all_tables(&conn).unwrap();
+
         assert!(!table_exists(&conn, "posts").unwrap());
         assert!(!table_exists(&conn, "users").unwrap());
     }

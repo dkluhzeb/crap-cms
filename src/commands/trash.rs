@@ -15,14 +15,14 @@ use crate::{
     },
     db::{BoxedConnection, DbConnection, DbPool, DbValue, query},
     hooks::HookRunner,
-    service::AppInfra,
+    service::{AppInfra, TrashedDoc},
 };
 
 mod purged;
 mod restore;
 
 use self::{
-    purged::{Purged, delete_purged_files},
+    purged::{PurgeTally, Purged, delete_purged_files},
     restore::restore_document,
 };
 
@@ -224,8 +224,8 @@ fn run_purge(p: &PurgeParams<'_>) -> Result<()> {
     let threshold_secs = parse_threshold(p.older_than)?;
 
     let mut conn = p.pool.write().context("Failed to get DB connection")?;
-    let mut total = 0u64;
-    let mut total_skipped = 0u64;
+    let mut candidates = 0u64;
+    let mut tally = PurgeTally::default();
 
     for slug in &slugs {
         let Some(def) = p.registry.collections.get(slug.as_str()) else {
@@ -238,75 +238,92 @@ fn run_purge(p: &PurgeParams<'_>) -> Result<()> {
             continue;
         }
 
+        candidates += ids.len() as u64;
+
         if p.previews_only() {
             for id in &ids {
                 cli::info(&format!("Would purge: {slug} / {id}"));
             }
 
-            total += ids.len() as u64;
             continue;
         }
 
-        let skipped = purge_collection(p, &mut conn, (slug, def), &ids)?;
-        total_skipped += skipped;
-        total += ids.len() as u64 - skipped;
+        // Each candidate is re-checked against the same threshold under its
+        // row's lock: it may have been restored since this read.
+        let docs: Vec<TrashedDoc<'_>> = ids
+            .iter()
+            .map(|id| TrashedDoc::new(id, threshold_secs))
+            .collect();
+
+        tally.add(purge_collection(p, &mut conn, def, &docs)?);
     }
 
-    report_purge(p, total, total_skipped);
+    report_purge(p, candidates, tally);
 
     Ok(())
 }
 
 /// Print the purge's outcome: the dry-run tally, the confirmation request,
 /// or what was deleted.
-fn report_purge(p: &PurgeParams<'_>, total: u64, skipped: u64) {
+fn report_purge(p: &PurgeParams<'_>, candidates: u64, tally: PurgeTally) {
     if p.dry_run {
-        cli::info(&format!("{total} document(s) would be purged."));
+        cli::info(&format!("{candidates} document(s) would be purged."));
         return;
     }
 
     if !p.confirm {
         cli::warning(&format!(
-            "This will permanently delete {total} trashed document(s)."
+            "This will permanently delete {candidates} trashed document(s)."
         ));
         cli::hint("Pass -y/--confirm to proceed.");
         return;
     }
 
-    cli::success(&format!("Purged {total} trashed document(s)."));
+    cli::success(&format!("Purged {} trashed document(s).", tally.purged));
+    report_skips(tally);
+}
 
-    if skipped > 0 {
+/// Report the documents a purge skipped, by reason.
+fn report_skips(tally: PurgeTally) {
+    if tally.referenced > 0 {
         cli::info(&format!(
-            "{skipped} document(s) skipped — still referenced."
+            "{} document(s) skipped — still referenced.",
+            tally.referenced
+        ));
+    }
+
+    if tally.gone > 0 {
+        cli::info(&format!(
+            "{} document(s) skipped — no longer in the trash.",
+            tally.gone
         ));
     }
 }
 
 /// Purge one collection's candidates in a transaction of their own, deleting
 /// the upload files only once it commits: a purge that fails keeps both the
-/// rows and their files. Runs on the purge's one connection. Returns the
-/// number of skipped documents.
+/// rows and their files. Runs on the purge's one connection.
 fn purge_collection(
     p: &PurgeParams<'_>,
     conn: &mut BoxedConnection,
-    (slug, def): (&str, &CollectionDefinition),
-    ids: &[String],
-) -> Result<u64> {
+    def: &CollectionDefinition,
+    docs: &[TrashedDoc<'_>],
+) -> Result<PurgeTally> {
     let mut purged = Purged::new(p.infra);
 
     // `transaction_immediate()` — the purge issues reads (upload lookups) and
     // writes (DELETEs + FTS sync) on the same tx. DEFERRED would risk
     // `SQLITE_BUSY_SNAPSHOT` against concurrent writers.
     let tx = conn.transaction_immediate().context("Start transaction")?;
-    purged.purge(&tx, (slug, def), ids, p.locale)?;
+    purged.purge(&tx, def, docs, p.locale)?;
     tx.commit().context("Commit purge")?;
 
     delete_purged_files(p.storage, &purged);
 
-    let skipped = purged.skipped;
+    let tally = purged.tally;
     purged.publish(p.infra);
 
-    Ok(skipped)
+    Ok(tally)
 }
 
 /// Find IDs of soft-deleted documents eligible for purging in a collection.
@@ -409,30 +426,28 @@ fn run_empty(p: &EmptyParams<'_>) -> Result<()> {
     }
 
     let ids: Vec<String> = docs.iter().map(|d| d.id.to_string()).collect();
+    let trashed: Vec<TrashedDoc<'_>> = ids.iter().map(|id| TrashedDoc::new(id, None)).collect();
     let mut purged = Purged::new(infra);
 
     // `transaction_immediate()` — the purge interleaves reads (upload path
     // lookups) and writes (DELETEs + FTS sync) on the same tx. See the
-    // matching note in `purge_collection`.
+    // matching note in `purge_collection`. Each document is re-checked under
+    // its row's lock: one restored since the read above is left alone.
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    purged.purge(&tx, (collection, &def), &ids, locale)?;
+    purged.purge(&tx, &def, &trashed, locale)?;
 
     tx.commit().context("Commit empty trash")?;
     delete_purged_files(storage, &purged);
 
-    let skipped = purged.skipped;
+    let tally = purged.tally;
     purged.publish(infra);
+
     cli::success(&format!(
         "Permanently deleted {} document(s) from '{}'.",
-        ids.len() as u64 - skipped,
-        collection
+        tally.purged, collection
     ));
-    if skipped > 0 {
-        cli::info(&format!(
-            "{skipped} document(s) skipped — still referenced."
-        ));
-    }
+    report_skips(tally);
 
     Ok(())
 }

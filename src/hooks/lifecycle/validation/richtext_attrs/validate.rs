@@ -13,15 +13,17 @@ use crate::{
         checks::OptionCheck,
         custom::{ValidateCtxSource, run_validate_function_inner},
         is_empty_value,
+        stored::StoredDocument,
     },
 };
 
-use super::extract::{
-    NodeInstance, extract_nodes_from_html, extract_nodes_from_json, json_document,
+use super::{
+    extract::{KnownNodes, NodeInstance, extract_nodes},
+    held::NodeAttrSite,
 };
 
 /// Bundled context for richtext node attr validation.
-pub(crate) struct RichtextValidationCtx<'a> {
+pub(in crate::hooks::lifecycle::validation) struct RichtextValidationCtx<'a> {
     pub lua: &'a Lua,
     pub registry: &'a Registry,
     pub collection: &'a str,
@@ -33,6 +35,8 @@ pub(crate) struct RichtextValidationCtx<'a> {
     pub operation: &'a str,
     /// The document id on `update`; `None` on `create`.
     pub id: Option<&'a str>,
+    /// The edited document, whose own attr values stay acceptable unchanged.
+    stored: Option<&'a StoredDocument<'a>>,
 }
 
 impl<'a> RichtextValidationCtx<'a> {
@@ -50,12 +54,13 @@ impl<'a> RichtextValidationCtx<'a> {
             locale: None,
             operation: "create",
             id: None,
+            stored: None,
         }
     }
 }
 
 /// Builder for [`RichtextValidationCtx`].
-pub(crate) struct RichtextValidationCtxBuilder<'a> {
+pub(in crate::hooks::lifecycle::validation) struct RichtextValidationCtxBuilder<'a> {
     lua: &'a Lua,
     registry: &'a Registry,
     collection: &'a str,
@@ -63,6 +68,7 @@ pub(crate) struct RichtextValidationCtxBuilder<'a> {
     locale: Option<&'a str>,
     operation: &'a str,
     id: Option<&'a str>,
+    stored: Option<&'a StoredDocument<'a>>,
 }
 
 impl<'a> RichtextValidationCtxBuilder<'a> {
@@ -86,6 +92,12 @@ impl<'a> RichtextValidationCtxBuilder<'a> {
         self
     }
 
+    /// The document the write lands on.
+    pub fn stored(mut self, stored: Option<&'a StoredDocument<'a>>) -> Self {
+        self.stored = stored;
+        self
+    }
+
     pub fn build(self) -> RichtextValidationCtx<'a> {
         RichtextValidationCtx {
             lua: self.lua,
@@ -95,6 +107,7 @@ impl<'a> RichtextValidationCtxBuilder<'a> {
             locale: self.locale,
             operation: self.operation,
             id: self.id,
+            stored: self.stored,
         }
     }
 }
@@ -103,13 +116,17 @@ impl<'a> RichtextValidationCtxBuilder<'a> {
 ///
 /// Extracts custom nodes from the content (JSON or HTML format), then runs
 /// the same validation checks used for regular fields on each node attr. A
-/// JSON-format value may be the document's text or the document object; one
-/// that is neither (unparseable, too deep, another type) is refused, since its
-/// nodes cannot be checked.
+/// JSON-format value may be the document's text or the document object; a
+/// value that is neither is refused by the field's own shape check
+/// (`checks::check_richtext_value`), so this pass finds no nodes in it.
 ///
 /// Error field names use the format `"{field_name}[{node_type}#{index}].{attr_name}"`
 /// to make errors identifiable (e.g., `"content[cta#0].url"`).
-pub(crate) fn validate_richtext_node_attrs(
+///
+/// A select/radio attr value the edited document already holds — the same attr
+/// of a node of the same type in this field — is accepted although the attr no
+/// longer declares it, exactly like a field's own retired option.
+pub(in crate::hooks::lifecycle::validation) fn validate_richtext_node_attrs(
     ctx: &RichtextValidationCtx<'_>,
     content: &Value,
     field_name: &str,
@@ -122,34 +139,26 @@ pub(crate) fn validate_richtext_node_attrs(
         return;
     }
 
-    let instances = if field.parses_json() {
-        let Some(doc) = json_document(content) else {
-            errors.push(invalid_document_error(field_name, field));
-            return;
-        };
-        extract_nodes_from_json(&doc, &known_nodes)
-    } else {
-        let Value::String(html) = content else {
-            return;
-        };
-        extract_nodes_from_html(html, &known_nodes)
+    let call = InstanceCall {
+        field_name,
+        field,
+        known_nodes: &known_nodes,
     };
 
-    for inst in &instances {
-        let attr_defs = match known_nodes.get(inst.node_type.as_str()) {
-            Some(defs) => *defs,
-            None => continue,
-        };
-
-        validate_node_instance(ctx, inst, attr_defs, field_name, errors);
+    for inst in &extract_nodes(field, content, &known_nodes) {
+        validate_node_instance(ctx, &call, inst, errors);
     }
 }
 
+/// The rich text field whose node instances are validated.
+struct InstanceCall<'a> {
+    field_name: &'a str,
+    field: &'a FieldDefinition,
+    known_nodes: &'a KnownNodes<'a>,
+}
+
 /// The field's declared nodes that have attrs, by node name.
-fn known_nodes_with_attrs<'r>(
-    registry: &'r Registry,
-    field: &FieldDefinition,
-) -> HashMap<&'r str, &'r [FieldDefinition]> {
+fn known_nodes_with_attrs<'r>(registry: &'r Registry, field: &FieldDefinition) -> KnownNodes<'r> {
     field
         .admin
         .nodes
@@ -160,27 +169,28 @@ fn known_nodes_with_attrs<'r>(
         .collect()
 }
 
-fn invalid_document_error(field_name: &str, field: &FieldDefinition) -> FieldError {
-    FieldError::with_key(
-        field_name,
-        format!("{} must be a valid rich text JSON document", field.name),
-        "validation.invalid_richtext_json",
-    )
-    .with_param("field", field.name.clone())
-}
-
 /// Validate a single node instance's attrs against their field definitions.
 fn validate_node_instance(
     ctx: &RichtextValidationCtx<'_>,
+    call: &InstanceCall<'_>,
     inst: &NodeInstance,
-    attr_defs: &[FieldDefinition],
-    field_name: &str,
     errors: &mut Vec<FieldError>,
 ) {
-    for attr_def in attr_defs {
+    let Some(attr_defs) = call.known_nodes.get(inst.node_type.as_str()) else {
+        return;
+    };
+
+    let site = ctx.stored.map(|stored| NodeAttrSite {
+        stored,
+        richtext: call.field,
+        known_nodes: call.known_nodes,
+        node_type: &inst.node_type,
+    });
+
+    for attr_def in *attr_defs {
         let data_key = format!(
             "{}[{}#{}].{}",
-            field_name, inst.node_type, inst.index, attr_def.name
+            call.field_name, inst.node_type, inst.index, attr_def.name
         );
         let value = inst.attrs.get(&attr_def.name);
         let is_empty = is_empty_value(value);
@@ -202,16 +212,6 @@ fn validate_node_instance(
             continue;
         }
 
-        // A `has_many` node attr (Text/Number/Select/Radio list) gets the same
-        // per-element + count validation as at the top level and in array/blocks
-        // rows — previously this leaf site skipped it. (Row-bounds and the
-        // polymorphic allowlist don't apply: a node attr can't be an
-        // array/blocks or a relationship field.)
-        checks::check_has_many_elements(
-            &checks::HasManyCheck::new(attr_def, &data_key, value, is_empty).draft(ctx.is_draft),
-            errors,
-        );
-
         if is_empty {
             continue;
         }
@@ -220,7 +220,7 @@ fn validate_node_instance(
         checks::check_numeric_bounds(attr_def, &data_key, value, is_empty, errors);
         checks::check_email_format(attr_def, &data_key, value, is_empty, errors);
         checks::check_option_valid(
-            &OptionCheck::new(attr_def, &data_key, value, is_empty),
+            &OptionCheck::new(attr_def, &data_key, value, is_empty).node_attr(site.as_ref()),
             errors,
         );
         checks::check_date_field(attr_def, &data_key, value, is_empty, errors);
@@ -315,10 +315,11 @@ mod tests {
             .build()
     }
 
-    /// Regression: unparseable JSON-format content found no nodes, so its
-    /// node attrs went unchecked; it is now refused.
+    /// Unparseable JSON-format content is the field shape check's to refuse
+    /// (`checks::check_richtext_value`); this pass must not report it a second
+    /// time.
     #[test]
-    fn validate_richtext_unparseable_json_is_refused() {
+    fn validate_richtext_unparseable_json_is_left_to_the_shape_check() {
         let lua = Lua::new();
         let reg = make_registry_with_cta();
         let field = make_richtext_field(vec!["cta".to_string()], "json");
@@ -332,11 +333,7 @@ mod tests {
             &mut errors,
         );
 
-        assert_eq!(errors.len(), 1);
-        assert_eq!(
-            errors[0].key.as_deref(),
-            Some("validation.invalid_richtext_json")
-        );
+        assert!(errors.is_empty(), "{errors:?}");
     }
 
     /// Regression: a JSON-format document sent as an object (MCP, Lua tables)

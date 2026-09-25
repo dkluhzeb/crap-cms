@@ -8,6 +8,7 @@ mod custom;
 mod recursive;
 pub(crate) mod richtext_attrs;
 mod runner;
+mod stored;
 mod sub_fields;
 
 pub use checks::is_valid_email_format;

@@ -45,9 +45,10 @@ pub use read_shape::{
 pub use resize::process_image_entry_with_storage;
 pub use size_result::SizeResult;
 pub use storage::{
-    ByteRange, RangedObject, SharedStorage, StorageBackend, StorageNotFound, create_storage,
-    create_storage_with_lease, key_from_served_url, served_url, sign_upload_path,
-    signed_upload_url, verify_upload_sig,
+    ByteRange, ObjectMeta, RangedObject, SharedStorage, StorageBackend, StorageNotFound,
+    StorageStat, create_storage, create_storage_with_lease, is_staging_file_name,
+    key_from_served_url, served_url, sign_upload_path, signed_upload_url, slice_locally,
+    verify_upload_sig,
 };
 pub use stored_name::{STORED_ID_LEN, original_filename};
 pub use uploaded_file::UploadedFile;

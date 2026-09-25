@@ -3,10 +3,13 @@
 use serde_json::Value;
 
 use crate::{
-    core::{Document, FieldDefinition, HookRef, collection::GlobalDefinition},
-    db::{AccessResult, DbConnection, LocaleContext, ops, query, query::helpers::global_table},
+    core::{Document, HookRef, collection::GlobalDefinition},
+    db::{DbConnection, LocaleContext, ops, query, query::helpers::global_table},
     hooks::{AccessCheckInput, lifecycle::AfterReadCtx},
-    service::{GetGlobalInput, ReadHooks, ReadStripArgs, ServiceContext, ServiceError, helpers},
+    service::{
+        GetGlobalInput, ReadHooks, ReadStripArgs, ServiceContext, ServiceError,
+        global_access_allowed, helpers,
+    },
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
@@ -27,9 +30,12 @@ struct GlobalView<'a> {
 ///   version snapshot when one exists (a pending draft *edit* lives in the
 ///   version table while the main row stays published), mirroring
 ///   `find_by_id_full(use_draft = true)`. Falls back to the main row otherwise.
-/// - **Drafts, reader did not opt in** — hide an unpublished global (main row
-///   `_status = 'draft'`) by serving the last published snapshot, or empty
-///   content when nothing was ever published.
+/// - **Drafts, reader did not opt in** — an unpublished global (main row
+///   `_status = 'draft'`) reads as EMPTY until it is published again: the
+///   global twin of an unpublished collection document disappearing from
+///   public reads. Serving the last published snapshot instead made
+///   unpublishing a no-op for public readers, since every published write
+///   records exactly the row it wrote.
 fn resolve_global_doc(
     conn: &dyn DbConnection,
     slug: &str,
@@ -82,31 +88,23 @@ fn resolve_global_doc(
     let main = query::get_global(conn, slug, def, locale_ctx)?;
 
     if main.fields.get("_status").and_then(Value::as_str) == Some("draft") {
-        return published_global_or_empty(conn, &gtable, &def.fields, locale_ctx).map(Some);
+        return Ok(Some(unpublished_global()));
     }
 
     Ok(Some(main))
 }
 
-/// The published content to serve when an unpublished global is read without a
-/// draft opt-in: the most recent `published` version snapshot, or an empty
-/// global when nothing was ever published, resolved for the reading locale.
-/// `gtable` is the `_global_{slug}` table name (the version-table base for
-/// globals).
-fn published_global_or_empty(
-    conn: &dyn DbConnection,
-    gtable: &str,
-    fields: &[FieldDefinition],
-    locale_ctx: Option<&LocaleContext>,
-) -> anyhow::Result<Document> {
-    if let Some(version) = query::find_latest_published_version(conn, gtable, "default")?
-        && let Some(doc) =
-            ops::snapshot_read_document("default", &version.snapshot, fields, locale_ctx)?
-    {
-        return Ok(doc);
-    }
+/// What a non-draft reader gets for an unpublished global: no field content,
+/// `_status = "draft"` — every field reads as null until the global is
+/// published again. Also the document the live streams announce to a
+/// published-only subscriber when the global is unpublished.
+pub(crate) fn unpublished_global() -> Document {
+    let mut doc = Document::builder("default").build();
 
-    Ok(Document::builder("default").build())
+    doc.fields
+        .insert("_status".to_string(), Value::String("draft".to_string()));
+
+    doc
 }
 
 /// Resolve a single global view (published or draft) to a boolean visibility.
@@ -134,14 +132,7 @@ fn global_view_visible(
             .build(),
     )?;
 
-    match access {
-        AccessResult::Allowed => Ok(true),
-        AccessResult::Denied => Ok(false),
-        AccessResult::Constrained(_) => Err(ServiceError::HookError(format!(
-            "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
-            ctx.slug
-        ))),
-    }
+    global_access_allowed(&access, ctx.slug)
 }
 
 /// Read a global document with the full read lifecycle.
@@ -231,7 +222,7 @@ mod tests {
             Document, FieldDefinition, FieldType, GlobalDefinition, HookRef, Hooks, ReqContext,
             collection::VersionsConfig,
         },
-        db::LocaleMode,
+        db::{AccessResult, LocaleMode},
         hooks::lifecycle::AfterReadCtx,
         service::{FieldReadStrip, hooks::ReadHooks},
     };
@@ -363,7 +354,7 @@ mod tests {
             conn.execute_batch(
                 "INSERT INTO _versions__global_settings
                     (id, _parent, _version, _status, _latest, snapshot)
-                 VALUES ('v1', 'default', 1, 'published', 0, '{\"title\": \"Published\"}'),
+                 VALUES ('v1', 'default', 1, 'published', 0, '{\"title\": \"UNPUBLISHED DRAFT\"}'),
                         ('v2', 'default', 2, 'draft', 1, '{\"title\": \"UNPUBLISHED DRAFT\"}');",
             )
             .unwrap();
@@ -376,10 +367,12 @@ mod tests {
         (conn, def)
     }
 
-    /// Regression: a non-draft read of an unpublished global must not leak the
-    /// draft sitting in the main row. It serves the last published snapshot.
+    /// An unpublished global reads as empty to a non-draft reader — even with
+    /// a published version on record whose content equals the unpublished row,
+    /// which is exactly the state unpublishing a published global leaves. The
+    /// draft view is unchanged.
     #[test]
-    fn unpublished_global_hidden_from_public_read() {
+    fn unpublished_global_reads_empty_to_public_readers() {
         let (conn, def) = unpublished_global(true);
         let rh = NoopReadHooks;
         let ctx = ServiceContext::global("settings", &def)
@@ -389,9 +382,13 @@ mod tests {
 
         let public = get_global_document(&ctx, &GetGlobalInput::new(None, None)).unwrap();
         assert_eq!(
-            public.fields.get("title").and_then(Value::as_str),
-            Some("Published"),
-            "public read must serve the last published snapshot, not the draft"
+            public.fields.get("title"),
+            None,
+            "an unpublished global serves no content to public readers"
+        );
+        assert_eq!(
+            public.fields.get("_status").and_then(Value::as_str),
+            Some("draft")
         );
 
         // An editor opting into drafts still sees the unpublished content.

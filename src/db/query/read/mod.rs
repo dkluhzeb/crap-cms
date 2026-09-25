@@ -12,6 +12,7 @@ mod missing_relations;
 pub(super) mod select;
 mod stale_locale_rows;
 mod stored_deleted_at;
+mod stored_fields;
 
 pub use back_references::{BackReference, filter_visible_ids, find_back_references};
 pub use completeness::{fetch_row_columns, localized_join_row_exists};
@@ -24,3 +25,4 @@ pub use missing_relations::{MissingRelation, find_missing_relations};
 pub use select::apply_select_to_document;
 pub use stale_locale_rows::count_rows_outside_locales;
 pub use stored_deleted_at::stored_deleted_at;
+pub(crate) use stored_fields::{StoredRow, find_pending_draft_fields, find_stored_fields};

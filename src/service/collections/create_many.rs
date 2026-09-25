@@ -114,7 +114,6 @@ fn create_many_pooled(
                     .password(item.password.as_deref())
                     .locale_ctx(opts.locale_ctx.as_ref())
                     .draft(opts.draft)
-                    .ui_locale(ctx.ui_locale.clone())
                     .build();
 
                 // A failure here returns via `?`; the envelope rolls back
@@ -166,7 +165,6 @@ fn create_many_on_conn(
             .password(item.password.as_deref())
             .locale_ctx(opts.locale_ctx.as_ref())
             .draft(opts.draft)
-            .ui_locale(ctx.ui_locale.clone())
             .build();
 
         let ((doc, _after_ctx), row) = create_document_gated(ctx, input)?;

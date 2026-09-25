@@ -31,8 +31,7 @@ pub struct UpdateManyResult {
 
 /// Options controlling bulk update behavior, via
 /// `UpdateManyOptions::builder()`. Unset options default to: no locale
-/// context, hooks run, published rows only, no UI locale, no document limit,
-/// no deadline.
+/// context, hooks run, published rows only, no document limit, no deadline.
 #[derive(Builder)]
 pub struct UpdateManyOptions<'a> {
     /// Locale context for the update.
@@ -40,10 +39,9 @@ pub struct UpdateManyOptions<'a> {
     /// Whether to run lifecycle hooks per document. Defaults to `true`.
     #[builder(default = true)]
     pub run_hooks: bool,
-    /// Whether to target draft versions.
+    /// Whether to target draft versions. (The hooks see the context's UI
+    /// locale, `ctx.ui_locale`.)
     pub draft: bool,
-    /// UI locale string for hook context.
-    pub ui_locale: Option<String>,
     /// Maximum number of documents the operation may match before it is
     /// rejected (from `server.bulk_max_documents`). `0` = no limit.
     pub max_documents: i64,
@@ -161,7 +159,6 @@ fn update_many_pool(
                 let input = WriteInput::builder(data.clone())
                     .locale_ctx(opts.locale_ctx)
                     .draft(opts.draft)
-                    .ui_locale(opts.ui_locale.clone())
                     .build();
 
                 // A failure here returns via `?`; the envelope rolls back
@@ -244,7 +241,6 @@ fn update_many_conn(
         let input = WriteInput::builder(data.clone())
             .locale_ctx(opts.locale_ctx)
             .draft(opts.draft)
-            .ui_locale(opts.ui_locale.clone())
             .build();
 
         let (_, row) = update_many_single_in_conn(ctx, doc_id, input, locale_config)?;
@@ -287,7 +283,6 @@ mod tests {
         assert!(opts.locale_ctx.is_none());
         assert!(opts.run_hooks);
         assert!(!opts.draft);
-        assert!(opts.ui_locale.is_none());
         assert_eq!(opts.max_documents, 0);
         assert!(!opts.deadline.expired());
     }

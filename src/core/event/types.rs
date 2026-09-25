@@ -89,6 +89,59 @@ impl EventUser {
     }
 }
 
+/// Where a row sits across the content views: its `_status` and whether it is
+/// in the trash. The published view holds a row that is neither trashed nor a
+/// draft (a collection without a status axis is always published).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventViewPlacement {
+    /// The row's `_status` ("published"/"draft"); `None` for a collection
+    /// without a status axis and for globals.
+    pub status: Option<String>,
+    /// Whether the row is in the trash.
+    pub trashed: bool,
+}
+
+impl EventViewPlacement {
+    /// Where a stored row sits: `_status` names its status view; a non-null
+    /// `_deleted_at` puts it in the trash.
+    #[must_use]
+    pub fn from_fields(fields: &DocumentFields) -> Self {
+        Self {
+            status: fields.get_str("_status").map(str::to_string),
+            trashed: fields.get("_deleted_at").is_some_and(|v| !v.is_null()),
+        }
+    }
+
+    /// The placement of a row in the published view, as a node that predates
+    /// [`EventViewMeta::prior`] announces a move out of it.
+    #[must_use]
+    pub fn published() -> Self {
+        Self {
+            status: Some("published".to_string()),
+            trashed: false,
+        }
+    }
+
+    /// Whether this placement is in the published view: not trashed and not a
+    /// draft.
+    #[must_use]
+    pub fn in_published_view(&self) -> bool {
+        !self.trashed && !self.is_draft()
+    }
+
+    /// Whether `other` selects the same content view: both in the trash or
+    /// both not, and both drafts or both not (an absent status and
+    /// "published" are the same published view).
+    #[must_use]
+    pub fn same_view(&self, other: &Self) -> bool {
+        self.trashed == other.trashed && self.is_draft() == other.is_draft()
+    }
+
+    fn is_draft(&self) -> bool {
+        self.status.as_deref() == Some("draft")
+    }
+}
+
 /// View-scoping metadata carried on every mutation event so a subscriber can be
 /// gated by their per-view access (`read`/`draft`/`trash`) independent of the
 /// `live_mode` data stripping that empties `MutationEvent.data` for
@@ -108,6 +161,25 @@ pub struct EventViewMeta {
     /// row to trash. When true the event is gated by `trash` rather than the
     /// status axis (`read`/`draft`).
     pub trashed: bool,
+    /// Where the row sat before this mutation, when the mutation moved it
+    /// between content views: a publish or unpublish, a version restore that
+    /// changes the status, a move into or out of the trash. A subscriber that
+    /// could see the row where it was but cannot see it where it is now is
+    /// told of the removal instead of nothing (see
+    /// [`EventGate`](crate::service::EventGate)). `None` when the row stayed
+    /// in its view, or did not exist before (a create). Omitted from the wire
+    /// when `None`; a node that predates it ignores it and reads
+    /// [`left_published`](Self::left_published) instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior: Option<EventViewPlacement>,
+    /// Whether this mutation moved the row OUT of the published view — derived
+    /// from [`prior`](Self::prior) by [`moved_from`](Self::moved_from) and
+    /// kept on the wire for nodes that predate `prior`, which announce only
+    /// that one removal. An event from such a node carries this flag without
+    /// a `prior`, and is read as a move out of the published view (see
+    /// [`prior_view`](Self::prior_view)). Omitted from the wire when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub left_published: bool,
 }
 
 impl EventViewMeta {
@@ -118,10 +190,65 @@ impl EventViewMeta {
     /// trash view.
     #[must_use]
     pub fn from_fields(fields: &DocumentFields) -> Self {
+        Self::at(EventViewPlacement::from_fields(fields))
+    }
+
+    /// View metadata for a row at `placement` that did not move.
+    #[must_use]
+    pub fn at(placement: EventViewPlacement) -> Self {
         Self {
-            status: fields.get_str("_status").map(str::to_string),
-            trashed: fields.get("_deleted_at").is_some_and(|v| !v.is_null()),
+            status: placement.status,
+            trashed: placement.trashed,
+            ..Self::default()
         }
+    }
+
+    /// Where the row sits after this mutation.
+    #[must_use]
+    pub fn placement(&self) -> EventViewPlacement {
+        EventViewPlacement {
+            status: self.status.clone(),
+            trashed: self.trashed,
+        }
+    }
+
+    /// Record where the row sat before the mutation (`None`: it did not
+    /// exist). The single computation of a move between views: `prior` is
+    /// kept only when it selects another view than where the row is now, and
+    /// [`left_published`](Self::left_published) is derived from it for nodes
+    /// that predate `prior`.
+    #[must_use]
+    pub fn moved_from(mut self, prior: Option<EventViewPlacement>) -> Self {
+        self.prior = prior.filter(|prior| !prior.same_view(&self.placement()));
+        self.left_published = self
+            .prior
+            .as_ref()
+            .is_some_and(|prior| prior.in_published_view() && !self.in_published_view());
+
+        self
+    }
+
+    /// The view the row was in before the mutation moved it — `None` when it
+    /// did not move. An event from a node that predates
+    /// [`prior`](Self::prior) announces only a move out of the published view.
+    #[must_use]
+    pub fn prior_view(&self) -> Option<Self> {
+        if let Some(prior) = &self.prior {
+            return Some(Self::at(prior.clone()));
+        }
+
+        self.left_published
+            .then(|| Self::at(EventViewPlacement::published()))
+    }
+
+    /// Whether the row this event concerns is in the published view: not
+    /// trashed and not a draft (a collection without a status axis is always
+    /// published). The same selection
+    /// [`EventViewGate::constraints_for`](crate::db::EventViewGate::constraints_for)
+    /// gates the event by.
+    #[must_use]
+    pub fn in_published_view(&self) -> bool {
+        !self.trashed && self.status.as_deref() != Some("draft")
     }
 }
 
@@ -297,10 +424,7 @@ mod tests {
             document_id: DocumentId::new("abc"),
             data: DocumentFields::new(),
             edited_by: Some(EventUser::new("u1", "u@example.com")),
-            view: Some(EventViewMeta {
-                status: Some("draft".into()),
-                trashed: false,
-            }),
+            view: Some(EventViewMeta::at(draft())),
             gate: None,
         };
         let json = serde_json::to_string(&event).unwrap();
@@ -333,6 +457,139 @@ mod tests {
             decoded.view.is_none(),
             "absent view must decode to None (fail-closed at the consumer)"
         );
+    }
+
+    fn draft() -> EventViewPlacement {
+        EventViewPlacement {
+            status: Some("draft".into()),
+            trashed: false,
+        }
+    }
+
+    fn trashed(status: &str) -> EventViewPlacement {
+        EventViewPlacement {
+            status: Some(status.into()),
+            trashed: true,
+        }
+    }
+
+    /// The prior placement and the legacy flag travel between nodes, and stay
+    /// off the wire when the row did not move (the pre-field shape).
+    #[test]
+    fn prior_and_left_published_roundtrip_and_default_off() {
+        let mut event = sample_event();
+        event.view =
+            Some(EventViewMeta::at(draft()).moved_from(Some(EventViewPlacement::published())));
+
+        let json = serde_json::to_string(&event).unwrap();
+        let decoded: MutationEvent = serde_json::from_str(&json).unwrap();
+        let view = decoded.view.unwrap();
+        assert_eq!(view.prior, Some(EventViewPlacement::published()), "{json}");
+        assert!(view.left_published, "{json}");
+
+        let plain = serde_json::to_string(&sample_event()).unwrap();
+        assert!(!plain.contains("left_published"), "{plain}");
+        assert!(!plain.contains("prior"), "{plain}");
+
+        let decoded: MutationEvent = serde_json::from_str(&plain).unwrap();
+        let view = decoded.view.unwrap();
+        assert!(!view.left_published);
+        assert!(view.prior_view().is_none());
+    }
+
+    /// An event from a node that predates `prior` carries only the legacy
+    /// flag: it is read as a move out of the published view.
+    #[test]
+    fn a_legacy_left_published_event_reads_as_a_move_out_of_published() {
+        let legacy = r#"{"status": "draft", "trashed": false, "left_published": true}"#;
+        let view: EventViewMeta = serde_json::from_str(legacy).unwrap();
+
+        assert_eq!(
+            view.prior_view().map(|v| v.placement()),
+            Some(EventViewPlacement::published())
+        );
+    }
+
+    /// A node that predates `prior` still decodes a current event (the unknown
+    /// key is ignored) and sees the published-view removal it understands.
+    #[test]
+    fn a_current_event_decodes_on_the_legacy_shape() {
+        #[derive(Deserialize)]
+        struct LegacyView {
+            status: Option<String>,
+            trashed: bool,
+            #[serde(default)]
+            left_published: bool,
+        }
+
+        let view = EventViewMeta::at(draft()).moved_from(Some(EventViewPlacement::published()));
+        let legacy: LegacyView =
+            serde_json::from_str(&serde_json::to_string(&view).unwrap()).unwrap();
+
+        assert_eq!(legacy.status.as_deref(), Some("draft"));
+        assert!(!legacy.trashed);
+        assert!(legacy.left_published);
+    }
+
+    /// `moved_from` keeps the prior placement only when the row moved, and
+    /// flags a move out of the published view — never one within it or into it.
+    #[test]
+    fn moved_from_records_only_a_move_between_views() {
+        let published = EventViewPlacement::published();
+
+        let unchanged = EventViewMeta::at(draft()).moved_from(Some(draft()));
+        assert!(unchanged.prior.is_none() && !unchanged.left_published);
+
+        let created = EventViewMeta::at(draft()).moved_from(None);
+        assert!(created.prior.is_none() && !created.left_published);
+
+        let unpublished = EventViewMeta::at(draft()).moved_from(Some(published.clone()));
+        assert!(unpublished.left_published);
+
+        let draft_trashed = EventViewMeta::at(trashed("draft")).moved_from(Some(draft()));
+        assert_eq!(draft_trashed.prior, Some(draft()));
+        assert!(!draft_trashed.left_published, "a draft never was published");
+
+        let published_trashed =
+            EventViewMeta::at(trashed("published")).moved_from(Some(published.clone()));
+        assert!(published_trashed.left_published);
+
+        let publish = EventViewMeta::at(published).moved_from(Some(draft()));
+        assert_eq!(publish.prior_view().map(|v| v.placement()), Some(draft()));
+        assert!(!publish.left_published);
+    }
+
+    /// An absent status and "published" are the same published view: no
+    /// move between them is recorded.
+    #[test]
+    fn same_view_ignores_the_spelling_of_published() {
+        let unset = EventViewPlacement::default();
+
+        assert!(unset.same_view(&EventViewPlacement::published()));
+        assert!(!unset.same_view(&draft()));
+        assert!(!unset.same_view(&trashed("published")));
+        assert!(
+            EventViewMeta::at(EventViewPlacement::published())
+                .moved_from(Some(unset))
+                .prior
+                .is_none()
+        );
+    }
+
+    /// The published view is everything neither trashed nor a draft.
+    #[test]
+    fn in_published_view_matches_the_view_selection() {
+        let view = |status: Option<&str>, trashed: bool| {
+            EventViewMeta::at(EventViewPlacement {
+                status: status.map(str::to_string),
+                trashed,
+            })
+        };
+
+        assert!(view(Some("published"), false).in_published_view());
+        assert!(view(None, false).in_published_view());
+        assert!(!view(Some("draft"), false).in_published_view());
+        assert!(!view(Some("published"), true).in_published_view());
     }
 
     fn owned_doc() -> Document {

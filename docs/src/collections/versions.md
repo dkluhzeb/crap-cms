@@ -74,7 +74,9 @@ When `drafts = true`, documents have a `_status` field that is either `"publishe
 |--------|--------|
 | Update (publish) | The latest draft snapshot (when one is pending) merged under the request's fields, written to the main table, `_status = 'published'` + new version snapshot |
 | Update (draft) | **Version-only save** — main table is NOT modified, only a new draft version snapshot is created |
-| Unpublish | `_status` set to `'draft'`; a new version snapshot only when no draft is pending — a pending draft stays the pending draft |
+| Unpublish | `_status` set to `'draft'`; a new version snapshot only when no draft is pending — a pending draft stays the pending draft. Requires `drafts = true` |
+
+Every write reports the `_status` the row ends with — to its caller, its `after_change` hooks and its live event: a draft create reports `draft` (and its event reaches only subscribers with draft access), a publish reports `published` (and its event reaches published-view subscribers), even when the row said otherwise before the write.
 
 The version-only draft save is key: it lets authors iterate on changes without affecting the published version. The main table always reflects the last published state.
 
@@ -161,7 +163,11 @@ grpcurl -plaintext -d '{
 This overwrites the main table with the snapshot data and creates a new
 version entry for the restore. The document's `_status` is restored to
 **the snapshot's status** — a draft snapshot restores as a draft, a
-published one as published (restore never force-publishes).
+published one as published (restore never force-publishes). Without drafts
+(`drafts = false`, including a collection whose drafts were switched off after
+drafts were saved) there is no unpublished state: every restore is live, so it
+is recorded as `published` and validated at full (publish) strictness, even for
+a snapshot stamped `draft`.
 The restore's own version entry counts against `max_versions` like every
 other version write, so restoring on a capped history prunes the oldest
 snapshot.
@@ -295,7 +301,11 @@ versions = {
 }
 ```
 
-This creates version snapshots on every save but does not add a `_status` column, does not filter by publish state, and does not show draft/publish buttons in the admin UI. Useful for pure audit trails.
+This creates version snapshots on every save but does not add a `_status` column, does not filter by publish state, and does not show draft/publish buttons in the admin UI. Useful for pure audit trails. `unpublish` is refused on such a collection (and global) on every surface — there is no unpublished state to move to — and MCP does not list an `unpublish_*` tool for it; version listing and restore stay available.
+
+## Drafts without timestamps
+
+`versions = { drafts = true }` works with `timestamps = false`: status changes (a draft create, publish, unpublish, restore) touch `updated_at` only when the collection has it, and the dashboard shows no "last updated" time for such a collection.
 
 ## Example
 

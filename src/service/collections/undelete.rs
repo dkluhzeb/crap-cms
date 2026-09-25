@@ -1,7 +1,7 @@
 //! Collection document undelete from soft-delete.
 
 use crate::{
-    core::{Document, event::EventOperation},
+    core::{Document, EventViewPlacement, event::EventOperation},
     db::{AccessResult, LocaleContext, query},
     hooks::AccessCheckInput,
     service::{
@@ -111,8 +111,15 @@ fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Gated<Doc
     )?;
 
     // The row as stored, before anything is shaped or stripped for the writer:
-    // the live event is built from it.
-    let row = ctx.event_row(&doc);
+    // the live event is built from it — moved out of the trash, which the
+    // event announces to subscribers that could see the row only there.
+    let from_trash = EventViewPlacement {
+        trashed: true,
+        ..EventViewPlacement::from_fields(&trashed.fields)
+    };
+    let row = ctx
+        .event_row(&doc)
+        .map(|row| row.moved_from(Some(from_trash)));
 
     helpers::strip_reported(ctx, write_hooks, &mut doc, locale_ctx.as_ref())?;
 

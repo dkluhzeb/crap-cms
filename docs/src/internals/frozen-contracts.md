@@ -414,8 +414,10 @@ changing a representation is a breaking change to every consumer.
   `_rebuild_{slug}` (`create_collection_table` takes the target *table*
   name), filled, then the original is dropped and the replacement renamed,
   with enforcement off for that sync and `PRAGMA foreign_key_check` before
-  commit. Postgres drops the `UNIQUE` constraints in place and never
-  rebuilds.
+  commit. The table's own unmanaged indexes and triggers, and every view and
+  trigger elsewhere that depends on it (which would fail the rename), are
+  recreated from their stored statements in the same transaction. Postgres
+  drops the constraints in place and never rebuilds.
 - **Every document (and global) update holds that row's lock from before the
   first read the write builds on until commit.** On `SQLite` that is
   subsumed by `BEGIN IMMEDIATE`; on Postgres it is `FOR UPDATE` on the
@@ -596,14 +598,22 @@ changing a representation is a breaking change to every consumer.
 - **The Lua sandbox capability contract.** Hook code can never execute
   processes (`os.execute` and `io.popen` both removed), load code
   dynamically (`load`/`loadstring`/`loadfile`/`dofile` removed), or load
-  native modules (`package.cpath` emptied, `package.loadlib` and
-  `string.dump` removed); `os` is reduced to
-  `clock`/`date`/`difftime`/`time`. The `io` file API is **deliberately
-  available** — custom storage backends are documented as
-  Lua-may-map-to-filesystem. The complete surviving global set is pinned
-  by `sandbox_globals_match_reviewed_allowlist`; extending it is a
-  reviewed decision, re-adding a removed capability is a breaking
-  security change.
+  native modules (`package.cpath` emptied, `package.loadlib`,
+  `package.searchpath` and `string.dump` removed); `os` is reduced to
+  `clock`/`date`/`difftime`/`time`. Every config-dir file is loaded as
+  text — bytecode is refused on every load path (`load_source_file`).
+  `require` resolves only `{config_dir}/?.lua` and
+  `{config_dir}/?/init.lua`, fixed at VM build. The `io` file API stays
+  available but **jailed** (`io_jail`): `io.open`/`lines`/`input`/`output`
+  reach only paths that resolve under the config directory or a
+  `[hooks] io_roots` entry, and never `crap.toml`, `data/`, `backups/`,
+  the log directory, the database file, or `/proc`/`/sys`/`/dev`.
+  Widening the jail is a reviewed decision; letting a hook read the
+  process's secrets again is a breaking security change. The complete
+  surviving global set is pinned by
+  `sandbox_globals_match_reviewed_allowlist`; extending it is a reviewed
+  decision, re-adding a removed capability is a breaking security
+  change.
 - **Lua chunk names are config-relative on every load path.** Files loaded
   for `collections/`, `globals/`, `jobs/`, init.lua, and — via the installed
   `require` searcher — `hooks/` are named `<dir>/<file>.lua`, never the
@@ -620,9 +630,12 @@ changing a representation is a breaking change to every consumer.
   registered `after_change`; reads run `before_read` → strip → `after_read`;
   deletes `before_delete` → `after_delete`. `before_render` is global-only.
 - **Which events get CRUD access** (before/after-change, before/after-delete,
-  field before-validate/before-change/after-change) vs which do not (`before_read`,
-  `after_read`, `before_broadcast`, validators, conditions). `before_render` is the
-  one **read-only** tier — see below.
+  field before-validate/before-change/after-change, richtext-attr
+  before-validate — the field hook context, failing closed like a field hook)
+  vs which do not (`before_read`,
+  `after_read`, `before_broadcast`, validators, conditions). `before_render` and
+  the `password_login` method's `mfa_when` gate are the **read-only** tier — see
+  below.
 - **A present-null field survives the hook context round-trip.** Lua collapses
   JSON null to `nil` and drops the key, so a field explicitly set to null (a
   clear-to-null request) that a hook does not replace is re-inserted as null when
@@ -712,7 +725,13 @@ changing a representation is a breaking change to every consumer.
   draft is read back for the locale being read.
 - **`_status` is written only where it exists.** Restore and unpublish stamp
   it only for a drafts-enabled collection — an audit-trail collection
-  (`versions = { drafts = false }`) has no such column.
+  (`versions = { drafts = false }`) has no such column, and unpublish is
+  refused there. The status write bumps `updated_at` only on a table that has
+  timestamps.
+- **A write reports the `_status` its row ends with.** The one status write of
+  a create/publish/unpublish stamps the reported document too, so the caller,
+  `after_change` and the live event (whose view is chosen from `_status`) never
+  see the pre-write status.
 - **A write reports the document in the shape a read returns it.** Every write
   op — create, update, bulk update, restore-version, undelete, unpublish,
   global update — passes the document it reports through the same three steps
@@ -969,6 +988,14 @@ changing a representation is a breaking change to every consumer.
   Declaring `csrf = true` on a custom route that answers only safe methods
   (GET/HEAD/OPTIONS) is rejected at load — a safe-method handler must not mutate
   state, and a route that mutates must declare a mutating method.
+- **The external auth callbacks are the only built-in routes exempt from the
+  double-submit CSRF check** (`/admin/auth/callback/{name}` and
+  `/admin/auth/callback/{collection}/{name}`, matched by route template): an
+  identity provider's `form_post` answer is a cross-site POST without the
+  `SameSite=Strict` token cookie. Their login-CSRF defense is the OAuth `state`
+  the hook verifies. The hook's `ctx.headers` carries `_query_{param}`,
+  `_form_{field}` (urlencoded body) and `_method`; a request header spelled
+  like one of those reserved keys is dropped.
 - **Admin list sort eligibility requires a real column.** A field is sortable
   only if it has a parent column (`has_parent_column()`); a has-many
   relationship/upload (no column) is rejected at the 400 param gate, never passed
@@ -1087,6 +1114,41 @@ changing a representation is a breaking change to every consumer.
   `mfa_when` verdict or, for a callback, its name in the `password_login`
   method's `mfa_exempt_callbacks`. A new way to mint a session must go through
   the same gate.
+- **A session records its surface and its second factor.** Every session token
+  is minted by `service::auth::mint_session` and carries `surface` (the minting
+  surface) and `mfa` (the second factor was passed — the MFA step, or an
+  MFA-exempt callback). A session without `mfa` never authenticates a request
+  whose MFA gate (the collection's `mfa` mode and `mfa_when`, judged for that
+  request's surface and headers) requires the second factor; the evaluator
+  answers `mfa_required`. A token minted before the claims existed decodes as
+  `mfa = false` — fail closed. Every MFA challenge is issued by
+  `service::auth::issue_mfa_challenge`, and its pending token is consumed only
+  by the surface that minted it (an unstamped pending token by none).
+- **A session's lifetime is the collection's `token_expiry`, else the global
+  `[auth] token_expiry`.** The two are resolved in one place
+  (`Auth::token_lifetime`, called by `mint_session`); a collection that sets no
+  `token_expiry` has none of its own — it is never filled in with a built-in
+  number. Both must be positive.
+- **Custom strategies judged per request run on the request's connection;
+  the password and strategy login run on the login's write connection; an
+  auth-callback hook and an `mfa_deliver` hook take a write connection only
+  at their first CRUD call.** A per-request strategy may write
+  (commit-on-success, like every strategy), but resolution never takes a
+  write-pool connection — it runs for every request the strategy
+  authenticates, and a write-pool checkout there would queue reads behind
+  writes. A callback (commit when it returns a user) and `mfa_deliver`
+  (commit when it returns, rollback when it raises) hold one lazily opened
+  write transaction, so their outbound HTTP before any CRUD pins no
+  connection; the MFA code is stored before `mfa_deliver` runs.
+- **`mfa_when` is read-only.** Its reads work; every `crap.*` write
+  (including `crap.transaction(fn)`) raises an error naming the gate, which
+  fails closed — at login and on each request an MFA-unstamped session
+  authenticates alike.
+- **A stored MFA code gets exactly one verdict.** Every attempt consumes the
+  code (right or wrong), atomically — a conditional update on the value the
+  attempt read — so of concurrent attempts exactly one is judged.
+- **Trashing an auth user bumps its session version**, like a lock: a restore
+  never brings back a token issued before the trash. Any logout bumps it too.
 - **Single-use security tokens are minted at one chokepoint.** Password-reset
   and email-verification tokens both come from `generate_security_token()` — a
   32-character nanoid. Any new single-use-token flow uses the same helper so the
@@ -1294,7 +1356,20 @@ alpha.10 on:
 - **Event vocabulary is six operations.** `create`, `update`, `delete`,
   `undelete`, `unpublish`, `restore` — on the proto enum, SSE payloads, and
   the Lua live/broadcast contexts. Lifecycle mutations never masquerade as
-  `update`.
+  `update` — with one per-subscriber exception: a write that moves a
+  document between content views (published / draft / trash — a publish,
+  unpublish, status-changing restore, soft delete or undelete) reaches a
+  subscriber that could see it in the view it left, but not in the one it
+  moved into, as the removal that subscriber's view saw — `delete` for a
+  collection document (no data); for a global, which only a move out of the
+  published view removes, `update` carrying the empty global. Subscribers
+  that can see the view it moved into get the event's own operation; one that
+  could not see the view it left gets nothing. Coalescing never hides such a
+  move: the surviving event carries the view the document was in before the
+  burst. On the multi-node wire the event's view metadata carries the prior
+  view as `prior` and keeps the older `left_published` flag (a move out of
+  the published view) for nodes that predate `prior`; both are additive and
+  omitted when the document did not move.
 - **Auth strategies are transactional.** Commit on authenticate, rollback
   otherwise; failed attempts can never persist writes.
 - **`select` is strict.** Unknown names error; valid = top-level field names
@@ -1337,8 +1412,9 @@ alpha.10 on:
 - **Identity is a reference, re-checked at execution.** Only the user id,
   auth collection, and session version are stored — never a user document —
   and the user is re-loaded when the run executes: a locked, deleted or
-  trashed account, or a session-version bump (force-logout, password reset,
-  unverify), abandons the run. Every authentication method can queue — a
+  trashed account, or a session-version bump (any logout — not only a
+  forced one — password change or reset, lock, unverify, trash), abandons
+  the run. Every authentication method can queue — a
   custom strategy's user is always a stored row of its collection, and its
   in-memory claims carry that row's session version. Anonymous callers
   cannot queue (`UNAUTHENTICATED`), and `CreateMany` with `queue` plus any

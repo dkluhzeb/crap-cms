@@ -69,11 +69,14 @@ impl ServiceContext<'_> {
         let Some(row) = row else { return };
 
         let gate = row.gate_snapshot();
+        let prior = row.prior();
         let mut doc = row.into_document();
 
         shape_reported(self, &mut doc);
 
-        let gating = EventGating::new(EventViewMeta::from_fields(&doc.fields), Some(gate));
+        let view = EventViewMeta::from_fields(&doc.fields).moved_from(prior);
+
+        let gating = EventGating::new(view, Some(gate));
 
         self.publish_event(operation, doc_id, doc.fields, gating);
     }
@@ -202,7 +205,8 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            CollectionDefinition, SharedEventTransport, SharedInvalidationTransport,
+            CollectionDefinition, EventViewPlacement, SharedEventTransport,
+            SharedInvalidationTransport,
             event::{InProcessEventBus, InProcessInvalidationBus},
         },
         db::{Filter, FilterClause, FilterOp},
@@ -417,10 +421,10 @@ mod tests {
             .event_transport(Some(transport()))
             .event_queue(queue.clone())
             .build();
-        let trashed = EventViewMeta {
+        let trashed = EventViewMeta::at(EventViewPlacement {
             status: Some("published".into()),
             trashed: true,
-        };
+        });
 
         ctx.publish_delete_event(
             "doc-1",

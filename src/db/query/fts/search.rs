@@ -145,7 +145,7 @@ mod tests {
     use crate::core::CollectionDefinition;
     use crate::core::FieldDefinition;
     use crate::db::migrate::collection::test_helpers::text_field;
-    use crate::db::query::fts::sync::sync_fts_table;
+    use crate::db::query::fts::{FtsIndex, sync::sync_fts_table};
     use crate::db::{BoxedConnection, DbValue, pool};
     use tempfile::TempDir;
 
@@ -234,7 +234,11 @@ mod tests {
         let (_dir, conn) = setup_db();
         insert_post(&conn, "1", "Hello", "");
         let def = simple_def(vec![text_field("title")]);
-        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &LocaleConfig::default()).build(),
+        )
+        .unwrap();
 
         let result = fts_where_clause(&conn, "posts", "Hello", 1);
         assert!(result.is_some());
@@ -253,7 +257,11 @@ mod tests {
     fn where_clause_empty_query() {
         let (_dir, conn) = setup_db();
         let def = simple_def(vec![text_field("title")]);
-        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &LocaleConfig::default()).build(),
+        )
+        .unwrap();
         assert!(fts_where_clause(&conn, "posts", "", 1).is_none());
     }
 
@@ -265,7 +273,11 @@ mod tests {
         insert_post(&conn, "3", "Rust Web", "Web development with Rust");
 
         let def = simple_def(vec![text_field("title"), text_field("body")]);
-        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &LocaleConfig::default()).build(),
+        )
+        .unwrap();
 
         let (clause, query) = fts_where_clause(&conn, "posts", "Rust", 1).unwrap();
 

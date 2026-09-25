@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 
 use crate::admin::context::field::{
     BaseFieldData, CheckboxField, ConditionData, FieldContext, TextField, ValidationAttrs,
+    WidthAttrs,
 };
 
 /// The [`BaseFieldData`] for an input that has no field definition behind it.
@@ -34,6 +35,7 @@ fn auth_field_base(
         extra: Map::new(),
         error: None,
         validation: ValidationAttrs::default(),
+        layout: WidthAttrs::default(),
         condition: ConditionData::default(),
     }
 }

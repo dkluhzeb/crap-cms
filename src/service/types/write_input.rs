@@ -61,7 +61,6 @@ pub struct WriteInput<'a> {
     pub password: Option<&'a str>,
     pub locale_ctx: Option<&'a LocaleContext>,
     pub draft: bool,
-    pub ui_locale: Option<String>,
     /// Set only by the upload multipart handlers after they have processed a
     /// real file and injected the server-derived metadata columns. When false
     /// (every other surface: Lua, gRPC, MCP, generic admin), the write
@@ -87,7 +86,6 @@ pub struct WriteInputBuilder<'a> {
     pub(in crate::service) password: Option<&'a str>,
     pub(in crate::service) locale_ctx: Option<&'a LocaleContext>,
     pub(in crate::service) draft: bool,
-    pub(in crate::service) ui_locale: Option<String>,
     pub(in crate::service) trusted_upload_metadata: bool,
     pub(in crate::service) upload_conversions: Option<UploadConversions>,
 }
@@ -100,7 +98,6 @@ impl<'a> WriteInputBuilder<'a> {
             password: None,
             locale_ctx: None,
             draft: false,
-            ui_locale: None,
             trusted_upload_metadata: false,
             upload_conversions: None,
         }
@@ -123,13 +120,6 @@ impl<'a> WriteInputBuilder<'a> {
     #[must_use]
     pub fn draft(mut self, draft: bool) -> Self {
         self.draft = draft;
-
-        self
-    }
-
-    #[must_use]
-    pub fn ui_locale(mut self, ui_locale: Option<String>) -> Self {
-        self.ui_locale = ui_locale;
 
         self
     }
@@ -161,7 +151,6 @@ impl<'a> WriteInputBuilder<'a> {
             password: self.password,
             locale_ctx: self.locale_ctx,
             draft: self.draft,
-            ui_locale: self.ui_locale,
             trusted_upload_metadata: self.trusted_upload_metadata,
             upload_conversions: self.upload_conversions,
         }
@@ -197,13 +186,11 @@ mod tests {
         let wi = WriteInput::builder(data)
             .password(Some("pw"))
             .draft(true)
-            .ui_locale(Some("en".to_string()))
             .build();
 
         assert_eq!(wi.data.get("title"), Some(&json!("hi")));
         assert_eq!(wi.password, Some("pw"));
         assert!(wi.draft);
-        assert_eq!(wi.ui_locale.as_deref(), Some("en"));
         assert!(wi.locale_ctx.is_none());
     }
 }

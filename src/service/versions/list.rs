@@ -7,9 +7,10 @@ use crate::{
     service::{
         Def, ListVersionsInput, PaginatedResult, ServiceContext, ServiceError,
         helpers::enforce_access_constraints,
+        reject_global_filter,
         versions::{
             find::read_version_snapshot,
-            gate::{check_versions_gate, draft_snapshots_visible, reject_global_filter},
+            gate::{check_versions_gate, draft_snapshots_visible},
         },
     },
 };
@@ -127,6 +128,8 @@ pub fn list_versions(
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
+
+    use std::sync::Mutex;
 
     use anyhow::Result;
     use rusqlite::Connection;
@@ -719,5 +722,98 @@ mod tests {
             .build();
         let (doc, _) = restore_collection_version_core(&ctx, "p1", "v1", &lc).unwrap();
         assert_eq!(doc.get_str("title"), Some("Restored Title"));
+    }
+
+    /// Allow-all write hooks that record the draft flag each validation ran at.
+    #[derive(Default)]
+    struct ValidationDraftSpy {
+        drafts: Mutex<Vec<bool>>,
+    }
+
+    impl WriteHooks for ValidationDraftSpy {
+        fn run_before_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            ctx: HookContext,
+            _val_ctx: &ValidationCtx,
+        ) -> Result<HookContext> {
+            Ok(ctx)
+        }
+
+        fn run_after_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> Result<HookContext> {
+            Ok(ctx)
+        }
+
+        fn run_hooks_with_conn(
+            &self,
+            _hooks: &Hooks,
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> Result<HookContext> {
+            Ok(ctx)
+        }
+
+        fn check_access(&self, _input: &AccessCheckInput<'_>) -> Result<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+
+        fn validate_fields(
+            &self,
+            _fields: &[FieldDefinition],
+            _data: &DocumentFields,
+            ctx: &ValidationCtx,
+        ) -> std::result::Result<(), ValidationError> {
+            self.drafts.lock().unwrap().push(ctx.is_draft);
+
+            Ok(())
+        }
+    }
+
+    impl FieldReadStrip for ValidationDraftSpy {}
+
+    /// Regression: a `draft` version left behind after drafts were switched
+    /// off restored at draft leniency (required fields skipped) straight into
+    /// a live, public row. Without drafts a restore is a publish: validated at
+    /// full strictness and recorded as `published`.
+    #[test]
+    fn restoring_a_draft_version_without_drafts_validates_as_published() {
+        let (conn, def) = setup_versioned_collection();
+        assert!(!def.has_drafts());
+
+        conn.execute(
+            "INSERT INTO _versions_posts (id, _parent, _version, _status, _latest, snapshot) \
+             VALUES ('v1', 'p1', 1, 'draft', 1, ?1)",
+            [&json!({"title": "Left-over draft"}).to_string()],
+        )
+        .unwrap();
+
+        let lc = LocaleConfig::default();
+        let spy = ValidationDraftSpy::default();
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .write_hooks(&spy)
+            .build();
+
+        restore_collection_version_core(&ctx, "p1", "v1", &lc).expect("restore");
+
+        let drafts = spy.drafts.lock().unwrap();
+        assert!(
+            !drafts.is_empty() && drafts.iter().all(|draft| !draft),
+            "the restore validates at publish strictness, got {drafts:?}"
+        );
+
+        let latest = query::find_latest_version(&conn, "posts", "p1")
+            .unwrap()
+            .expect("the restore records a version");
+        assert_eq!(latest.status, "published");
     }
 }

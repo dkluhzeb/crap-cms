@@ -123,7 +123,11 @@ path_style = false                       # true for MinIO
 | `prefix` | No | Key prefix prepended to all storage keys |
 | `path_style` | No | Use path-style URLs (required for MinIO) |
 
-Files are served through the CMS via `/uploads/...` (proxied from S3) so access control and content negotiation work identically to local storage: range requests (`206` with `Content-Range`, `416` for an unsatisfiable range), strong ETags and conditional `304` responses behave the same on every backend. A ranged request against S3 fetches only the requested bytes (a suffix range such as `bytes=-500` costs one extra `HEAD`); a custom Lua handler returns whole objects by contract, so its ranges are sliced in the CMS.
+Files are served through the CMS via `/uploads/...` (proxied from S3) so access control and content negotiation work identically to local storage: range requests (`206` with `Content-Range`, `416` for an unsatisfiable range, `If-Range` honoured), strong ETags, conditional `304` responses and `412` preconditions (see [Conditional requests](#conditional-requests)) behave the same on every backend.
+
+Against S3 every request starts with a `HEAD`: a failed precondition (`If-Match` / `If-Unmodified-Since`) is answered `412` and a conditional hit (`If-None-Match` / `If-Modified-Since`) `304` from it without transferring the object, and an unsatisfiable range `416`. The body — the whole object or the requested range, open-ended (`bytes=100-`) and suffix (`bytes=-500`) ranges included — is then streamed as ranged reads of at most 8 MiB, each fetched only when the connection asks for the next one, so a download holds at most a chunk or two in memory whatever the file size, a `HEAD` request reads no body at all, and a client that disconnects stops the reads. If the object is replaced while it streams (its ETag changes), the transfer is aborted rather than splicing two versions. A `Range` whose `If-Range` names an older version is ignored and the whole current file is served.
+
+A custom Lua backend is served the same way when it registers the optional `stat` and `get_range` handlers (see below). Without them its `get` returns whole objects, so each request holds the whole object in memory once (as the Lua string the handler returned), a conditional request reads it before answering `304` (or `412`), and ranges are sliced in the CMS — keep such a backend's files small.
 
 An uploaded filename is capped at 200 characters after sanitising (the stored key adds the id prefix and any size suffix), and two `image_sizes` entries may not share a name — they would resolve to the same stored key.
 
@@ -142,46 +146,103 @@ For exotic storage providers, register custom functions in `init.lua`:
 > `get` a miss from another. Use `crap.env` for credentials and
 > `crap.crypto` (HMAC/SHA-256) if the provider needs request signing.
 
+> **Handlers that write files with Lua `io`** (for example a custom backend
+> that stores objects on a mounted volume) can only reach the config
+> directory and the directories listed in
+> [`[hooks] io_roots`](../configuration/crap-toml.md#hooks) — see
+> [the hook sandbox](../hooks/overview.md). A storage directory outside the
+> config directory must be listed there:
+>
+> ```toml
+> [hooks]
+> io_roots = ["/srv/crap-media"]
+> ```
+>
+> Even inside an allowed root, `data/` (database, generated auth secret),
+> `backups/`, `crap.toml`, the log directory and the database files are
+> refused, so a custom backend cannot store objects under the data
+> directory. Use a directory of its own.
+
 ```lua
+local base = "https://storage.example.com/"
+
+--- Raise on a status the provider uses for failure, so the write fails
+--- (or the read is served as a retryable 503) instead of passing silently.
+local function check(resp, what, key)
+  if resp.status >= 300 then
+    error(what .. " " .. key .. " failed with HTTP " .. resp.status)
+  end
+  return resp
+end
+
 crap.storage.register({
   put = function(key, data, content_type)
-    crap.http.request({
+    check(crap.http.request({
       method = "PUT",
-      url = "https://storage.example.com/" .. key,
+      url = base .. key,
       body = data,
       headers = { ["Content-Type"] = content_type },
-    })
+    }), "put", key)
   end,
   get = function(key)
-    local resp = crap.http.request({
-      url = "https://storage.example.com/" .. key,
-    })
+    local resp = crap.http.request({ url = base .. key })
     -- Return nil for a missing key (the CMS serves a 404). Raise an
     -- error only for a real/transient failure (served as a 503), so a
     -- transient outage isn't cached as a permanent "not found".
     if resp.status == 404 then
       return nil
     end
-    return resp.body
+    return check(resp, "get", key).body
   end,
   delete = function(key)
-    crap.http.request({
-      method = "DELETE",
-      url = "https://storage.example.com/" .. key,
-    })
+    local resp = crap.http.request({ method = "DELETE", url = base .. key })
+    if resp.status ~= 404 then
+      check(resp, "delete", key)
+    end
   end,
-  -- Optional: fast existence probe. When omitted, the CMS probes via
-  -- `get` (downloading the object), so providing `exists` (e.g. a HEAD
-  -- request) is cheaper for large files.
+  -- Optional: fast existence probe. When omitted, the CMS asks `stat`
+  -- (when registered) or else probes via `get` (downloading the object),
+  -- so providing `exists` (e.g. a HEAD request) is cheaper for large files.
   exists = function(key)
+    local resp = crap.http.request({ method = "HEAD", url = base .. key })
+    if resp.status == 404 then
+      return false
+    end
+    check(resp, "exists", key)
+    return true
+  end,
+  -- Optional, together with `get_range`: the object's metadata without its
+  -- bytes (nil when missing). With both, downloads are streamed.
+  stat = function(key)
+    local resp = crap.http.request({ method = "HEAD", url = base .. key })
+    if resp.status == 404 then
+      return nil
+    end
+    check(resp, "stat", key)
+    return {
+      size = tonumber(resp.headers["content-length"]),
+      etag = resp.headers["etag"],
+      last_modified = resp.headers["last-modified"],
+    }
+  end,
+  -- Exactly the bytes `first`..`last` (0-based, inclusive; nil when missing).
+  get_range = function(key, first, last)
     local resp = crap.http.request({
-      method = "HEAD",
-      url = "https://storage.example.com/" .. key,
+      url = base .. key,
+      headers = { Range = "bytes=" .. first .. "-" .. last },
     })
-    return resp.status ~= 404
+    if resp.status == 404 then
+      return nil
+    end
+    if resp.status ~= 206 then
+      error("get_range " .. key .. ": expected HTTP 206, got " .. resp.status)
+    end
+    return resp.body
   end,
 })
 ```
+
+`stat` returns a table with `size` (bytes, required), and optionally `etag` (an opaque version string that changes whenever the bytes change; surrounding quotes are stripped) and `last_modified` (Unix seconds or an HTTP-date string). Unknown keys, a negative size, an `etag` with quotes or control characters inside, or an unparseable date are errors. `get_range` must return exactly `last - first + 1` bytes — a shorter or longer string aborts the response rather than serving a corrupted file. The two are accepted only together; registering one without the other is an error at startup. With them, the serve route answers preconditions (`412`), conditional requests (`304`) and unsatisfiable ranges (`416`) from `stat` alone and streams the body in ranged reads of at most 8 MiB, calling `stat` again with every read so an object replaced mid-download (its `etag` changes) aborts the transfer. Without an `etag`, the CMS derives one from the key, size and `last_modified`.
 
 ```toml
 [upload]
@@ -235,6 +296,30 @@ Files are served at `/uploads/<collection>/<filename>`:
 /uploads/media/a1b2c3_my-photo_thumbnail.webp
 ```
 
+### Conditional requests
+
+The serve route evaluates the request's conditions in the order RFC 9110
+sets, on every storage backend:
+
+1. **`If-Match`** — the file's entity tag must match one of the listed tags
+   under the *strong* comparison (a weak `W/"…"` tag never matches; `*`
+   matches any existing file). Otherwise: `412 Precondition Failed`.
+2. **`If-Unmodified-Since`** — only when no `If-Match` was sent: a file
+   modified after the date answers `412`. An invalid date, or a file without
+   a modification date, ignores the header.
+3. **`If-None-Match`** / **`If-Modified-Since`** — a match answers `304 Not
+   Modified` (the entity tag decides alone when both are sent).
+4. **`Range`** / **`If-Range`** — only then is a range honoured (`206`), and
+   only while `If-Range` still names the current file.
+
+A client that pins a file — a resumed download, a sync tool — therefore
+never receives a different version: it gets `412` and can start over.
+Files on local storage carry no entity tag (only `Last-Modified`), so there
+an `If-Match` listing tags always answers `412`; use `If-Unmodified-Since`
+(or `If-Range`) with local storage. On S3 and on a custom backend with a
+`stat` handler the preconditions are judged from the object's metadata,
+before any byte is read.
+
 Access-gated files can additionally be served via short-lived **signed
 URLs** (`?exp=…&sig=…`, minted with `crap.uploads.sign_url`) for
 cross-origin or CDN delivery — see
@@ -282,7 +367,7 @@ Every upload passes a fixed validation chain before anything is written to stora
 4. **Extension ↔ content cross-check** — for extensions that resolve to a type a browser would *execute* on serve (HTML, XHTML, SVG, XML, JavaScript) the actual content type must match exactly; a PNG saved as `logo.svg` is rejected. The extension is read from the *sanitized* name — the one stored and served — so `evil.htm l`, stored as `evil.html`, is judged as HTML. Inert extensions (`.txt`, `.pdf`, `.zip`, …) are not cross-checked because they are served with non-executing content types regardless.
 5. **SVG sanitising** — SVG uploads are scanned once for `<script>` elements, inline event handlers (`onload=` …), `<!DOCTYPE>` / `<!ENTITY>` declarations, CSS `@import`, and external references in `href` / `xlink:href` or `url(…)` (any scheme other than `data:` — `mailto:` and `tel:` included — or a protocol-relative `//` URL, judged after entity decoding). Any hit rejects the upload (stored-XSS, XXE and data-exfiltration vectors), so only clean SVGs ever reach storage; fragments, relative paths and `data:` URIs are fine. Served SVGs additionally carry `Content-Disposition: attachment` and a sandboxing CSP (`sandbox; default-src 'none'`) — which the admin's own Content-Security-Policy never replaces.
 
-For processed images, the EXIF `Orientation` tag is applied before resizing so phone photos come out upright, and the re-encoded outputs (generated sizes and format conversions) carry **no EXIF metadata** — camera details and GPS coordinates are stripped as a side effect of re-encoding. The original upload is stored byte-for-byte.
+For processed images, the EXIF `Orientation` tag is applied before resizing so phone photos come out upright, and the re-encoded outputs (generated sizes and format conversions) carry **no EXIF metadata** — camera details and GPS coordinates are stripped as a side effect of re-encoding. The original upload is stored byte-for-byte. They also carry no ICC color profile, and an animated GIF or WebP yields static first-frame sizes — see [What derived images keep](image-processing.md#what-derived-images-keep).
 
 Only formats the server can decode — JPEG, PNG, GIF and WebP — go through the pixel pipeline (dimensions, generated sizes, format conversions). SVG, AVIF and any other allow-listed image type are stored verbatim: no dimensions are recorded and no variants are generated.
 

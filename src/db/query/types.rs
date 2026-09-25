@@ -355,6 +355,7 @@ mod tests {
         EventViewMeta {
             status: status.map(str::to_string),
             trashed,
+            ..EventViewMeta::default()
         }
     }
 

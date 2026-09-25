@@ -4,6 +4,7 @@ use std::{
     cell::{Cell, RefCell},
     rc::Rc,
     sync::{Arc, atomic::AtomicU64},
+    time::Duration,
 };
 
 use mlua::{Error as LuaError, Error::RuntimeError, Lua, Result as LuaResult};
@@ -213,6 +214,41 @@ impl Drop for AfterReadScopeGuard<'_> {
     }
 }
 
+/// Marker installed in Lua `app_data` while a hook whose contract is
+/// read-only runs on a borrowed connection — the `mfa_when` gate, which runs
+/// on the request's own connection for every request an MFA-unstamped session
+/// authenticates. Reads work as usual; every CRUD write is refused (see
+/// `ensure_writable`). The value names the hook for the refusal message.
+#[derive(Clone, Copy)]
+pub(crate) struct ReadOnlyScope(pub(crate) &'static str);
+
+/// RAII installer for [`ReadOnlyScope`]: present while held; on drop the
+/// previous value (or absence) is restored, so the scope nests like
+/// [`TxContextGuard`] and is removed on the unwind path too.
+pub(crate) struct ReadOnlyScopeGuard<'a> {
+    lua: &'a Lua,
+    prev: Option<ReadOnlyScope>,
+}
+
+impl<'a> ReadOnlyScopeGuard<'a> {
+    /// Refuse CRUD writes on `lua` until the guard drops; `hook` names the
+    /// read-only hook in the refusal message (e.g. "the `mfa_when` gate").
+    #[must_use]
+    pub(crate) fn install(lua: &'a Lua, hook: &'static str) -> Self {
+        let prev = lua.app_data_ref::<ReadOnlyScope>().map(|r| *r);
+
+        lua.set_app_data(ReadOnlyScope(hook));
+
+        Self { lua, prev }
+    }
+}
+
+impl Drop for ReadOnlyScopeGuard<'_> {
+    fn drop(&mut self) {
+        restore_slot(self.lua, self.prev.take());
+    }
+}
+
 /// Wall-clock deadline of the Lua job handler running on this VM.
 ///
 /// A job runs on the blocking pool, which Tokio cannot cancel, so the
@@ -247,6 +283,11 @@ impl ExecutionDeadline {
         self.deadline.expired()
     }
 
+    /// Time left until the deadline — `Duration::ZERO` once it has passed.
+    pub(crate) fn remaining(self) -> Duration {
+        self.deadline.remaining().unwrap_or(Duration::ZERO)
+    }
+
     /// The error every check raises once the deadline has passed.
     pub(crate) fn error(self) -> LuaError {
         RuntimeError(format!(
@@ -274,6 +315,27 @@ pub(crate) fn check_execution_deadline(lua: &Lua) -> LuaResult<()> {
     }
 
     Err(deadline.error())
+}
+
+/// How long a blocking call made now may run before this VM's job deadline:
+/// `None` on a VM without one (every non-job use), the time left otherwise.
+/// A blocking call (an outbound HTTP request) bounds its own timeout by this,
+/// so the deadline also stops a call already in flight — not only the next
+/// one.
+///
+/// # Errors
+///
+/// [`ExecutionDeadline::error`] once the installed deadline has passed.
+pub(crate) fn execution_time_left(lua: &Lua) -> LuaResult<Option<Duration>> {
+    let Some(deadline) = lua.app_data_ref::<ExecutionDeadline>().map(|d| *d) else {
+        return Ok(None);
+    };
+
+    if deadline.expired() {
+        return Err(deadline.error());
+    }
+
+    Ok(Some(deadline.remaining()))
 }
 
 /// RAII installer for [`ExecutionDeadline`]: present while held, and the
@@ -667,7 +729,7 @@ impl Drop for TxContextGuard<'_> {
 
 /// Restore one app-data slot to a snapshotted value: re-install it when the
 /// slot was previously set, otherwise remove it (it was absent before).
-fn restore_slot<T: Send + Sync + 'static>(lua: &Lua, prev: Option<T>) {
+pub(super) fn restore_slot<T: Send + Sync + 'static>(lua: &Lua, prev: Option<T>) {
     match prev {
         Some(v) => {
             lua.set_app_data(v);
@@ -791,6 +853,30 @@ mod tests {
         let _guard = ExecutionDeadlineGuard::install(&lua, ExecutionDeadline::new(u64::MAX));
         let err = check_execution_deadline(&lua)
             .expect_err("an unrepresentable deadline fails closed")
+            .to_string();
+
+        assert!(err.contains("exceeded its timeout"), "{err}");
+    }
+
+    /// No deadline: no bound on a blocking call. A future deadline bounds it
+    /// by the time left; a passed one refuses with the timeout error.
+    #[test]
+    fn execution_time_left_bounds_by_the_installed_deadline() {
+        let lua = Lua::new();
+
+        assert_eq!(execution_time_left(&lua).unwrap(), None);
+
+        {
+            let _guard = ExecutionDeadlineGuard::install(&lua, ExecutionDeadline::new(60));
+            let left = execution_time_left(&lua).unwrap().expect("a bound");
+
+            assert!(left <= Duration::from_mins(1), "{left:?}");
+            assert!(left > Duration::from_secs(50), "{left:?}");
+        }
+
+        let _guard = ExecutionDeadlineGuard::install(&lua, ExecutionDeadline::new(0));
+        let err = execution_time_left(&lua)
+            .expect_err("a passed deadline refuses")
             .to_string();
 
         assert!(err.contains("exceeded its timeout"), "{err}");

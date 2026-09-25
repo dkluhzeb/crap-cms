@@ -144,8 +144,8 @@ pub use auth::{SharedPasswordProvider, SharedTokenProvider};
 pub use cache::SharedCache;
 pub use email::SharedEmailProvider;
 pub use event::{
-    EventGateSnapshot, EventReceiver, EventViewMeta, MutationEvent, MutationEventInput,
-    SharedEventTransport, SharedInvalidationTransport,
+    EventGateSnapshot, EventReceiver, EventViewMeta, EventViewPlacement, MutationEvent,
+    MutationEventInput, SharedEventTransport, SharedInvalidationTransport,
 };
 pub use rate_limit::SharedRateLimitBackend;
 pub use upload::SharedStorage;

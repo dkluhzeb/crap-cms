@@ -12,7 +12,7 @@ use crate::{
             ArrayField, ArrayRow, BaseFieldData, BlockDefinition as BlockDefinitionContext,
             BlockRow, BlocksField, CheckboxField, ChoiceField, ConditionData, DateField,
             FieldContext, GroupField, NumberField, RelationshipField, RowField, TabPanel,
-            TabsField, TextField, TimezoneOption, UploadField, ValidationAttrs,
+            TabsField, TextField, TimezoneOption, UploadField, ValidationAttrs, WidthAttrs,
         },
         handlers::{
             field_context::{
@@ -604,6 +604,7 @@ fn build_group_child_base(
         extra: nested_sf.admin.extra.clone(),
         error: opts.errors.get(nested_name).cloned(),
         validation: ValidationAttrs::default(),
+        layout: WidthAttrs::from_width(nested_sf.admin.width.as_ref()),
         condition: ConditionData::default(),
     }
 }

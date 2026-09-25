@@ -46,7 +46,7 @@ pub struct CollectionDefinition {
     #[serde(default)]
     #[lua(optional)]
     pub hooks: Hooks,
-    /// Enable authentication on this collection. `true` for defaults, or a config table with `strategies`/`token_expiry`/`disable_local`.
+    /// Enable authentication on this collection. `true` for defaults, or a config table with `enabled`/`token_expiry`/`methods`.
     #[serde(default)]
     #[lua(ty = "boolean | crap.Auth", optional)]
     pub auth: Option<Auth>,

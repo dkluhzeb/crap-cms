@@ -1,17 +1,21 @@
 //! Auth callback handler — dispatches `/admin/auth/callback/{name}` to Lua hooks.
 //!
 //! Enables OAuth2/OIDC and external auth providers implemented entirely in Lua.
-//! The hook receives query parameters, headers, and method; returns a user
-//! document to create a session (after the collection's MFA step, unless the
-//! collection exempts the callback), or nil to redirect to login with an
-//! error.
+//! Reached by a `GET` redirect or, for an identity provider using
+//! `response_mode=form_post`, a cross-site `POST` of a urlencoded form (the
+//! callback routes are exempt from the double-submit CSRF check; the OAuth
+//! `state` the hook verifies is their login-CSRF defense). The hook receives
+//! one `ctx.headers` map (see [`hook_context`]); it returns a user document
+//! to create a session (after the collection's MFA step, unless the
+//! collection exempts the callback), or nil to redirect to login.
 
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use anyhow::anyhow;
 use axum::{
+    body::Bytes,
     extract::{ConnectInfo, Path, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, Method},
     response::{IntoResponse, Redirect, Response},
 };
 use tokio::task;
@@ -21,10 +25,11 @@ use crate::{
     admin::{
         AdminState,
         auth_middleware::check_admin_gate_for_doc,
+        csrf::is_form_urlencoded,
         handlers::{
             auth::{
-                SessionGrant, client_ip, create_session_token, extract_user_email,
-                issue_mfa_challenge, session_redirect, sole_auth_collection,
+                client_ip, create_session_token, extract_user_email, issue_mfa_challenge,
+                refusal_error_key, session_redirect, sole_auth_collection,
             },
             shared::paths,
         },
@@ -38,8 +43,8 @@ use crate::{
     service::{
         AppInfra, ServiceContext,
         auth::{
-            LoginOutcome, LoginVerified, MfaGateRequest, StrategyAdmission, admit_strategy_user,
-            mfa_gate,
+            LoginOutcome, LoginVerified, MfaGateRequest, SessionGrant, StrategyAdmission,
+            admit_strategy_user, mfa_gate,
         },
     },
 };
@@ -57,12 +62,38 @@ pub(super) struct CallbackRequest<'a> {
     /// The callback name: the hook run is `auth_callback.{name}`.
     #[builder(required)]
     name: &'a str,
+    /// The HTTP method (`GET`, or `POST` for a `form_post` response).
+    #[builder(required)]
+    method: &'a Method,
     /// The URL query parameters.
     #[builder(required)]
     params: &'a HashMap<String, String>,
+    /// The fields of a urlencoded form body (empty without one).
+    #[builder(required)]
+    form: &'a HashMap<String, String>,
     /// The request headers.
     #[builder(required)]
     headers: &'a HeaderMap,
+}
+
+/// Key prefix of a query parameter in the hook context.
+const QUERY_PREFIX: &str = "_query_";
+
+/// Key prefix of a form-body field in the hook context.
+const FORM_PREFIX: &str = "_form_";
+
+/// Key of the HTTP method in the hook context.
+const METHOD_KEY: &str = "_method";
+
+/// The fields of a urlencoded form body — an identity provider's
+/// `response_mode=form_post` answer (`code`, `state`, `id_token`, …). Empty
+/// for any other body. Shared by both callback routes.
+pub(super) fn form_fields(headers: &HeaderMap, body: &Bytes) -> HashMap<String, String> {
+    if !is_form_urlencoded(headers) {
+        return HashMap::new();
+    }
+
+    form_urlencoded::parse(body).into_owned().collect()
 }
 
 /// The redirect every refused or failed callback answers with.
@@ -70,27 +101,47 @@ fn login_redirect() -> Response {
     Redirect::to(paths::LOGIN).into_response()
 }
 
-/// The hook's view of the request: every header, plus each query parameter
-/// as `_query_{name}`.
+/// Whether a header name collides with a key the framework sets.
+fn reserved_key(name: &str) -> bool {
+    name.starts_with(QUERY_PREFIX) || name.starts_with(FORM_PREFIX) || name == METHOD_KEY
+}
+
+/// The hook's view of the request (`ctx.headers`): every request header,
+/// each query parameter as `_query_{name}`, each urlencoded form-body field
+/// as `_form_{name}`, and the HTTP method as `_method`. A request header
+/// spelled like one of those keys is dropped, so each can only come from
+/// where its name says.
 fn hook_context(request: &CallbackRequest) -> HashMap<String, String> {
     let mut ctx = headers_to_map(request.headers);
 
+    ctx.retain(|name, _| !reserved_key(name));
+
     for (k, v) in request.params {
-        ctx.insert(format!("_query_{k}"), v.clone());
+        ctx.insert(format!("{QUERY_PREFIX}{k}"), v.clone());
     }
+
+    for (k, v) in request.form {
+        ctx.insert(format!("{FORM_PREFIX}{k}"), v.clone());
+    }
+
+    ctx.insert(METHOD_KEY.to_string(), request.method.to_string());
 
     ctx
 }
 
-/// Pull a connection from the pool and execute the configured Lua auth
-/// strategy hook for an external auth flow (OAuth callback etc.).
+/// Execute the configured Lua auth callback hook for an external auth flow
+/// (OAuth callback etc.). The hook commonly provisions the user it names
+/// (create on first sign-in), committed with the authentication; its write
+/// connection is taken only at its first CRUD call, so the provider round
+/// trips before it hold none (see [`HookRunner::run_auth_callback`]).
+///
+/// [`HookRunner::run_auth_callback`]: crate::hooks::HookRunner::run_auth_callback
 fn run_auth_strategy_blocking(
     infra: &AppInfra,
     hook_ref: &str,
     collection: &str,
     ctx: &HashMap<String, String>,
 ) -> anyhow::Result<Option<Document>> {
-    let conn = infra.pool.get()?;
     let input = AuthStrategyInput {
         collection,
         headers: ctx,
@@ -104,7 +155,7 @@ fn run_auth_strategy_blocking(
 
     infra
         .hook_runner
-        .run_auth_strategy(&strategy, &input, &conn)
+        .run_auth_callback(&strategy, &input, &infra.pool)
         .map_err(|e| anyhow!("Auth callback hook error: {e:#}"))
 }
 
@@ -182,10 +233,7 @@ fn admit_callback_user(input: &CallbackAdmission) -> Option<LoginOutcome> {
     let gate = MfaGateRequest::builder(&input.slug, def, Surface::Admin, &input.headers)
         .callback(Some(input.name.as_str()))
         .build();
-    let verified = LoginVerified {
-        user,
-        session_version,
-    };
+    let verified = LoginVerified::builder(user, session_version).build();
 
     Some(mfa_gate(infra, &conn, &gate, verified))
 }
@@ -254,13 +302,15 @@ fn callback_session_response(
     verified: &LoginVerified,
 ) -> Response {
     let user = &verified.user;
+    let email = extract_user_email(user);
     let grant = SessionGrant::builder(
-        user.id.to_string(),
+        &user.id,
         collection,
-        extract_user_email(user),
+        &email,
         verified.session_version,
+        Surface::Admin,
     )
-    .build();
+    .mfa(verified.mfa);
 
     let Ok(session) =
         create_session_token(state, grant).inspect_err(|e| error!("Auth callback: {}", e))
@@ -298,7 +348,7 @@ async fn finish_callback(
     issue_mfa_challenge(state, collection, &verified, &email).unwrap_or_else(|refusal| {
         warn!(
             collection,
-            reason = refusal.error_key(),
+            reason = refusal_error_key(refusal),
             "auth callback MFA challenge refused"
         );
 
@@ -349,10 +399,11 @@ pub(super) async fn complete_auth_callback(
 
 /// GET/POST `/admin/auth/callback/{name}` — un-scoped auth callback dispatch.
 ///
-/// The hook function `hooks.auth_callback.{name}` receives:
-/// - `query` — URL query parameters as key-value table
-/// - `headers` — HTTP request headers as key-value table
-/// - `method` — HTTP method string ("GET" or "POST")
+/// The hook module `auth_callback.{name}` is called with a context whose
+/// `headers` table holds every request header plus the reserved keys
+/// `_query_{param}` (each URL query parameter), `_form_{field}` (each field
+/// of a urlencoded form body — a `form_post` response) and `_method` (`"GET"`
+/// or `"POST"`); `ctx.collection` names the bound auth collection.
 ///
 /// Returns a user document table (with `id` field) to create a session,
 /// or `nil`/`false` to redirect to login.
@@ -365,7 +416,9 @@ pub async fn auth_callback(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(name): Path<String>,
     Query(params): Query<HashMap<String, String>>,
+    method: Method,
     headers: HeaderMap,
+    body: Bytes,
 ) -> Response {
     let Some(collection) = sole_auth_collection(&state.infra.registry) else {
         warn!(
@@ -376,7 +429,10 @@ pub async fn auth_callback(
         return login_redirect();
     };
 
-    let request = CallbackRequest::builder(addr, &collection, &name, &params, &headers).build();
+    let form = form_fields(&headers, &body);
+    let request =
+        CallbackRequest::builder(addr, &collection, &name, &method, &params, &form, &headers)
+            .build();
 
     complete_auth_callback(&state, &request).await
 }
@@ -401,8 +457,11 @@ mod tests {
             ("code".to_string(), "abc".to_string()),
             ("x-forwarded-user".to_string(), "mallory".to_string()),
         ]);
+        let form = HashMap::new();
         let addr = SocketAddr::from(([127, 0, 0, 1], 80));
-        let request = CallbackRequest::builder(addr, "users", "sso", &params, &headers).build();
+        let request =
+            CallbackRequest::builder(addr, "users", "sso", &Method::GET, &params, &form, &headers)
+                .build();
 
         let ctx = hook_context(&request);
 
@@ -415,7 +474,71 @@ mod tests {
             ctx.get("_query_x-forwarded-user").map(String::as_str),
             Some("mallory")
         );
-        assert_eq!(ctx.len(), 3);
+        assert_eq!(ctx.get("_method").map(String::as_str), Some("GET"));
+        assert_eq!(ctx.len(), 4);
+    }
+
+    /// Regression: a `form_post` callback's body never reached the hook, so
+    /// the `code` / `state` an identity provider posted were lost. The form
+    /// fields arrive as `_form_{k}`, next to the method.
+    #[test]
+    fn the_hook_context_carries_form_post_fields() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "content-type",
+            HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+        let body = Bytes::from_static(b"code=abc&state=s%201");
+        let form = form_fields(&headers, &body);
+        let params = HashMap::new();
+        let addr = SocketAddr::from(([127, 0, 0, 1], 80));
+        let request = CallbackRequest::builder(
+            addr,
+            "users",
+            "sso",
+            &Method::POST,
+            &params,
+            &form,
+            &headers,
+        )
+        .build();
+
+        let ctx = hook_context(&request);
+
+        assert_eq!(ctx.get("_form_code").map(String::as_str), Some("abc"));
+        assert_eq!(ctx.get("_form_state").map(String::as_str), Some("s 1"));
+        assert_eq!(ctx.get("_method").map(String::as_str), Some("POST"));
+    }
+
+    /// A body that is not a urlencoded form contributes no fields.
+    #[test]
+    fn a_non_form_body_has_no_fields() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", HeaderValue::from_static("application/json"));
+
+        assert!(form_fields(&headers, &Bytes::from_static(b"code=abc")).is_empty());
+    }
+
+    /// A request header spelled like a framework key is dropped: `_query_*`,
+    /// `_form_*` and `_method` only ever come from the query, the body and
+    /// the request line.
+    #[test]
+    fn a_header_cannot_pose_as_a_framework_key() {
+        let mut headers = HeaderMap::new();
+        headers.insert("_query_state", HeaderValue::from_static("forged"));
+        headers.insert("_form_code", HeaderValue::from_static("forged"));
+        headers.insert("_method", HeaderValue::from_static("PUT"));
+        let (params, form) = (HashMap::new(), HashMap::new());
+        let addr = SocketAddr::from(([127, 0, 0, 1], 80));
+        let request =
+            CallbackRequest::builder(addr, "users", "sso", &Method::GET, &params, &form, &headers)
+                .build();
+
+        let ctx = hook_context(&request);
+
+        assert!(!ctx.contains_key("_query_state"));
+        assert!(!ctx.contains_key("_form_code"));
+        assert_eq!(ctx.get("_method").map(String::as_str), Some("GET"));
     }
 
     /// A soft-deleting `users` auth collection holding `u1`.

@@ -19,6 +19,14 @@ use super::{StorageBackend, StorageNotFound};
 /// recognisable on sight; it is never a storage key, so no read can reach it.
 const TEMP_SUFFIX: &str = ".crap-tmp";
 
+/// Whether a file name is a local-storage staging file (a write in flight or
+/// a leftover from a killed process) rather than a stored object. Tools that
+/// copy the uploads tree (`backup`, `blueprint save`) skip these.
+#[must_use]
+pub fn is_staging_file_name(name: &OsStr) -> bool {
+    name.to_string_lossy().ends_with(TEMP_SUFFIX)
+}
+
 /// Local filesystem storage backend.
 ///
 /// Files are stored under `{base_dir}/{key}`. Directories are created
@@ -185,6 +193,14 @@ mod tests {
     use std::os::unix::fs::PermissionsExt as _;
 
     use super::*;
+
+    #[test]
+    fn staging_names_are_recognised() {
+        let staged = temp_sibling(Path::new("/u/media/a.png"), Path::new("/u/media"));
+
+        assert!(is_staging_file_name(staged.file_name().unwrap()));
+        assert!(!is_staging_file_name(OsStr::new("a.png")));
+    }
 
     #[test]
     fn put_get_delete() {

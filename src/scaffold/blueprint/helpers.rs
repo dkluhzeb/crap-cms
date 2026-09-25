@@ -9,6 +9,8 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
+use crate::cli;
+
 #[cfg(test)]
 use crate::test_support::env_lock;
 
@@ -16,9 +18,6 @@ use crate::test_support::env_lock;
 /// `blueprint save` takes the name only — the project is the resolved config
 /// directory.
 pub const SAVE_BLUEPRINT_HINT: &str = "Save one with: crap-cms blueprint save <name>";
-
-/// Files and directories to skip when saving a blueprint (runtime artifacts).
-pub(super) const BLUEPRINT_SKIP: &[&str] = &["data", "uploads", "types"];
 
 /// Resolve the global blueprints directory.
 ///
@@ -32,32 +31,58 @@ pub(super) fn blueprints_dir() -> Result<PathBuf> {
     Ok(base.join("crap-cms").join("blueprints"))
 }
 
-/// Recursively copy a directory, skipping entries whose names match `skip`.
-pub(super) fn copy_dir_recursive(src: &Path, dst: &Path, skip: &[&str]) -> Result<()> {
+/// Recursively copy `src` into `dst`, leaving out every entry `exclude`
+/// matches (it receives the entry's source path). Symlinks are neither
+/// followed nor copied — a blueprint is a self-contained copy, and following a
+/// directory link could recurse forever — and are returned so the caller can
+/// report them.
+pub(super) fn copy_dir_recursive(
+    src: &Path,
+    dst: &Path,
+    exclude: &dyn Fn(&Path) -> bool,
+) -> Result<Vec<PathBuf>> {
+    let mut skipped_links = Vec::new();
+
     for entry in fs::read_dir(src)
         .with_context(|| format!("Failed to read directory '{}'", src.display()))?
     {
         let entry = entry?;
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
+        let src_path = entry.path();
 
-        if skip.iter().any(|s| *s == name_str.as_ref()) {
+        if exclude(&src_path) {
             continue;
         }
 
-        let src_path = entry.path();
-        let dst_path = dst.join(&name);
+        let file_type = entry.file_type()?;
+        let dst_path = dst.join(entry.file_name());
 
-        if src_path.is_dir() {
+        if file_type.is_symlink() {
+            skipped_links.push(src_path);
+        } else if file_type.is_dir() {
             fs::create_dir_all(&dst_path)?;
-            copy_dir_recursive(&src_path, &dst_path, &[])?; // skip only applies at top level
+            skipped_links.extend(copy_dir_recursive(&src_path, &dst_path, exclude)?);
         } else {
             fs::copy(&src_path, &dst_path)
                 .with_context(|| format!("Failed to copy '{}'", src_path.display()))?;
         }
     }
 
-    Ok(())
+    Ok(skipped_links)
+}
+
+/// Tell the operator which symlinks [`copy_dir_recursive`] left out.
+pub(super) fn report_skipped_links(links: &[PathBuf]) {
+    for link in links {
+        cli::warning(&format!(
+            "Skipped symlink '{}' -- blueprints hold regular files only",
+            link.display()
+        ));
+    }
+}
+
+/// An `exclude` for [`copy_dir_recursive`] that keeps everything.
+pub(super) fn keep_all(_: &Path) -> bool {
+    false
 }
 
 /// Count `.lua` files in a directory (0 if directory doesn't exist).
@@ -119,6 +144,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+
     use clap::Parser as _;
 
     use super::*;
@@ -172,7 +200,8 @@ mod tests {
         fs::write(src.join("data/crap.db"), "binary").unwrap();
 
         fs::create_dir_all(&dst).unwrap();
-        copy_dir_recursive(&src, &dst, &["data"]).unwrap();
+        let skip_data = |p: &Path| p == src.join("data");
+        copy_dir_recursive(&src, &dst, &skip_data).unwrap();
 
         assert!(dst.join("crap.toml").exists());
         assert!(dst.join("collections/posts.lua").exists());
@@ -190,7 +219,7 @@ mod tests {
         fs::write(src.join("a/top.txt"), "top content").unwrap();
 
         fs::create_dir_all(&dst).unwrap();
-        copy_dir_recursive(&src, &dst, &[]).unwrap();
+        copy_dir_recursive(&src, &dst, &keep_all).unwrap();
 
         assert_eq!(
             fs::read_to_string(dst.join("a/b/c/deep.txt")).unwrap(),
@@ -202,54 +231,27 @@ mod tests {
         );
     }
 
+    /// Regression: a directory symlink was followed (`is_dir()` follows), so a
+    /// link pointing at an ancestor recursed until the stack overflowed.
+    #[cfg(unix)]
     #[test]
-    fn copy_dir_recursive_skip_multiple() {
+    fn copy_dir_recursive_does_not_follow_symlinks() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let src = tmp.path().join("src");
         let dst = tmp.path().join("dst");
 
-        fs::create_dir_all(src.join("data")).unwrap();
-        fs::create_dir_all(src.join("uploads")).unwrap();
-        fs::create_dir_all(src.join("types")).unwrap();
-        fs::create_dir_all(src.join("collections")).unwrap();
-        fs::write(src.join("crap.toml"), "# config").unwrap();
-        fs::write(src.join("data/crap.db"), "db").unwrap();
-        fs::write(src.join("uploads/photo.jpg"), "photo").unwrap();
-        fs::write(src.join("types/crap.lua"), "types").unwrap();
-        fs::write(src.join("collections/posts.lua"), "posts").unwrap();
+        fs::create_dir_all(src.join("sub")).unwrap();
+        fs::write(src.join("sub/file.txt"), "x").unwrap();
+        symlink(&src, src.join("sub/loop")).unwrap();
+        symlink(src.join("sub/file.txt"), src.join("link.txt")).unwrap();
 
         fs::create_dir_all(&dst).unwrap();
-        copy_dir_recursive(&src, &dst, BLUEPRINT_SKIP).unwrap();
+        let skipped = copy_dir_recursive(&src, &dst, &keep_all).unwrap();
 
-        assert!(dst.join("crap.toml").exists());
-        assert!(dst.join("collections/posts.lua").exists());
-        assert!(!dst.join("data").exists());
-        assert!(!dst.join("uploads").exists());
-        assert!(!dst.join("types").exists());
-    }
-
-    #[test]
-    fn copy_dir_recursive_skip_only_top_level() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let src = tmp.path().join("src");
-        let dst = tmp.path().join("dst");
-
-        fs::create_dir_all(src.join("data")).unwrap();
-        fs::create_dir_all(src.join("subdir/data")).unwrap();
-        fs::write(src.join("data/file.txt"), "top data").unwrap();
-        fs::write(src.join("subdir/data/file.txt"), "nested data").unwrap();
-
-        fs::create_dir_all(&dst).unwrap();
-        copy_dir_recursive(&src, &dst, &["data"]).unwrap();
-
-        assert!(
-            !dst.join("data").exists(),
-            "top-level data/ should be skipped"
-        );
-        assert!(
-            dst.join("subdir/data/file.txt").exists(),
-            "nested data/ should NOT be skipped"
-        );
+        assert!(dst.join("sub/file.txt").exists());
+        assert!(!dst.join("sub/loop").exists());
+        assert!(!dst.join("link.txt").exists());
+        assert_eq!(skipped.len(), 2);
     }
 
     #[test]

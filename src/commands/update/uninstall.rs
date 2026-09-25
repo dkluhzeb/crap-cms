@@ -11,7 +11,7 @@ use super::{completions, store, version::normalize_tag};
 /// Remove a version. Also removes installed shell completions if no
 /// versions remain — they follow the tool, not any individual version.
 pub(super) fn run_uninstall(version: &str) -> Result<()> {
-    let version = normalize_tag(version);
+    let version = normalize_tag(version)?;
     let store = store::Store::default_for_user()?;
     store.uninstall(&version)?;
     cli::success(&format!("Removed {version}."));

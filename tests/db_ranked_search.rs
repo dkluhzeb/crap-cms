@@ -44,8 +44,12 @@ fn seed(
     .into_iter()
     .collect();
     let doc = query::create(conn, "posts", def, &data, None).expect(id_hint);
-    query::fts::fts_upsert(conn, "posts", &doc.id, def, &LocaleConfig::default())
-        .expect("fts upsert");
+    query::fts::fts_upsert(
+        conn,
+        &query::fts::FtsIndex::builder("posts", def, &LocaleConfig::default()).build(),
+        &doc.id,
+    )
+    .expect("fts upsert");
     doc.id.to_string()
 }
 
@@ -55,7 +59,11 @@ fn seed(
 fn rank_orders_by_relevance_best_first() {
     let (_tmp, db_pool, def) = setup();
     let conn = db_pool.get().unwrap();
-    query::fts::sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+    query::fts::sync_fts_table(
+        &conn,
+        &query::fts::FtsIndex::builder("posts", &def, &LocaleConfig::default()).build(),
+    )
+    .unwrap();
 
     let weak = seed(&conn, &def, "weak", "Notes", "mentions rust once");
     let strong = seed(

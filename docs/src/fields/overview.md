@@ -117,17 +117,37 @@ of the tables.
 | `description` | string \| table | `nil` | Help text displayed below the input. Supports [localized strings](../locale/overview.md#admin-label-localization). |
 | `hidden` | boolean | `false` | Hide from the admin edit form (collections and globals, at every nesting depth). The field's value is still returned in API responses (gRPC, Lua, MCP, REST) so consumers and admin widgets (e.g. upload preview, focal-point selector) can read it, and an admin save never overwrites it — a hidden checkbox or multi-value list keeps its stored value. For full API stripping, use the top-level `hidden` field property instead. |
 | `readonly` | boolean | `false` | Display but don't allow editing. Honoured by every editable field type, including checkbox, select, radio and a timezone date's zone picker, which render disabled with a hidden input carrying the stored value (a password input is never rendered readonly). **Cascades into containers:** set on a `group`, `array`, `blocks`, `row`, `collapsible` or `tabs` field it applies to every field nested inside, at any depth, and an array/blocks field also drops its row controls (add, remove, move, duplicate, drag-to-reorder) and its block picker — collapsing a row stays available. A readonly `relationship` or `upload` field also drops its "Create new" / "Upload new" link. Enforced by the form only: an API write is not restricted by it. |
-| `width` | string | `nil` | Field width: `"full"` (default), `"half"`, `"third"`, or any CSS width string (`"50%"`, `"200px"`) |
-| `position` | string | `"main"` | Form layout position: `"main"` or `"sidebar"` |
+| `width` | string | `nil` | Field width in the edit form: `"full"` (default), `"half"`, `"third"`, or any CSS width string (`"40%"`, `"20rem"`). Fields narrower than the row share it with their neighbours, at every level (top level, groups, rows, collapsibles, tabs, array and blocks rows); a percentage leaves room for the gap, so `"50%"` twice fills a row like `"half"`. In a container narrower than 40rem (a phone, the create drawer) fields stack full width again. Sidebar fields are always full width. |
+| `position` | string | `"main"` | Form layout position of a top-level field: `"main"` or `"sidebar"`. A field nested in a group, row, collapsible, tabs, array or blocks field renders inside its container, so setting `position` on one is a load error. |
 | `condition` | string | `nil` | Lua function ref for conditional visibility (see [Conditions](../hooks/conditions.md)) |
 | `step` | string | `nil` | Step attribute for number inputs (e.g., `"1"`, `"0.01"`, `"any"`) |
-| `rows` | integer | `nil` | Visible rows for textarea fields |
+| `rows` | integer | `nil` | Visible rows for textarea and JSON fields (default 8 and 12); the height of a code field's editor in lines. |
 | `collapsed` | boolean | `true` | Default collapsed state for groups, collapsibles, array/block rows |
 | `label_field` | string | `nil` | Sub-field whose value titles each row (arrays/blocks). For blocks, a per-block `label_field` takes priority. |
 | `row_label` | string | `nil` | Lua function ref for computed row labels (arrays/blocks) — `fun(row): string?`. Takes priority over `label_field`. |
-| `labels` | table | `{}` | Custom `{ singular, plural }` row-item labels (e.g. the "Add Slide" button text). |
+| `labels` | table | `{}` | Custom `{ singular, plural }` labels: `singular` names one row (the "Add Slide" button, untitled row headers "Slide 1"), `plural` is the field header when `label` is not set. |
 | `language` | string | `nil` | Syntax-highlight language for `code` fields (the fixed language, or the initial one when `languages` is set). |
 | `languages` | string[] | `[]` | Allow-list of languages the editor can switch between on a `code` field; the choice persists in a `<name>_lang` companion column. |
+| `picker` | string | per type | Picker UI: `"select"` / `"card"` on blocks, `"drawer"` / `"none"` on upload and relationship. |
+| `resizable` | boolean | `true` | Allow vertical resize on textarea and richtext fields. |
+| `format`, `features`, `nodes` | | | Rich text storage format, toolbar features and custom nodes — see [Rich Text](richtext.md). |
+
+Keys that only some field types read are refused on every other type, so a
+setting can never be silently ignored:
+
+| Key | Field types |
+|---|---|
+| `placeholder` | text, email, number, textarea, json, code, richtext |
+| `collapsed` | group, collapsible, array, blocks |
+| `label_field`, `row_label`, `labels` | array, blocks |
+| `step` | number |
+| `rows` | textarea, code, json |
+| `language`, `languages` | code |
+| `picker` | relationship, upload, blocks |
+| `resizable` | textarea, richtext |
+| `format`, `features`, `nodes` | richtext |
+
+The remaining keys apply to every field type.
 
 ## Layout Wrappers
 

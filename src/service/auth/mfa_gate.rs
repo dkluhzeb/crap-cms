@@ -2,6 +2,12 @@
 //! session is minted: the password login, a custom-strategy login, and an
 //! external auth callback (OAuth / OIDC). One gate, so a new way in cannot
 //! quietly skip the collection's MFA requirement.
+//!
+//! The same gate judges each request a session token authenticates
+//! ([`second_factor_required`]): a session that did not satisfy the second
+//! factor is refused wherever the gate — for that request's surface and
+//! headers — requires it, so a token minted on a surface without MFA cannot
+//! be replayed on one with it.
 
 use std::collections::HashMap;
 
@@ -13,7 +19,7 @@ use crate::{
         collection::{Auth, MfaMode, Surface},
     },
     db::DbConnection,
-    hooks::lifecycle::MfaWhenInput,
+    hooks::{HookRunner, lifecycle::MfaWhenInput},
     service::{
         AppInfra,
         auth::{LoginOutcome, LoginVerified},
@@ -39,28 +45,39 @@ pub struct MfaGateRequest<'a> {
     callback: Option<&'a str>,
 }
 
+/// The collection's auth config when it has an MFA mode.
+fn mfa_auth<'a>(req: &MfaGateRequest<'a>) -> Option<&'a Auth> {
+    req.def.auth.as_ref().filter(|a| a.mfa() != MfaMode::Off)
+}
+
+/// Whether the authenticating callback is one the collection exempts from
+/// its MFA step — its identity provider enforces a second factor, so the
+/// session counts as having satisfied one.
+fn exempt_callback(req: &MfaGateRequest<'_>) -> bool {
+    let Some(auth) = mfa_auth(req) else {
+        return false;
+    };
+
+    req.callback
+        .is_some_and(|name| auth.mfa_exempts_callback(name))
+}
+
 /// The collection's auth config when this authentication must be judged by
 /// the MFA step at all: `None` when the collection has no MFA mode, or the
-/// authenticating callback is one it exempts (its identity provider enforces
-/// a second factor).
+/// authenticating callback is one it exempts.
 fn gated_auth<'a>(req: &MfaGateRequest<'a>) -> Option<&'a Auth> {
-    let auth = req.def.auth.as_ref().filter(|a| a.mfa() != MfaMode::Off)?;
-
-    if req
-        .callback
-        .is_some_and(|name| auth.mfa_exempts_callback(name))
-    {
+    if exempt_callback(req) {
         return None;
     }
 
-    Some(auth)
+    mfa_auth(req)
 }
 
 /// Whether the collection's `mfa_when` hook requires the second factor for
 /// this user. No hook = always required; a hook error fails CLOSED — an auth
 /// gate that breaks must require more proof, not less.
 fn mfa_when_requires(
-    infra: &AppInfra,
+    hook_runner: &HookRunner,
     conn: &dyn DbConnection,
     req: &MfaGateRequest<'_>,
     auth: &Auth,
@@ -77,8 +94,7 @@ fn mfa_when_requires(
         headers: req.headers,
     };
 
-    infra
-        .hook_runner
+    hook_runner
         .run_mfa_when(hook, &input, conn)
         .inspect_err(|e| {
             error!(
@@ -91,24 +107,46 @@ fn mfa_when_requires(
         .unwrap_or(true)
 }
 
+/// Whether the gate requires the second factor for `user` on this request.
+///
+/// A login or callback that gets `true` must run the MFA step before any
+/// session is minted ([`mfa_gate`]). A session token that did **not** satisfy
+/// the second factor and gets `true` for the request it authenticates is
+/// refused — the gate is judged for that request's surface and headers
+/// (`mfa_when` runs with them), and such a request carries no callback: the
+/// session is being used, not established.
+#[must_use]
+pub fn second_factor_required(
+    hook_runner: &HookRunner,
+    conn: &dyn DbConnection,
+    req: &MfaGateRequest<'_>,
+    user: &Document,
+) -> bool {
+    gated_auth(req).is_some_and(|auth| mfa_when_requires(hook_runner, conn, req, auth, user))
+}
+
 /// Route a verified authentication through the collection's MFA requirement:
 /// [`LoginOutcome::MfaRequired`] when the surface must run its MFA step
-/// before minting a session, [`LoginOutcome::Verified`] otherwise.
+/// before minting a session, [`LoginOutcome::Verified`] otherwise. An
+/// exempt callback's authentication comes back marked as having satisfied
+/// the second factor, so the session minted from it carries that stamp.
 pub fn mfa_gate(
     infra: &AppInfra,
     conn: &dyn DbConnection,
     req: &MfaGateRequest<'_>,
-    verified: LoginVerified,
+    mut verified: LoginVerified,
 ) -> LoginOutcome {
-    let Some(auth) = gated_auth(req) else {
-        return LoginOutcome::Verified(verified);
-    };
+    if exempt_callback(req) {
+        verified.mfa = true;
 
-    if !mfa_when_requires(infra, conn, req, auth, &verified.user) {
         return LoginOutcome::Verified(verified);
     }
 
-    LoginOutcome::MfaRequired(verified)
+    if second_factor_required(&infra.hook_runner, conn, req, &verified.user) {
+        return LoginOutcome::MfaRequired(verified);
+    }
+
+    LoginOutcome::Verified(verified)
 }
 
 #[cfg(test)]
@@ -159,5 +197,28 @@ mod tests {
             "a non-exempt callback is gated"
         );
         assert!(!gated(&def, Some("okta")), "the exempt callback is not");
+    }
+
+    fn exempt(def: &CollectionDefinition, callback: Option<&str>) -> bool {
+        let headers = HashMap::new();
+        let req = MfaGateRequest::builder("users", def, Surface::Admin, &headers)
+            .callback(callback)
+            .build();
+
+        exempt_callback(&req)
+    }
+
+    /// Only a callback the collection names — on a collection with an MFA
+    /// mode — counts as having satisfied the second factor; its session is
+    /// stamped so. A login never is.
+    #[test]
+    fn only_a_named_callback_satisfies_the_second_factor() {
+        let with_mfa = def(totp_exempting("okta"));
+        let without_mfa = def(Auth::enabled());
+
+        assert!(exempt(&with_mfa, Some("okta")));
+        assert!(!exempt(&with_mfa, Some("google")));
+        assert!(!exempt(&with_mfa, None));
+        assert!(!exempt(&without_mfa, Some("okta")));
     }
 }

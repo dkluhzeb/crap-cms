@@ -36,4 +36,21 @@ function M.writing_auth(ctx)
     return nil
 end
 
+--- `mfa_deliver` hook with a side-effect write: records the delivery, then
+--- fails for the code "000000". Pins the lazy-transaction contract (commit
+--- when the hook returns, rollback when it raises).
+function M.deliver_writing(ctx)
+    crap.collections.create("articles", {
+        title = "Delivered",
+        body = "side effect",
+    }, { override_access = true })
+
+    if ctx.code == "000000" then
+        error("delivery failed")
+    end
+end
+
+--- `mfa_deliver` hook without CRUD (a pure outbound send).
+function M.deliver_noop(ctx) end
+
 return M

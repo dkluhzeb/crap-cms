@@ -1,6 +1,10 @@
 use serde_json::Value;
 
-use crate::core::{FieldDefinition, FieldType, validate::FieldError};
+use crate::core::{
+    FieldDefinition, FieldType,
+    richtext::{richtext_is_blank, richtext_plain_text},
+    validate::FieldError,
+};
 
 /// Whether `field` stores text: a present value must be a string, or the
 /// write would store the JSON spelling of whatever was sent (`["a"]` as
@@ -22,8 +26,30 @@ pub(crate) fn not_text_error(field: &FieldDefinition, data_key: &str) -> FieldEr
     .with_param("field", field.name.clone())
 }
 
+/// The length `min_length` / `max_length` measure: the characters of a text
+/// value, or of a rich text value's plain text (either format, a JSON document
+/// as text or as an object). `Err` when the value is not text of the field's
+/// kind; `Ok(None)` — nothing to measure — for blank rich text (absent, like
+/// an empty string: bounds never make an optional field required) and for
+/// rich text unreadable in its format, which the rich text shape check
+/// refuses on its own.
+fn measured_length(field: &FieldDefinition, value: Option<&Value>) -> Result<Option<usize>, ()> {
+    if field.field_type == FieldType::Richtext {
+        return Ok(value
+            .filter(|v| !richtext_is_blank(field, v))
+            .and_then(|v| richtext_plain_text(field, v))
+            .map(|text| text.chars().count()));
+    }
+
+    match value {
+        Some(Value::String(s)) => Ok(Some(s.chars().count())),
+        _ => Err(()),
+    }
+}
+
 /// Reject a present value on a text field that isn't a string, and validate
-/// `min_length` / `max_length` on the string. Skipped for `has_many` fields
+/// `min_length` / `max_length` — on the string, or on a rich text value's
+/// plain text (markup is not counted). Skipped for `has_many` fields
 /// (validated per-element in `check_has_many_elements`).
 pub(crate) fn check_length_bounds(
     field: &FieldDefinition,
@@ -38,7 +64,7 @@ pub(crate) fn check_length_bounds(
         return;
     }
 
-    let Some(Value::String(s)) = value else {
+    let Ok(len) = measured_length(field, value) else {
         // A present non-string value would be stored as its JSON spelling —
         // and on a length-constrained field bypass min/max_length. Reject it,
         // matching how a present non-numeric value is rejected for Number.
@@ -47,11 +73,9 @@ pub(crate) fn check_length_bounds(
         return;
     };
 
-    if !has_bounds {
+    let Some(len) = len.filter(|_| has_bounds) else {
         return;
-    }
-
-    let len = s.chars().count();
+    };
 
     if let Some(min_len) = field.min_length
         && len < min_len
@@ -85,7 +109,7 @@ pub(crate) fn check_length_bounds(
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use crate::core::DocumentFields;
-    use crate::core::{FieldDefinition, FieldType};
+    use crate::core::{FieldAdmin, FieldDefinition, FieldType};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::{Value, json};
 
@@ -347,5 +371,66 @@ mod tests {
             result.is_ok(),
             "min_length should not trigger on empty values"
         );
+    }
+
+    /// Error keys for a rich text `body` bounded to `min..=max` characters.
+    fn richtext_length_keys(format: &str, min: usize, max: usize, value: Value) -> Vec<String> {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, body TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("body", FieldType::Richtext)
+                .min_length(min)
+                .max_length(max)
+                .admin(FieldAdmin::builder().richtext_format(format).build())
+                .build(),
+        ];
+        let data: DocumentFields = [("body".to_string(), value)].into_iter().collect();
+
+        validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        )
+        .err()
+        .map(|e| e.errors.iter().filter_map(|fe| fe.key.clone()).collect())
+        .unwrap_or_default()
+    }
+
+    /// Regression: rich text bounds counted the markup of an HTML value (and
+    /// the serialization of a JSON one), and refused the document object form
+    /// outright as "must be text". They measure the plain text now.
+    #[test]
+    fn richtext_bounds_measure_plain_text() {
+        let html = json!("<p><strong>abc</strong></p>");
+        assert!(richtext_length_keys("html", 1, 3, html.clone()).is_empty());
+        assert_eq!(
+            richtext_length_keys("html", 1, 2, html),
+            vec!["validation.max_length"]
+        );
+
+        let doc = json!({ "type": "doc", "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "abc" }] }
+        ]});
+        assert!(richtext_length_keys("json", 3, 3, doc.clone()).is_empty());
+        assert!(richtext_length_keys("json", 3, 3, json!(doc.to_string())).is_empty());
+        assert_eq!(
+            richtext_length_keys("json", 4, 10, doc),
+            vec!["validation.min_length"]
+        );
+    }
+
+    /// Regression: an emptied editor's markup (`<p></p>`, an empty paragraph)
+    /// was measured as zero characters, so `min_length` refused clearing an
+    /// optional rich text field — bounds skip a blank value like an empty
+    /// string.
+    #[test]
+    fn richtext_bounds_skip_a_blank_value() {
+        assert!(richtext_length_keys("html", 3, 10, json!("<p></p>")).is_empty());
+
+        let empty = json!({ "type": "doc", "content": [{ "type": "paragraph" }] });
+        assert!(richtext_length_keys("json", 3, 10, empty).is_empty());
     }
 }

@@ -20,7 +20,7 @@ use axum::{
     Router,
     body::{self, Body},
     error_handling::HandleErrorLayer,
-    extract::{ConnectInfo, DefaultBodyLimit, State},
+    extract::{ConnectInfo, DefaultBodyLimit, MatchedPath, State},
     http::{
         Method, Request, StatusCode,
         header::{
@@ -478,11 +478,11 @@ fn assemble_base_router(
             get(auth_handlers::mfa_page).post(auth_handlers::verify_mfa_action),
         )
         .route(
-            "/admin/auth/callback/{name}",
+            csrf::AUTH_CALLBACK_ROUTE,
             get(auth_handlers::auth_callback).post(auth_handlers::auth_callback),
         )
         .route(
-            "/admin/auth/callback/{collection}/{name}",
+            csrf::AUTH_CALLBACK_SCOPED_ROUTE,
             get(auth_handlers::auth_callback_scoped).post(auth_handlers::auth_callback_scoped),
         )
         .merge(protected)
@@ -882,6 +882,15 @@ async fn csrf_middleware(
     // ignores — `Bearer` with nothing after it — can't skip the check and then
     // authenticate from the session cookie anyway.
     if bearer_token(request.headers()).is_some() {
+        return next.run(request).await;
+    }
+
+    // An identity provider's form_post callback is a cross-site POST that
+    // never carries the token cookie; its login-CSRF defense is the OAuth
+    // `state` its hook checks.
+    let matched = request.extensions().get::<MatchedPath>();
+
+    if csrf::exempt_route(matched.map(MatchedPath::as_str)) {
         return next.run(request).await;
     }
 

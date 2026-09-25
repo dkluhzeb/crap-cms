@@ -25,7 +25,7 @@ fn bump_session_version_blocking(
     collection: &str,
     sub: &str,
 ) {
-    let conn = match pool.get() {
+    let conn = match pool.write() {
         Ok(conn) => conn,
         Err(e) => {
             warn!(

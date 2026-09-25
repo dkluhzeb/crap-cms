@@ -20,10 +20,43 @@ use mlua::{Error::RuntimeError, Lua, Result as LuaResult};
 use crate::{
     db::DbConnection,
     hooks::{
-        lifecycle::{AfterReadScope, PoolContext, PoolMode, TxContext, check_execution_deadline},
+        lifecycle::{
+            AfterReadScope, LazyTxContext, PoolContext, PoolMode, ReadOnlyScope, TxContext,
+            check_execution_deadline,
+        },
         lua_api::transaction::run_scoped_tx,
     },
 };
+
+/// Open the hook's pending lazy transaction (see
+/// [`LazyTx`](crate::hooks::lifecycle::LazyTx)) at its first CRUD call and
+/// install its connection as the `TxContext` every later call shares. A
+/// no-op when a `TxContext` is already installed or no lazy transaction is
+/// pending.
+///
+/// # Errors
+///
+/// Returns a Lua runtime error when the transaction cannot be opened (no
+/// write connection, `BEGIN` failed).
+pub(crate) fn open_lazy_tx(lua: &Lua) -> LuaResult<()> {
+    if lua.app_data_ref::<TxContext>().is_some() {
+        return Ok(());
+    }
+
+    let Some(lazy) = lua.app_data_ref::<LazyTxContext>().map(|c| *c) else {
+        return Ok(());
+    };
+
+    // SAFETY: the `LazyTxGuard` that installed `lazy` borrows the `LazyTx`
+    // for as long as the context is installed, and on drop removes both it
+    // and the `TxContext` set below — before the transaction can drop.
+    let tx = unsafe { lazy.tx() };
+    let conn = tx.conn().map_err(|e| RuntimeError(format!("{e:#}")))?;
+
+    lua.set_app_data(TxContext::new(conn));
+
+    Ok(())
+}
 
 /// Get the active transaction connection from Lua `app_data`.
 /// Returns an error if no `TxContext` is set (i.e. called outside hook
@@ -37,6 +70,8 @@ use crate::{
 /// (jobs) as well. Direct callers of `get_tx_conn` are restricted to
 /// conn-mode contexts.
 pub(crate) fn get_tx_conn(lua: &Lua) -> LuaResult<&dyn DbConnection> {
+    open_lazy_tx(lua)?;
+
     let ctx = lua.app_data_ref::<TxContext>().ok_or_else(|| {
         RuntimeError(
             "crap.collections CRUD functions need a database context — call \
@@ -116,6 +151,9 @@ pub(crate) fn with_lua_db<R>(
     // that spends its time waiting on I/O and never trips the VM hook.
     check_execution_deadline(lua)?;
 
+    // A hook's lazy transaction opens here, at its first CRUD call.
+    open_lazy_tx(lua)?;
+
     // Conn-mode: a shared outer tx is already open. Hand the existing
     // connection to `work` — `get_tx_conn(lua)` inside `work` sees the
     // same TxContext.
@@ -159,34 +197,44 @@ fn refuse_in_after_read(lua: &Lua) -> LuaResult<()> {
     ))
 }
 
+/// The read-only hook whose context is active, if any: an explicit
+/// [`ReadOnlyScope`] (a read-only hook on a borrowed connection, such as the
+/// `mfa_when` gate) or a [`PoolMode::ReadOnly`] pool context (the admin
+/// `before_render` hook).
+fn read_only_hook(lua: &Lua) -> Option<&'static str> {
+    if let Some(scope) = lua.app_data_ref::<ReadOnlyScope>() {
+        return Some(scope.0);
+    }
+
+    let ctx = lua.app_data_ref::<PoolContext>()?;
+
+    (ctx.mode == PoolMode::ReadOnly).then_some("the admin `before_render` hook")
+}
+
 /// Refuse a write when the active context is read-only.
 ///
-/// The gate for the admin `before_render` contract. It deliberately looks at
-/// the `PoolContext` **before** any `TxContext`, because a read-only context
-/// installs a `TxContext` while a read is in flight — so a nested write (a
+/// The gate for every read-only hook contract (the admin `before_render`
+/// hook, the `mfa_when` gate). It deliberately looks at the read-only markers
+/// **before** any `TxContext`, because a read-only context installs (or runs
+/// on) a `TxContext` while a read is in flight — so a nested write (a
 /// `before_read` hook running inside a render hook's `find`, for instance)
 /// must still be refused rather than inheriting the read connection.
 ///
 /// # Errors
 ///
-/// Returns a Lua runtime error naming the alternative when the active pool
-/// context is [`PoolMode::ReadOnly`].
+/// Returns a Lua runtime error naming the read-only hook and the alternative
+/// when a read-only context is active.
 pub(crate) fn ensure_writable(lua: &Lua) -> LuaResult<()> {
-    let Some(ctx) = lua.app_data_ref::<PoolContext>() else {
+    let Some(hook) = read_only_hook(lua) else {
         return Ok(());
     };
 
-    if ctx.mode == PoolMode::ReadOnly {
-        return Err(RuntimeError(
-            "this operation writes to the database, which is not available here — \
-             the admin `before_render` hook runs read-only. Use the read functions \
-             (find, find_by_id, count, ...) to build page data, and do writes from \
-             a lifecycle hook, a job handler, or a custom route instead."
-                .into(),
-        ));
-    }
-
-    Ok(())
+    Err(RuntimeError(format!(
+        "this operation writes to the database, which is not available here — \
+         {hook} runs read-only. Use the read functions (find, find_by_id, count, \
+         ...) inside it, and do writes from a lifecycle hook, a job handler, or a \
+         custom route instead."
+    )))
 }
 
 /// The error raised when a CRUD function runs with neither a `TxContext`
@@ -221,6 +269,7 @@ pub(crate) fn with_lua_db_read<R>(
 ) -> LuaResult<R> {
     refuse_in_after_read(lua)?;
     check_execution_deadline(lua)?;
+    open_lazy_tx(lua)?;
 
     if lua.app_data_ref::<TxContext>().is_some() {
         let conn = get_tx_conn(lua)?;
@@ -274,7 +323,7 @@ mod tests {
     use crate::{
         config::CrapConfig,
         db::pool,
-        hooks::lifecycle::{ExecutionDeadline, ExecutionDeadlineGuard},
+        hooks::lifecycle::{ExecutionDeadline, ExecutionDeadlineGuard, ReadOnlyScopeGuard},
     };
     use mlua::Lua;
 
@@ -335,6 +384,32 @@ mod tests {
         assert!(
             err.to_string().contains("read-only"),
             "the message should name the read-only contract: {err}"
+        );
+    }
+
+    /// A read-only hook running on a borrowed connection (the `mfa_when`
+    /// gate) refuses writes by name — even with a `TxContext` installed —
+    /// and the refusal lifts when its scope ends.
+    #[test]
+    fn ensure_writable_refuses_inside_a_read_only_scope() {
+        let lua = Lua::new();
+
+        {
+            let _scope = ReadOnlyScopeGuard::install(&lua, "the `mfa_when` gate");
+
+            let Err(err) = ensure_writable(&lua) else {
+                panic!("a read-only scope must refuse writes");
+            };
+            assert!(
+                err.to_string()
+                    .contains("the `mfa_when` gate runs read-only"),
+                "the message should name the read-only hook: {err}"
+            );
+        }
+
+        assert!(
+            ensure_writable(&lua).is_ok(),
+            "the scope is removed when its guard drops"
         );
     }
 

@@ -72,7 +72,6 @@ impl Operation for UpdateMany {
             .locale_ctx(locale_ctx.as_ref())
             .run_hooks(args.run_hooks)
             .draft(args.draft)
-            .ui_locale(ctx.ui_locale.clone())
             .max_documents(args.max_documents)
             .deadline(args.deadline)
             .build();

@@ -131,9 +131,8 @@
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-md);
   padding: var(--space-xl);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-lg);
+  /* Lays its fields out like every field container — see "Field layout"
+     in parts/forms.css. */
 }
 
 .edit-layout__sidebar {

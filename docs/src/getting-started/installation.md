@@ -51,7 +51,7 @@ Once the binary is installed via the script, `crap-cms update` acts as a built-i
 |---------|--------------|
 | `crap-cms update check` | Compare the running version to the latest GitHub release. Exit 0 if up-to-date, 1 otherwise. Caches the result for 24h. |
 | `crap-cms update list` | List all remote release tags. Installed versions are marked `(installed)`; the active one is marked `*`. |
-| `crap-cms update install <version>` | Download + verify + stage a specific version in the store (does not switch). |
+| `crap-cms update install <version>` | Download + verify (SHA256 integrity, not a signature) + atomically stage a specific version in the store (does not switch). |
 | `crap-cms update use <version>` | Switch the `current` symlink to an installed version. Atomic. |
 | `crap-cms update uninstall <version>` | Remove an installed version. Refuses the active one. |
 | `crap-cms update where` | Print the resolved path of the currently active binary. |

@@ -11,9 +11,13 @@ mod pagination;
 pub(crate) mod paths;
 pub(crate) mod response;
 mod versions;
+mod write_error;
 
 // database errors
 pub(crate) use db_error::db_error_status;
+
+// write errors on the edit forms
+pub(in crate::admin::handlers) use write_error::write_error_toast;
 
 // breadcrumb base-chains
 pub(crate) use breadcrumbs::{collection_base, collection_item_base, global_base};
@@ -35,9 +39,9 @@ pub(crate) use super::query::{
 
 // access
 pub(crate) use access::{
-    EvaluateConditionsRequest, check_access_or_forbid, compute_denied_read_fields,
-    evaluate_condition_results, get_user_doc, has_access_with_conn, has_page_access,
-    has_page_access_with_conn, is_admin_visible, is_admin_visible_with_conn,
+    EvaluateConditionsRequest, access_admits_row, check_access_or_forbid,
+    compute_denied_read_fields, evaluate_condition_results, get_user_doc, has_access_with_conn,
+    has_page_access, has_page_access_with_conn, is_admin_visible, is_admin_visible_with_conn,
 };
 
 // document

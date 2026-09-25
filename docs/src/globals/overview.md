@@ -35,6 +35,24 @@ crap.globals.define("site_settings", {
 
 With `versions` enabled, publishing a global while a draft is pending takes the pending draft as its base, exactly like a collection document — see [Versions](../collections/versions.md#updating-documents).
 
+Field-level `unique` and `index` are rejected at load on a global's columns (top-level fields and group sub-fields): a global is a single row, so neither could ever apply. (Fields inside an array or blocks field live in their own table and are not affected.)
+
+## Unpublishing
+
+With `versions = { drafts = true }`, a global can be unpublished (admin **Unpublish** button, `crap.globals.<slug>.unpublish()`). Its stored content is kept, but until it is published again every non-draft read — admin API, Lua, gRPC `GetGlobal`, MCP `global_read_*` — returns an **empty** global: every field null, `_status = "draft"`. Reads that opt into drafts (`draft = true`, the admin edit form) still see the content. Publishing again (any published update) makes it visible. Unpublish is refused on a global without drafts.
+
+## Versions by surface
+
+Not every surface exposes a global's version operations:
+
+| Operation | Admin UI | Lua | gRPC | MCP |
+|-----------|----------|-----|------|-----|
+| Draft save / publish (`update` with `draft`) | Yes | Yes | Yes | Yes |
+| Read the draft (`draft = true`) | Yes | Yes | Yes | Yes |
+| Unpublish | Yes | Yes | No | No |
+| List versions | Yes | No | No | No |
+| Restore a version | Yes | No | No | No |
+
 ## Database Table
 
 Each global gets a table named `_global_{slug}` with a single row where `id = 'default'`. The row is auto-created on startup.
@@ -50,7 +68,7 @@ Globals always have `created_at` and `updated_at` timestamp columns.
 | CRUD operations | find, find_by_id, create, update, delete | get, update |
 | Timestamps | Optional (`timestamps = true`) | Always enabled |
 | Auth / Upload | Supported | Not supported |
-| Versions | Supported | Supported |
+| Versions | Supported | Supported (version history and unpublish on fewer surfaces — see [Versions by surface](#versions-by-surface)) |
 | Live updates | Supported | Supported |
 | MCP | Supported | Supported |
 

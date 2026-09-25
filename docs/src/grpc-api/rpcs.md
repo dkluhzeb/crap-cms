@@ -213,8 +213,11 @@ Semantics worth knowing:
   Only a **reference** (user id + auth collection + session version) is
   stored, never a document snapshot, and the user is **re-loaded at
   execution**: if the account was locked, deleted or moved to the trash in
-  the meantime, or its session version was bumped (force-logout, password
-  reset, unverify), the run is abandoned with that reason. Every authentication method can queue —
+  the meantime, or its session version was bumped, the run is abandoned with
+  that reason. **Any** logout bumps the session version — an ordinary
+  admin-UI sign-out in one browser abandons every pending run the same user
+  queued over any surface — as do a password change or reset, a lock, an
+  unverify, and moving the account to the trash. Every authentication method can queue —
   bearer token, session cookie, or a [custom
   strategy](../authentication/custom-strategies.md) (whose user is always a
   stored row of its collection). Besides `CancelJobRun`, an operator can clear
@@ -510,8 +513,11 @@ instead of `token`/`user`. Complete the login with `VerifyMfa`.
 Complete an MFA-gated login: redeem the challenge token from `Login` together
 with the emailed 6-digit code for the JWT a plain login would have issued.
 The challenge token is single-purpose (it cannot be used as a session token,
-and a session token cannot be replayed here) and expires after 5 minutes;
-codes are single-use. Code guessing is rate-limited per identity and per IP
+and a session token cannot be replayed here), bound to the gRPC surface (a
+challenge the admin login issued is refused) and expires after 5 minutes;
+codes are single-use. The session it yields records that it passed the
+second factor, so it also works on the admin where the collection requires
+MFA there. Code guessing is rate-limited per identity and per IP
 with the same budget as the admin MFA page.
 
 ```protobuf

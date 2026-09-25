@@ -48,6 +48,12 @@ keeping it unreadable from userland Lua:
 secret = "${CRAP_SECRET_JWT}"   # substituted at load
 ```
 
+The reservation holds beyond `crap.env`: the sandbox's `io` jail refuses
+`/proc` (so `/proc/self/environ` cannot be read), and the files the
+process keeps its secrets in — `crap.toml`, `data/` (the generated
+`.jwt_secret`), backups, logs and the database — are refused even under
+the config directory (see [Sandbox](../hooks/overview.md#sandbox)).
+
 Store any secret that must not be reachable from a hook under this
 prefix. Other `CRAP_*` variables remain hook-readable, so put
 hook-consumed configuration (webhook URLs, feature flags) under a plain

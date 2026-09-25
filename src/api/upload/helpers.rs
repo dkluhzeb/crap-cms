@@ -80,6 +80,7 @@ fn auth_failure_response(failure: AuthFailure) -> Response {
         AuthFailure::UnknownCollection => "Auth collection no longer exists",
         AuthFailure::BadToken => "Invalid or expired token",
         AuthFailure::Unaccepted => "Credential not accepted on this surface",
+        AuthFailure::MfaRequired => "Second factor required on this surface",
     };
 
     json_error(StatusCode::UNAUTHORIZED, message)

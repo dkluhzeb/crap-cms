@@ -83,7 +83,7 @@ fn resolve_batch<'a>(
         .ok_or_else(|| anyhow!("Expected array for collection '{slug}'"))?;
 
     Ok(ImportBatch {
-        target: ImportTarget::resolve(tx, slug, def, source.locale)?,
+        target: ImportTarget::resolve(tx, slug, def, source.locale)?.with_registry(source.registry),
         docs,
     })
 }

@@ -185,7 +185,7 @@ fn users_def_no_password_login() -> CollectionDefinition {
     let mut def = base_users_def();
     def.auth = Some(Auth {
         enabled: true,
-        token_expiry: 7200,
+        token_expiry: None,
         methods: vec![AuthMethod::Bearer {
             surfaces: SurfaceSet::all(),
         }],
@@ -235,7 +235,7 @@ fn users_def_bearer_admin_only() -> CollectionDefinition {
     let mut def = base_users_def();
     let auth = Auth {
         enabled: true,
-        token_expiry: 7200,
+        token_expiry: None,
         methods: vec![
             AuthMethod::password_login(),
             AuthMethod::Bearer {

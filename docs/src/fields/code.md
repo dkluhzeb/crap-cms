@@ -25,6 +25,8 @@ crap.fields.code({
 |----------|------|---------|-------------|
 | `admin.language` | string | `"json"` | Default language mode for syntax highlighting. |
 | `admin.languages` | string[] | `[]` | Optional allow-list. When non-empty, the form renders a language picker next to the editor and persists the choice per document in a `<name>_lang` companion column. |
+| `admin.rows` | integer | `nil` | Editor height in lines (default: about 8 lines, growing with the content up to a limit). |
+| `admin.placeholder` | string | `nil` | Shown in the empty editor. |
 
 ### Supported Languages
 

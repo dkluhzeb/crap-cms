@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tonic::Request;
 
@@ -26,13 +27,15 @@ use crap_cms::api::content;
 use crap_cms::api::content::content_api_server::ContentApi;
 use crap_cms::api::handlers::{ContentService, ContentServiceDeps};
 use crap_cms::config::*;
-use crap_cms::core::Registry;
+use crap_cms::core::auth::{JwtTokenProvider, TokenProvider, TokenUse};
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
 use crap_cms::core::rate_limit::IP_RESET_PASSWORD_KEYSPACE;
-use crap_cms::db::{DbConnection, DbValue, migrate, pool};
+use crap_cms::core::{HookRef, Registry};
+use crap_cms::db::{DbConnection, DbValue, migrate, pool, query::MfaCode};
 use crap_cms::hooks::lifecycle::HookRunner;
+use crap_cms::service::auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution, evaluate};
 use serde_json::json;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -104,6 +107,10 @@ struct TestSetup {
     /// The same per-IP forgot/reset limiter the service holds, exposed so
     /// rate-limit tests can seed and inspect it.
     ip_forgot_password_limiter: Arc<crap_cms::core::rate_limit::LoginRateLimiter>,
+    /// The registry and hook runner the service runs on, exposed so a test
+    /// can judge a token the service minted on another surface.
+    registry: Arc<Registry>,
+    hook_runner: HookRunner,
 }
 
 fn setup_service(
@@ -180,7 +187,7 @@ fn setup_service_full(
         ContentServiceDeps::builder()
             .pool(db_pool.clone())
             .registry(Registry::snapshot(&shared))
-            .hook_runner(hook_runner)
+            .hook_runner(hook_runner.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -216,6 +223,8 @@ fn setup_service_full(
         service,
         pool: db_pool,
         ip_forgot_password_limiter,
+        registry,
+        hook_runner,
     }
 }
 
@@ -303,8 +312,6 @@ async fn login_valid_credentials() {
 /// interval — which is quiet, unintended drift.
 #[tokio::test]
 async fn login_token_carries_auth_time() {
-    use crap_cms::core::auth::{JwtTokenProvider, TokenProvider};
-
     let ts = setup_service(vec![make_users_def()], vec![]);
 
     ts.service
@@ -348,6 +355,71 @@ async fn login_token_carries_auth_time() {
     assert!(
         auth_time >= before && auth_time <= after,
         "auth_time {auth_time} outside login window [{before}, {after}]",
+    );
+}
+
+/// Log `email` into `collection` (creating the user first) and return the
+/// lifetime of the minted token, in seconds from the login.
+async fn login_token_lifetime(ts: &TestSetup, collection: &str, email: &str) -> u64 {
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: collection.to_string(),
+            data: Some(make_struct(&[("email", email), ("password", "secret123")])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap();
+
+    let before = chrono::Utc::now().timestamp() as u64;
+
+    let resp = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: collection.to_string(),
+            email: email.to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    let claims = JwtTokenProvider::new("test-jwt-secret")
+        .validate_token(&resp.token)
+        .expect("token must validate");
+
+    claims.exp - before
+}
+
+/// Regression: a collection's `token_expiry` defaulted to 7200 when parsed,
+/// so the global `[auth] token_expiry` — documented as the default a
+/// collection overrides — never applied to any session. A collection without
+/// its own value now inherits the global lifetime; one with its own keeps it.
+#[tokio::test]
+async fn session_lifetime_inherits_the_global_token_expiry() {
+    let mut members = make_users_def();
+    members.slug = "members".into();
+    members.auth = Some(Auth {
+        token_expiry: Some(600),
+        ..Auth::enabled()
+    });
+
+    let mut config = CrapConfig::test_default();
+    config.auth.token_expiry = 86_400;
+
+    let ts = setup_service_with_config(vec![make_users_def(), members], vec![], config);
+
+    let inherited = login_token_lifetime(&ts, "users", "global@example.com").await;
+    assert!(
+        (86_400..=86_405).contains(&inherited),
+        "a collection without its own token_expiry uses the global one, got {inherited}s"
+    );
+
+    let own = login_token_lifetime(&ts, "members", "own@example.com").await;
+    assert!(
+        (600..=605).contains(&own),
+        "a collection's own token_expiry wins, got {own}s"
     );
 }
 
@@ -1606,16 +1678,11 @@ async fn login_mfa_challenge_and_verify_round_trip() {
         let ctx = crap_cms::service::ServiceContext::slug_only("users")
             .conn(&conn)
             .build();
-        crap_cms::service::auth::set_mfa_code(
-            &ctx,
-            &user_id,
-            "123456",
-            chrono::Utc::now().timestamp() + 300,
-            // Must match the secret the service was built with, or the
-            // keyed digest won't verify.
-            "test-jwt-secret",
-        )
-        .unwrap();
+        // Must match the secret the service was built with, or the keyed
+        // digest won't verify.
+        let code = MfaCode::builder(&user_id, "123456", "test-jwt-secret").build();
+        crap_cms::service::auth::set_mfa_code(&ctx, &code, chrono::Utc::now().timestamp() + 300)
+            .unwrap();
     }
 
     let resp = ts
@@ -1646,6 +1713,18 @@ async fn login_mfa_challenge_and_verify_round_trip() {
     );
     let me = ts.service.me(me_req).await.unwrap().into_inner();
     assert!(me.user.is_some());
+
+    // The session passed the second factor, so the admin — whose gate
+    // requires it too — accepts it as a bearer and as the session cookie.
+    for cookie in [false, true] {
+        assert!(
+            matches!(
+                judge(&ts, Surface::Admin, &resp.token, cookie),
+                Resolution::Authenticated(_)
+            ),
+            "an MFA-stamped session works on every surface (cookie: {cookie})"
+        );
+    }
 }
 
 /// The `mfa_when` Lua gate: with `mfa = "email"` configured, a hook returning
@@ -1667,7 +1746,7 @@ async fn login_mfa_when_gate_controls_challenge_per_user() {
     let mut def = make_mfa_users_def();
     def.auth = Some(Auth::enabled().map_password_login(|b| {
         b.mfa(MfaMode::Email)
-            .mfa_when(Some(crap_cms::core::HookRef::new("mfa_hooks.gate")))
+            .mfa_when(Some(HookRef::new("mfa_hooks.gate")))
     }));
 
     let ts = setup_service_with_init_lua(vec![def], vec![], Some(init_lua));
@@ -1718,6 +1797,315 @@ async fn login_mfa_when_gate_controls_challenge_per_user() {
     assert!(resp.token.is_empty());
 }
 
+/// The `mfa_when` gate is a predicate: its CRUD is read-only. A read works,
+/// and a write is refused with an error naming the gate — nothing is written.
+/// (It runs on the connection of every request an MFA-unstamped session
+/// authenticates, so a write from it would be a mutation per request.)
+#[tokio::test]
+async fn mfa_when_gate_crud_is_read_only() {
+    let init_lua = r#"
+        local M = {}
+        function M.gate(ctx)
+            assert(crap.collections.count("users", { override_access = true }) >= 1, "reads work in the gate")
+            local ok, err = pcall(crap.collections.create, "users", {
+                email = "side-effect@example.com",
+                name = "Side",
+                password = "secret123",
+            })
+            -- A refused write skips MFA, so the login outcome reports it.
+            if not ok and tostring(err):find("the `mfa_when` gate runs read-only", 1, true) then
+                return false
+            end
+            return true
+        end
+        package.loaded["mfa_hooks"] = M
+    "#;
+
+    let mut def = make_mfa_users_def();
+    def.auth = Some(Auth::enabled().map_password_login(|b| {
+        b.mfa(MfaMode::Email)
+            .mfa_when(Some(HookRef::new("mfa_hooks.gate")))
+    }));
+
+    let ts = setup_service_with_init_lua(vec![def], vec![], Some(init_lua));
+    create_login_user(&ts, "gate@example.com").await;
+
+    let resp = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "gate@example.com".to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(
+        resp.mfa_required.is_none(),
+        "the gate saw its write refused as read-only"
+    );
+
+    let written = ts
+        .pool
+        .get()
+        .unwrap()
+        .query_one(
+            "SELECT id FROM users WHERE email = ?1",
+            &[DbValue::Text("side-effect@example.com".to_string())],
+        )
+        .unwrap();
+    assert!(written.is_none(), "the gate wrote nothing");
+}
+
+/// How `surface` judges `token` presented as a bearer (`cookie = false`) or
+/// as the admin session cookie (`cookie = true`) — the same evaluator every
+/// surface authenticates requests through.
+fn judge(ts: &TestSetup, surface: Surface, token: &str, cookie: bool) -> Resolution {
+    let conn = ts.pool.get().unwrap();
+    let headers = HashMap::new();
+    let token_provider = JwtTokenProvider::new("test-jwt-secret");
+    let locale_config = LocaleConfig::default();
+
+    evaluate(
+        &AuthRequest {
+            surface,
+            bearer_token: (!cookie).then_some(token),
+            session_cookie_token: cookie.then_some(token),
+            headers: &headers,
+        },
+        &EvaluateDeps {
+            registry: &ts.registry,
+            token_provider: &token_provider,
+            hook_runner: &ts.hook_runner,
+            conn: &conn,
+            locale_config: &locale_config,
+        },
+    )
+}
+
+/// A per-request strategy runs on the request's own (read-pool) connection,
+/// and may still provision the user it names: the create commits with the
+/// successful authentication, and the provisioned user is the one the request
+/// carries. Pins the contract that request resolution never needs a
+/// write-pool connection for a strategy that writes.
+#[tokio::test]
+async fn a_per_request_strategy_provisions_its_user_on_the_request_connection() {
+    let init_lua = r#"
+        package.loaded["jit"] = {
+            auth = function(ctx)
+                local email = ctx.headers["x-remote-user"]
+                local found = crap.collections.find("users", { where = { email = email }, limit = 1 })
+                if #found.documents > 0 then return found.documents[1] end
+                return crap.collections.create("users", { email = email })
+            end,
+        }
+    "#;
+
+    let mut def = make_users_def();
+    let mut auth = Auth::enabled();
+    auth.methods.push(AuthMethod::Strategy {
+        name: "jit".to_string(),
+        authenticate: HookRef::new("jit.auth"),
+        activates_on: Activation::Header {
+            header: "x-remote-user".to_string(),
+        },
+        surfaces: SurfaceSet::grpc_only(),
+    });
+    def.auth = Some(auth);
+
+    let ts = setup_service_with_init_lua(vec![def], vec![], Some(init_lua));
+
+    let conn = ts.pool.get().unwrap();
+    let headers = HashMap::from([("x-remote-user".to_string(), "jit@example.com".to_string())]);
+    let token_provider = JwtTokenProvider::new("test-jwt-secret");
+    let locale_config = LocaleConfig::default();
+
+    let resolution = evaluate(
+        &AuthRequest {
+            surface: Surface::Grpc,
+            bearer_token: None,
+            session_cookie_token: None,
+            headers: &headers,
+        },
+        &EvaluateDeps {
+            registry: &ts.registry,
+            token_provider: &token_provider,
+            hook_runner: &ts.hook_runner,
+            conn: &conn,
+            locale_config: &locale_config,
+        },
+    );
+
+    let Resolution::Authenticated(auth) = resolution else {
+        panic!("the strategy authenticates the provisioned user, got {resolution:?}");
+    };
+    assert_eq!(
+        auth.user.user_doc.fields.get("email"),
+        Some(&json!("jit@example.com"))
+    );
+
+    let stored = ts
+        .pool
+        .get()
+        .unwrap()
+        .query_one(
+            "SELECT id FROM users WHERE email = ?1",
+            &[DbValue::Text("jit@example.com".to_string())],
+        )
+        .unwrap();
+    assert!(stored.is_some(), "the provisioned user is committed");
+}
+
+/// `mfa = "email"`, with an `mfa_when` gate that requires the second factor
+/// only on the admin surface.
+fn admin_only_mfa_setup() -> TestSetup {
+    let init_lua = r#"
+        package.loaded["mfa_hooks"] = {
+            gate = function(ctx) return ctx.surface == "admin" end,
+        }
+    "#;
+
+    let mut def = make_mfa_users_def();
+    def.auth = Some(Auth::enabled().map_password_login(|b| {
+        b.mfa(MfaMode::Email)
+            .mfa_when(Some(HookRef::new("mfa_hooks.gate")))
+    }));
+
+    setup_service_with_init_lua(vec![def], vec![], Some(init_lua))
+}
+
+async fn grpc_login_token(ts: &TestSetup, email: &str) -> String {
+    ts.service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: email.to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .token
+}
+
+/// Regression: session tokens carried no record of the second factor, and
+/// every surface accepted every session token. With MFA required only for
+/// admin logins (`mfa_when` on `ctx.surface`), a password holder logged in
+/// over gRPC — where the gate does not ask for the second factor — and used
+/// that token on the admin, as a bearer or as the session cookie (which the
+/// admin session refresh would then keep extending): full admin access with
+/// no second factor. The token is now refused wherever the gate requires
+/// the second factor it never passed, and still works where it doesn't.
+#[tokio::test]
+async fn a_grpc_session_without_mfa_is_refused_where_admin_requires_it() {
+    let ts = admin_only_mfa_setup();
+    create_login_user(&ts, "split@example.com").await;
+
+    let token = grpc_login_token(&ts, "split@example.com").await;
+    assert!(!token.is_empty(), "gRPC skips the second factor here");
+
+    for cookie in [false, true] {
+        assert!(
+            matches!(
+                judge(&ts, Surface::Admin, &token, cookie),
+                Resolution::Invalid(AuthFailure::MfaRequired)
+            ),
+            "admin must refuse the no-MFA token (cookie: {cookie})"
+        );
+    }
+
+    assert!(
+        matches!(
+            judge(&ts, Surface::Grpc, &token, false),
+            Resolution::Authenticated(_)
+        ),
+        "the surface that does not require MFA keeps accepting it"
+    );
+}
+
+/// A token minted before sessions recorded the second factor carries no
+/// stamp: on a collection whose gate requires MFA it is refused (the user
+/// logs in again), on one without MFA it keeps working.
+#[tokio::test]
+async fn an_unstamped_session_fails_closed_only_where_mfa_is_required() {
+    let legacy = |ts: &TestSetup, user_id: &str| {
+        let conn = ts.pool.get().unwrap();
+        let session_version =
+            crap_cms::db::query::get_session_version(&conn, "users", user_id).unwrap();
+        let claims = crap_cms::core::auth::Claims::builder(user_id, "users")
+            .email("legacy@example.com")
+            .exp((chrono::Utc::now().timestamp() as u64) + 3600)
+            .session_version(session_version)
+            .build()
+            .unwrap();
+
+        crap_cms::core::auth::create_token(&claims, "test-jwt-secret").unwrap()
+    };
+
+    let mfa = setup_service(vec![make_mfa_users_def()], vec![]);
+    let user_id = create_login_user(&mfa, "legacy@example.com").await;
+    assert!(matches!(
+        judge(&mfa, Surface::Grpc, &legacy(&mfa, &user_id), false),
+        Resolution::Invalid(AuthFailure::MfaRequired)
+    ));
+
+    let plain = setup_service(vec![make_users_def()], vec![]);
+    let user_id = create_login_user(&plain, "legacy@example.com").await;
+    assert!(matches!(
+        judge(&plain, Surface::Admin, &legacy(&plain, &user_id), true),
+        Resolution::Authenticated(_)
+    ));
+}
+
+/// Without an MFA mode, a session minted on one surface works on every
+/// surface that accepts the credential.
+#[tokio::test]
+async fn a_session_is_accepted_across_surfaces_without_mfa() {
+    let ts = setup_service(vec![make_users_def()], vec![]);
+    create_login_user(&ts, "plain@example.com").await;
+
+    let token = grpc_login_token(&ts, "plain@example.com").await;
+
+    assert!(matches!(
+        judge(&ts, Surface::Admin, &token, false),
+        Resolution::Authenticated(_)
+    ));
+    assert!(matches!(
+        judge(&ts, Surface::Admin, &token, true),
+        Resolution::Authenticated(_)
+    ));
+}
+
+/// Regression: the MFA-pending token was not bound to the surface that
+/// issued it, so a challenge could be completed on the other surface. An
+/// admin-issued pending token is refused by `VerifyMfa`.
+#[tokio::test]
+async fn verify_mfa_refuses_a_pending_token_the_admin_issued() {
+    let ts = setup_service(vec![make_mfa_users_def()], vec![]);
+    let user_id = create_login_user(&ts, "pending@example.com").await;
+
+    let claims = crap_cms::core::auth::Claims::builder(user_id.as_str(), "users")
+        .email("pending@example.com")
+        .exp((chrono::Utc::now().timestamp() as u64) + 300)
+        .token_use(TokenUse::MfaPending)
+        .surface(Surface::Admin)
+        .build()
+        .unwrap();
+    let pending = crap_cms::core::auth::create_token(&claims, "test-jwt-secret").unwrap();
+
+    let err = ts
+        .service
+        .verify_mfa(Request::new(content::VerifyMfaRequest {
+            collection: "users".to_string(),
+            mfa_challenge: pending,
+            code: "123456".to_string(),
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+    assert!(err.message().contains("MFA challenge"), "{}", err.message());
+}
+
 /// Regression (enumeration gap): `Validate` follows the target operation's
 /// collection access rule, exactly like the write it previews. An anonymous
 /// dry-run against a gated op is `PERMISSION_DENIED` before any validator (or
@@ -1737,7 +2125,7 @@ async fn validate_follows_collection_access_rules() {
     // first user can be created anonymously (and create-mode validate stays
     // open — the control for default behavior).
     let mut def = make_users_def();
-    def.access.update = Some(crap_cms::core::HookRef::new("acc.need_user"));
+    def.access.update = Some(HookRef::new("acc.need_user"));
 
     let ts = setup_service_with_init_lua(vec![def], vec![], Some(init_lua));
     let user_id = create_login_user(&ts, "val@example.com").await;
@@ -1822,7 +2210,7 @@ async fn login_mfa_custom_delivery_round_trip() {
     let mut users = make_users_def();
     users.auth = Some(Auth::enabled().map_password_login(|b| {
         b.mfa(MfaMode::Custom)
-            .mfa_deliver(Some(crap_cms::core::HookRef::new("mfa_hooks.deliver")))
+            .mfa_deliver(Some(HookRef::new("mfa_hooks.deliver")))
     }));
 
     let mut outbox = CollectionDefinition::new("outbox");
@@ -1894,8 +2282,6 @@ fn make_users_def_totp() -> CollectionDefinition {
 
 #[tokio::test]
 async fn totp_login_provisions_verifies_and_confirms() {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     let ts = setup_service(vec![make_users_def_totp()], vec![]);
 
     ts.service

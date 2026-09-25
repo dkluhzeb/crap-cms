@@ -410,6 +410,12 @@ impl CrapConfig {
             }
         }
 
+        // Every auth collection without its own `token_expiry` inherits this
+        // lifetime; `0` would mint sessions that are dead on arrival.
+        if self.auth.token_expiry == 0 {
+            bail!("auth.token_expiry must be > 0");
+        }
+
         if self.auth.password_policy.min_length > self.auth.password_policy.max_length {
             bail!(
                 "auth.password_policy.min_length ({}) must be <= auth.password_policy.max_length ({})",
@@ -713,6 +719,14 @@ mod tests {
         config.database.pool_max_size = 0;
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("pool_max_size"));
+    }
+
+    #[test]
+    fn validate_token_expiry_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.auth.token_expiry = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("token_expiry"));
     }
 
     #[test]

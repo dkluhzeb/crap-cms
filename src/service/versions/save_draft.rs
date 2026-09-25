@@ -130,7 +130,14 @@ fn localized_join_edits(
 /// caller re-overlays the edited join values afterwards.
 fn snapshot_from_stored(args: &SaveDraftArgs<'_>, overlay: &DocumentFields) -> Result<Value> {
     let existing_doc = args.existing_doc;
-    let mut snapshot_fields = existing_doc.fields.clone();
+
+    // The overlay is flat (`seo__title`), and the stored document may come
+    // either flat (a raw collection row) or with its groups nested (a global
+    // as `get_global` reads it). Flattening first makes an edit of one group
+    // sub-field replace only that sub-field: overlaid onto a nested group, the
+    // re-hydrate in `build_snapshot` rebuilt the group from the flat keys
+    // alone and dropped every sibling the edit did not send.
+    let mut snapshot_fields = flatten_group_fields(&existing_doc.fields, args.fields);
 
     for (k, v) in overlay {
         snapshot_fields.insert(k.clone(), v.clone());
@@ -351,6 +358,8 @@ fn merge_join_data_prefixed(
 mod tests {
     use serde_json::json;
 
+    #[cfg(feature = "sqlite")]
+    use crate::db::InMemoryConn;
     use crate::{
         config::LocaleConfig,
         core::field::{FieldAdmin, RelationshipConfig},
@@ -649,10 +658,9 @@ mod tests {
     /// overlaying the incoming nested object without flattening first left BOTH
     /// keys in the snapshot, and `extract_snapshot_recursive` reads the flat one
     /// first (via `or_insert`), so the edit was silently lost on restore.
+    #[cfg(feature = "sqlite")]
     #[test]
     fn draft_overlay_flattens_nested_group_subfield() {
-        use crate::db::InMemoryConn;
-
         let conn = InMemoryConn::open();
         conn.execute_batch(
             "CREATE TABLE _versions_posts (
@@ -707,6 +715,64 @@ mod tests {
             snapshot.pointer("/seo/title"),
             Some(&json!("new")),
             "the draft edit must win over the stale existing value"
+        );
+    }
+
+    /// Regression: a global's first draft save reads the stored global through
+    /// `get_global`, which nests groups. A partial edit of one group sub-field
+    /// overlaid on that nested group lost every sibling sub-field the edit did
+    /// not send.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn first_draft_from_a_nested_stored_doc_keeps_group_siblings() {
+        let conn = InMemoryConn::open();
+        conn.execute_batch(
+            "CREATE TABLE _versions__global_site (
+                id TEXT PRIMARY KEY,
+                _parent TEXT,
+                _version INTEGER,
+                _status TEXT,
+                _latest INTEGER DEFAULT 0,
+                snapshot TEXT,
+                created_at TEXT
+            );",
+        )
+        .unwrap();
+
+        let fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("title", FieldType::Text).build(),
+                    FieldDefinition::builder("desc", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+
+        // The stored global as `get_global` reads it: the group nested.
+        let mut existing_fields = DocumentFields::new();
+        existing_fields.insert("seo".into(), json!({ "title": "old", "desc": "kept" }));
+        let existing_doc = Document::builder("default").fields(existing_fields).build();
+
+        let mut incoming = DocumentFields::new();
+        incoming.insert("seo".into(), json!({ "title": "new" }));
+
+        let snapshot = save_draft_version(&SaveDraftArgs {
+            conn: &conn,
+            table: "_global_site",
+            parent_id: "default",
+            fields: &fields,
+            versions: None,
+            existing_doc: &existing_doc,
+            data: &incoming,
+            locale_ctx: None,
+        })
+        .unwrap();
+
+        assert_eq!(snapshot.pointer("/seo/title"), Some(&json!("new")));
+        assert_eq!(
+            snapshot.pointer("/seo/desc"),
+            Some(&json!("kept")),
+            "a sub-field the edit did not send keeps its stored value"
         );
     }
 }

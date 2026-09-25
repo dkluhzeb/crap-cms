@@ -22,12 +22,12 @@ use crate::service::ServiceError;
 pub(crate) use admission::{
     PendingDraft, admit_create_input, admit_global_update_input, admit_update_input,
 };
-pub(crate) use create::check_create_access;
 pub(crate) use create::create_document_gated;
 pub use create::create_document_in_conn;
+pub(crate) use create::{check_create_access, reject_create_filter};
 pub(crate) use delete::{cancel_image_jobs, delete_document_in_conn, purge_document};
 pub use delete_event::PurgeEvents;
-pub(crate) use delete_event::{DeleteEvent, read_delete_event};
+pub(crate) use delete_event::{DeleteEvent, TrashedDoc, TrashedPurge, read_delete_event};
 pub(crate) use pending_draft::{adopt_pending_draft, adopt_pending_global_draft};
 pub(crate) use update::update_document_gated;
 #[cfg(test)]

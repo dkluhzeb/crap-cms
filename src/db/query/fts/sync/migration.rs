@@ -1,23 +1,26 @@
 //! Migration-time FTS table sync: drop + recreate the FTS5 / tsvector table
 //! and bulk-populate from the main table.
 
-use std::collections::HashSet;
-
 use anyhow::{Context as _, Result, bail};
 
-use crate::config::LocaleConfig;
-use crate::core::CollectionDefinition;
-use crate::db::query::fts::extract::extract_prosemirror_text;
-use crate::db::query::fts::fields::{
-    get_fts_columns, is_json_richtext_column, json_richtext_columns,
-};
+use crate::db::query::fts::fields::get_fts_columns;
+use crate::db::query::fts::index::{ColumnText, FtsIndex};
 use crate::db::query::fts::search::fts_table_name;
 use crate::db::query::fts::sync::helpers::pg_tsvector;
 use crate::db::query::helpers::{placeholder_list, quote_ident};
 use crate::db::query::is_valid_identifier;
 use crate::db::{DbConnection, DbValue};
 
-/// Drop and recreate the FTS5 virtual table, then bulk-populate from the main table.
+/// The FTS table being rebuilt and the columns it indexes.
+struct IndexTable<'a> {
+    name: &'a str,
+    columns: &'a [String],
+    /// `columns` quoted and comma-joined, for the INSERT column list.
+    column_list: &'a str,
+}
+
+/// Drop and recreate `index`'s FTS table, then bulk-populate it from the main
+/// table.
 ///
 /// Called during migration (startup). Always rebuilds fresh — avoids drift detection.
 /// If there are no indexable columns, drops the FTS table if it exists.
@@ -25,14 +28,9 @@ use crate::db::{DbConnection, DbValue};
 /// # Errors
 ///
 /// Returns a backend error if any DROP, CREATE, or INSERT fails.
-pub fn sync_fts_table(
-    conn: &dyn DbConnection,
-    slug: &str,
-    def: &CollectionDefinition,
-    locale_config: &LocaleConfig,
-) -> Result<()> {
-    let fts_table = fts_table_name(slug);
-    let fts_fields = get_fts_columns(def, locale_config)?;
+pub fn sync_fts_table(conn: &dyn DbConnection, index: &FtsIndex<'_>) -> Result<()> {
+    let fts_table = fts_table_name(index.slug);
+    let fts_fields = get_fts_columns(index.def, index.locale_config)?;
 
     // Validate field names BEFORE dropping the old table — if validation fails,
     // the existing FTS index is preserved rather than silently lost.
@@ -50,57 +48,62 @@ pub fn sync_fts_table(
         return Ok(());
     }
 
-    let field_list = fts_fields
+    let column_list = fts_fields
         .iter()
         .map(|f| quote_ident(f))
         .collect::<Vec<_>>()
         .join(", ");
+    let table = IndexTable {
+        name: &fts_table,
+        columns: &fts_fields,
+        column_list: &column_list,
+    };
 
-    if conn.is_postgres() {
-        // Create regular table with a single tsvector column
-        let create_sql = format!("CREATE TABLE {fts_table} (id TEXT PRIMARY KEY, tsv TSVECTOR)");
-        conn.execute_batch_ddl(&create_sql)
-            .with_context(|| format!("Failed to create FTS table {fts_table}"))?;
-
-        // Create GIN index for fast tsvector lookups
-        let index_sql =
-            format!("CREATE INDEX IF NOT EXISTS idx_{fts_table}_tsv ON {fts_table} USING GIN(tsv)");
-        conn.execute_batch_ddl(&index_sql)
-            .with_context(|| format!("Failed to create GIN index on {fts_table}"))?;
-    } else {
-        // Create FTS5 virtual table
-        let create_sql =
-            format!("CREATE VIRTUAL TABLE {fts_table} USING fts5(id UNINDEXED, {field_list})");
-        conn.execute_batch_ddl(&create_sql)
-            .with_context(|| format!("Failed to create FTS table {fts_table}"))?;
-    }
+    create_fts_table(conn, &table)?;
 
     // Bulk populate from main table
-    let json_rt_cols = json_richtext_columns(def);
+    let column_text = ColumnText::new(index);
 
-    if json_rt_cols.is_empty() {
-        bulk_populate_fast(conn, slug, &fts_table, &fts_fields, &field_list)
+    if column_text.has_richtext() {
+        bulk_populate_slow(conn, index.slug, &table, &column_text)
     } else {
-        bulk_populate_slow(
-            conn,
-            slug,
-            &fts_table,
-            &fts_fields,
-            &field_list,
-            &json_rt_cols,
-        )
+        bulk_populate_fast(conn, index.slug, &table)
     }
 }
 
-/// Fast path: no JSON richtext fields, pure SQL bulk insert.
-fn bulk_populate_fast(
-    conn: &dyn DbConnection,
-    slug: &str,
-    fts_table: &str,
-    fts_fields: &[String],
-    field_list: &str,
-) -> Result<()> {
-    let coalesce_fields: Vec<String> = fts_fields
+/// Create the empty FTS table: a tsvector table with a GIN index on Postgres,
+/// an FTS5 virtual table on `SQLite`.
+fn create_fts_table(conn: &dyn DbConnection, table: &IndexTable<'_>) -> Result<()> {
+    let fts_table = table.name;
+
+    if !conn.is_postgres() {
+        let create_sql = format!(
+            "CREATE VIRTUAL TABLE {fts_table} USING fts5(id UNINDEXED, {})",
+            table.column_list
+        );
+
+        return conn
+            .execute_batch_ddl(&create_sql)
+            .with_context(|| format!("Failed to create FTS table {fts_table}"));
+    }
+
+    // Regular table with a single tsvector column
+    let create_sql = format!("CREATE TABLE {fts_table} (id TEXT PRIMARY KEY, tsv TSVECTOR)");
+    conn.execute_batch_ddl(&create_sql)
+        .with_context(|| format!("Failed to create FTS table {fts_table}"))?;
+
+    // GIN index for fast tsvector lookups
+    let index_sql =
+        format!("CREATE INDEX IF NOT EXISTS idx_{fts_table}_tsv ON {fts_table} USING GIN(tsv)");
+    conn.execute_batch_ddl(&index_sql)
+        .with_context(|| format!("Failed to create GIN index on {fts_table}"))
+}
+
+/// Fast path: no rich text fields, pure SQL bulk insert.
+fn bulk_populate_fast(conn: &dyn DbConnection, slug: &str, table: &IndexTable<'_>) -> Result<()> {
+    let fts_table = table.name;
+    let coalesce_fields: Vec<String> = table
+        .columns
         .iter()
         .map(|f| format!("COALESCE({}, '')", quote_ident(f)))
         .collect();
@@ -112,7 +115,7 @@ fn bulk_populate_fast(
         format!(
             "INSERT INTO {}(id, {}) SELECT id, {} FROM \"{}\"",
             fts_table,
-            field_list,
+            table.column_list,
             coalesce_fields.join(", "),
             slug
         )
@@ -124,16 +127,17 @@ fn bulk_populate_fast(
     Ok(())
 }
 
-/// Slow path: read rows and extract plain text from JSON richtext fields.
+/// Slow path: read rows and index each column's text as [`ColumnText`] reads
+/// it (rich text as its plain text and custom nodes' searchable attrs).
 fn bulk_populate_slow(
     conn: &dyn DbConnection,
     slug: &str,
-    fts_table: &str,
-    fts_fields: &[String],
-    field_list: &str,
-    json_rt_cols: &HashSet<String>,
+    table: &IndexTable<'_>,
+    column_text: &ColumnText<'_>,
 ) -> Result<()> {
-    let select_fields: Vec<String> = fts_fields
+    let fts_table = table.name;
+    let select_fields: Vec<String> = table
+        .columns
         .iter()
         .map(|f| format!("COALESCE({}, '')", quote_ident(f)))
         .collect();
@@ -143,57 +147,53 @@ fn bulk_populate_slow(
         .query_all(&select_sql, &[])
         .with_context(|| format!("Failed to query {slug} for FTS population"))?;
 
-    let is_postgres = conn.is_postgres();
-
-    let insert_sql = if is_postgres {
-        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-        format!(
-            "INSERT INTO {fts_table}(id, tsv) VALUES ({p1}, {})",
-            pg_tsvector(&p2)
-        )
-    } else {
-        // id + one placeholder per FTS field.
-        let placeholders = placeholder_list(conn, fts_fields.len() + 1);
-        format!("INSERT INTO {fts_table}(id, {field_list}) VALUES ({placeholders})")
-    };
+    let insert_sql = bulk_insert_sql(conn, table);
 
     for row in db_rows {
         let Some(id) = row.opt_text_at(0) else {
             continue;
         };
 
-        let mut field_texts: Vec<String> = Vec::with_capacity(fts_fields.len());
+        let field_texts = table
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(i, col)| column_text.text(col, row.text_at(i + 1).unwrap_or("")));
 
-        for (i, col_name) in fts_fields.iter().enumerate() {
-            let raw = row.text_at(i + 1).unwrap_or("").to_string();
+        let mut params = vec![DbValue::Text(id)];
 
-            let is_json_rt = is_json_richtext_column(col_name, json_rt_cols);
-
-            let text = if is_json_rt && !raw.is_empty() {
-                extract_prosemirror_text(&raw)
-            } else {
-                raw
-            };
-            field_texts.push(text);
-        }
-
-        if is_postgres {
-            // Concatenate all field texts into a single string for the tsvector
-            let combined = field_texts.join(" ");
-            let params = vec![DbValue::Text(id), DbValue::Text(combined)];
-            conn.execute(&insert_sql, &params)
-                .with_context(|| format!("FTS bulk insert in {fts_table}"))?;
+        if conn.is_postgres() {
+            // All field texts in one string for the tsvector
+            params.push(DbValue::Text(field_texts.collect::<Vec<_>>().join(" ")));
         } else {
-            let mut params: Vec<DbValue> = vec![DbValue::Text(id)];
-            for text in field_texts {
-                params.push(DbValue::Text(text));
-            }
-            conn.execute(&insert_sql, &params)
-                .with_context(|| format!("FTS bulk insert in {fts_table}"))?;
+            params.extend(field_texts.map(DbValue::Text));
         }
+
+        conn.execute(&insert_sql, &params)
+            .with_context(|| format!("FTS bulk insert in {fts_table}"))?;
     }
 
     Ok(())
+}
+
+/// The per-row INSERT of the slow path: `(id, tsv)` on Postgres, `id` plus
+/// one placeholder per indexed column on `SQLite`.
+fn bulk_insert_sql(conn: &dyn DbConnection, table: &IndexTable<'_>) -> String {
+    let fts_table = table.name;
+
+    if conn.is_postgres() {
+        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+        return format!(
+            "INSERT INTO {fts_table}(id, tsv) VALUES ({p1}, {})",
+            pg_tsvector(&p2)
+        );
+    }
+
+    let placeholders = placeholder_list(conn, table.columns.len() + 1);
+    format!(
+        "INSERT INTO {fts_table}(id, {}) VALUES ({placeholders})",
+        table.column_list
+    )
 }
 
 #[cfg(test)]
@@ -216,7 +216,11 @@ mod tests {
         insert_post(&conn, "2", "Rust FTS", "Full text search");
 
         let def = simple_def(vec![text_field("title"), text_field("body")]);
-        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &LocaleConfig::default()).build(),
+        )
+        .unwrap();
 
         let exists = conn
             .query_one(
@@ -245,7 +249,11 @@ mod tests {
         let def = simple_def(vec![
             FieldDefinition::builder("count", FieldType::Number).build(),
         ]);
-        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &LocaleConfig::default()).build(),
+        )
+        .unwrap();
 
         let exists = conn
             .query_one(
@@ -265,14 +273,22 @@ mod tests {
 
         let mut def1 = simple_def(vec![text_field("title"), text_field("body")]);
         def1.admin.list_searchable_fields = vec!["title".into()];
-        sync_fts_table(&conn, "posts", &def1, &LocaleConfig::default()).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def1, &LocaleConfig::default()).build(),
+        )
+        .unwrap();
 
         let results = fts_match_ids(&conn, "posts", "Hello", 10).unwrap();
         assert_eq!(results, vec!["1"]);
 
         let mut def2 = simple_def(vec![text_field("title"), text_field("body")]);
         def2.admin.list_searchable_fields = vec!["title".into(), "body".into()];
-        sync_fts_table(&conn, "posts", &def2, &LocaleConfig::default()).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def2, &LocaleConfig::default()).build(),
+        )
+        .unwrap();
 
         let results = fts_match_ids(&conn, "posts", "World", 10).unwrap();
         assert_eq!(results, vec!["1"]);
@@ -285,7 +301,10 @@ mod tests {
         // out as non-existent — tests that the SQL validation layer catches them.
         let mut def = simple_def(vec![text_field("title"), text_field("has space")]);
         def.admin.list_searchable_fields = vec!["title".into(), "has space".into()];
-        let result = sync_fts_table(&conn, "posts", &def, &LocaleConfig::default());
+        let result = sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &LocaleConfig::default()).build(),
+        );
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -303,7 +322,10 @@ mod tests {
             text_field("title; DROP TABLE posts"),
         ]);
         def.admin.list_searchable_fields = vec!["title; DROP TABLE posts".into()];
-        let result = sync_fts_table(&conn, "posts", &def, &LocaleConfig::default());
+        let result = sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &LocaleConfig::default()).build(),
+        );
         assert!(result.is_err());
     }
 
@@ -337,7 +359,7 @@ mod tests {
 
         let def = simple_def(vec![localized_text_field("title"), text_field("body")]);
         let locale = locale_config_en_de();
-        sync_fts_table(&conn, "posts", &def, &locale).unwrap();
+        sync_fts_table(&conn, &FtsIndex::builder("posts", &def, &locale).build()).unwrap();
 
         let cols = get_fts_table_columns(&conn, "_fts_posts").unwrap();
         assert!(cols.contains(&"title__en".to_string()));
@@ -381,7 +403,11 @@ mod tests {
         ]);
         def.admin.list_searchable_fields = vec!["title".into(), "content".into()];
 
-        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &LocaleConfig::default()).build(),
+        )
+        .unwrap();
 
         let results = fts_match_ids(&conn, "posts", "Extracted", 10).unwrap();
         assert_eq!(results, vec!["1"]);
@@ -418,7 +444,11 @@ mod tests {
             fallback: false,
         };
 
-        sync_fts_table(&conn, "posts", &def, &locale_config).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &locale_config).build(),
+        )
+        .unwrap();
 
         let results = fts_match_ids(&conn, "posts", "locale", 10).unwrap();
         assert_eq!(results, vec!["1"]);

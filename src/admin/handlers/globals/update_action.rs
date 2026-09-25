@@ -23,7 +23,7 @@ use crate::{
                 editor_read_ctx, enrich_field_contexts, forbidden, get_user_doc, htmx_redirect,
                 is_non_default_locale, page_with_toast, parse_request_locale, paths,
                 redirect_response, split_sidebar_fields, strip_locale_locked_form_fields,
-                toast_only_error, translate_validation_errors,
+                toast_only_error, translate_validation_errors, write_error_toast,
             },
         },
     },
@@ -254,10 +254,14 @@ pub async fn update_action(
 
                 render_validation_error(&render, ve).await
             }
-            other => {
-                error!("Global update error: {}", other);
-                redirect_response(&paths::global(&slug))
-            }
+            // A hook abort, a dangling reference, a lock-retry exhaustion:
+            // toast it over the form exactly as the collection edit form does,
+            // instead of redirecting back as if the save had gone through.
+            other => toast_only_error(&write_error_toast(
+                "Global update",
+                other,
+                state.infra.pool.kind(),
+            )),
         },
         Err(e) => {
             error!("Global update task error: {}", e);

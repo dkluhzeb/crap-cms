@@ -10,12 +10,12 @@ use crate::{
         DbConnection,
         query::{
             LocaleContext,
-            fts::fts_upsert,
             read::find_by_id_raw,
             ref_count,
             versions::{
-                VersionWrite, create_version_and_prune, restore::row::restore_locale_and_join_data,
-                set_document_status, snapshot::extract_snapshot_data,
+                StatusTable, VersionWrite, create_version_and_prune,
+                restore::row::restore_locale_and_join_data, set_document_status,
+                snapshot::extract_snapshot_data,
             },
             write::update,
         },
@@ -55,6 +55,8 @@ pub fn write_snapshot_base(
 
 /// Restore a version snapshot back to the main table. Updates all regular columns
 /// and join tables from the snapshot data. Creates a new version recording the restore.
+/// The search index is the caller's to re-sync (it holds the registry the
+/// index resolves rich text custom nodes against).
 ///
 /// When `locale_config` indicates locales are enabled, every locale column of a
 /// localized field takes the snapshot's value for that locale, and a locale the
@@ -91,14 +93,16 @@ pub fn restore_version(
     // Adjust ref counts based on before/after diff
     ref_count::after_update(conn, slug, parent_id, &def.fields, locale_config, &old_refs)?;
 
-    // Re-sync the FTS index to the restored content.
-    fts_upsert(conn, slug, parent_id, def, locale_config)?;
-
     // `_status` only exists when the collection has drafts — an audit-trail
     // collection (`versions = { drafts = false }`) has no such column, and
     // writing it would fail the restore with a raw backend error.
     if def.has_drafts() {
-        set_document_status(conn, slug, parent_id, status)?;
+        set_document_status(
+            conn,
+            StatusTable::new(slug, def.timestamps),
+            parent_id,
+            status,
+        )?;
     }
 
     // Recording the restore is a version write like any other, so it prunes to

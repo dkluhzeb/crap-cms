@@ -15,8 +15,10 @@ mod legacy_timestamps;
 mod locale_change;
 mod meta;
 mod nested_values;
+mod nullable_columns;
 mod one_time;
 mod orphan_tables;
+mod reference_cardinality;
 mod relationship_target;
 mod sync;
 mod tracking;
@@ -30,8 +32,8 @@ pub use orphan_tables::{OrphanKind, OrphanTable, find_orphan_tables};
 /// drift between test setup and prod).
 #[cfg(test)]
 pub(crate) use sync::create_jobs_table;
-pub use sync::sync_all;
+pub use sync::{recreate_all, sync_all};
 pub use tracking::{
-    drop_all_tables, get_applied_migrations, get_applied_migrations_desc, get_pending_migrations,
+    get_applied_migrations, get_applied_migrations_desc, get_pending_migrations,
     list_migration_files, record_migration, remove_migration,
 };

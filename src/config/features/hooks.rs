@@ -1,7 +1,8 @@
 //! Lua hook configuration -- `on_init` scripts, recursion limits, VM resources.
 
-use std::thread;
+use std::{path::Path, thread};
 
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::config::parsing::serde_filesize;
@@ -47,6 +48,13 @@ pub struct HooksConfig {
     /// Accepts integer bytes or human-readable string ("10MB", "1GB").
     #[serde(with = "serde_filesize")]
     pub http_max_response_bytes: u64,
+    /// Directories beyond the config directory that Lua `io` file access may
+    /// reach (e.g. the directory a Lua filesystem storage backend writes to).
+    /// Relative entries resolve against the config directory. The config
+    /// directory itself is always allowed; its `data/` and `backups/`
+    /// directories, `crap.toml`, the database and the log directory never
+    /// are. Default: `[]`.
+    pub io_roots: Vec<String>,
 }
 
 fn default_max_vm_pool_size() -> usize {
@@ -64,7 +72,35 @@ impl Default for HooksConfig {
             max_memory: 52_428_800, // 50 MB
             allow_private_networks: false,
             http_max_response_bytes: 10 * 1024 * 1024, // 10 MB
+            io_roots: Vec::new(),
         }
+    }
+}
+
+impl HooksConfig {
+    /// Structural checks on `io_roots` that need no filesystem access (the
+    /// entries are resolved — and must exist — when the Lua VMs are built).
+    ///
+    /// # Errors
+    ///
+    /// An empty entry, one containing a NUL byte, or `/` (every file on the
+    /// machine).
+    pub(crate) fn validate_io_roots(&self) -> Result<()> {
+        for entry in &self.io_roots {
+            if entry.trim().is_empty() {
+                bail!("hooks.io_roots entries must not be empty");
+            }
+
+            if entry.contains('\0') {
+                bail!("hooks.io_roots entry {entry:?} contains a NUL byte");
+            }
+
+            if Path::new(entry).parent().is_none() && Path::new(entry).has_root() {
+                bail!("hooks.io_roots entry {entry:?} is a filesystem root");
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -84,5 +120,24 @@ mod tests {
         assert_eq!(hooks.max_memory, 52_428_800);
         assert!(!hooks.allow_private_networks);
         assert_eq!(hooks.http_max_response_bytes, 10 * 1024 * 1024);
+        assert!(hooks.io_roots.is_empty());
+    }
+
+    #[test]
+    fn io_roots_rejects_empty_nul_and_filesystem_root() {
+        let check = |entry: &str| {
+            let hooks = HooksConfig {
+                io_roots: vec![entry.to_string()],
+                ..HooksConfig::default()
+            };
+            hooks.validate_io_roots()
+        };
+
+        assert!(check("").is_err());
+        assert!(check("  ").is_err());
+        assert!(check("media\0x").is_err());
+        assert!(check("/").is_err());
+        assert!(check("/srv/media").is_ok());
+        assert!(check("media").is_ok());
     }
 }

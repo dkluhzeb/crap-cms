@@ -2,12 +2,12 @@
 
 use anyhow::{Result, bail};
 use mlua::{Lua, Table};
-use tracing::warn;
 
 use crate::{
     core::{
         FieldDefinition,
         collection::{Access, GLOBAL_OPERATIONS, GlobalDefinition},
+        prefixed_name, walk_leaf_fields,
     },
     db::query,
 };
@@ -50,7 +50,7 @@ pub fn parse_global_definition(lua: &Lua, slug: &str, config: &Table) -> Result<
     let mcp = parse_mcp_section(config, GLOBAL_OPERATIONS)?;
 
     warn_deep_nesting("Global", slug, &fields);
-    warn_global_index_unique(slug, &fields);
+    reject_global_index_unique(slug, &fields)?;
 
     let mut def = GlobalDefinition::new(slug);
 
@@ -126,30 +126,79 @@ fn reject_global_only_hook_keys(config: &Table, slug: &str) -> Result<()> {
     Ok(())
 }
 
-/// Warn about index/unique on global fields (pointless on single-row tables).
-fn warn_global_index_unique(slug: &str, fields: &[FieldDefinition]) {
-    for field in fields {
-        if field.index {
-            warn!(
-                "Global '{}': field '{}' has index = true, which is ignored for globals (single-row tables)",
-                slug, field.name
-            );
-        }
+/// Reject `unique` / `index` on a global's row columns — top-level fields and
+/// group sub-fields, through layout wrappers. A global is a single row, so a
+/// uniqueness constraint or an index on one of its columns can never do
+/// anything; rejected at load like the access keys and hooks that never fire.
+/// (An array or blocks field's rows live in their own table and are not
+/// covered here.)
+fn reject_global_index_unique(slug: &str, fields: &[FieldDefinition]) -> Result<()> {
+    walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
+        let Some(key) = [("unique", field.unique), ("index", field.index)]
+            .into_iter()
+            .find_map(|(key, set)| set.then_some(key))
+        else {
+            return Ok(());
+        };
 
-        if field.unique {
-            warn!(
-                "Global '{}': field '{}' has unique = true, which is ignored for globals (single-row tables)",
-                slug, field.name
-            );
-        }
-    }
+        bail!(
+            "Global '{slug}': field '{}' sets {key} = true, which is not supported — \
+             a global is a single row, so the constraint could never apply. Remove it.",
+            prefixed_name(prefix, &field.name)
+        );
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::core::LocalizedString;
     use mlua::Lua;
+
+    use super::*;
+    use crate::{
+        core::{FieldType, LocalizedString},
+        hooks::lua_api::parse::{ACCESS_KEYS, GLOBAL_ACCESS_KEYS},
+    };
+
+    /// Regression: `unique` / `index` on a global's columns only warned while
+    /// every other key that can never apply to a single row is rejected. Both
+    /// are rejected — on a top-level field and on a group sub-field, through a
+    /// layout wrapper — naming the column.
+    #[test]
+    fn global_rejects_unique_and_index_on_its_row_columns() {
+        let unique = vec![
+            FieldDefinition::builder("code", FieldType::Text)
+                .unique(true)
+                .build(),
+        ];
+        let err = reject_global_index_unique("site", &unique)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("'code'") && err.contains("unique"), "{err}");
+
+        let indexed_in_group = vec![
+            FieldDefinition::builder("layout", FieldType::Row)
+                .fields(vec![
+                    FieldDefinition::builder("seo", FieldType::Group)
+                        .fields(vec![
+                            FieldDefinition::builder("slug", FieldType::Text)
+                                .index(true)
+                                .build(),
+                        ])
+                        .build(),
+                ])
+                .build(),
+        ];
+        let err = reject_global_index_unique("site", &indexed_in_group)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("'seo__slug'") && err.contains("index"),
+            "{err}"
+        );
+
+        let plain = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+        assert!(reject_global_index_unique("site", &plain).is_ok());
+    }
 
     #[test]
     fn test_parse_global_definition_mcp_config() {
@@ -182,8 +231,6 @@ mod tests {
         // GLOBAL_ACCESS_KEYS + the four keys `reject_global_only_access_keys`
         // rejects must exactly cover ACCESS_KEYS — a new access key can't be
         // added without deciding whether globals support it.
-        use crate::hooks::lua_api::parse::{ACCESS_KEYS, GLOBAL_ACCESS_KEYS};
-
         let rejected = ["create", "delete", "trash", "unlock"];
         for key in ACCESS_KEYS {
             assert!(
@@ -268,23 +315,6 @@ mod tests {
         assert!(def.access.versions.is_some());
         assert!(def.access.admin.is_some());
         assert!(def.access.mcp.is_some());
-    }
-
-    #[test]
-    fn test_parse_global_definition_warns_index_unique() {
-        let lua = Lua::new();
-        let config = lua.create_table().unwrap();
-        let fields_tbl = lua.create_table().unwrap();
-        let field = lua.create_table().unwrap();
-        field.set("name", "slug").unwrap();
-        field.set("type", "text").unwrap();
-        field.set("index", true).unwrap();
-        field.set("unique", true).unwrap();
-        fields_tbl.set(1, field).unwrap();
-        config.set("fields", fields_tbl).unwrap();
-        let def = parse_global_definition(&lua, "settings", &config).unwrap();
-        assert!(def.fields[0].index);
-        assert!(def.fields[0].unique);
     }
 
     #[test]

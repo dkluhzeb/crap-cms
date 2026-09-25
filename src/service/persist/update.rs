@@ -7,7 +7,10 @@ use crate::{
     db::query,
     service::{
         PersistOptions, ServiceContext,
-        persist::email_change::{apply_email_change, email_changed},
+        persist::{
+            email_change::{apply_email_change, email_changed},
+            search_index::sync_search_index,
+        },
         versions,
         write::reject_locale_locked_fields,
     },
@@ -83,7 +86,7 @@ pub fn persist_update(
         query::write_snapshot_base(conn, slug, def, id, pending, &locale_cfg)?;
     }
 
-    let doc = query::update(conn, slug, def, id, data, opts.locale_ctx)?;
+    let mut doc = query::update(conn, slug, def, id, data, opts.locale_ctx)?;
     query::save_join_table_data(conn, slug, &def.fields, &doc.id, data, opts.locale_ctx)?;
 
     if let Some(pw) = opts.password
@@ -95,18 +98,14 @@ pub fn persist_update(
     apply_email_change(ctx, &doc, address_changed)?;
 
     if def.has_versions() {
-        let ctx = versions::VersionSnapshotCtx::builder(slug, &doc.id)
-            .fields(&def.fields)
-            .versions(def.versions.as_ref())
-            .has_drafts(def.has_drafts())
-            .locale_config(ctx.locale_config)
-            .build();
-        versions::create_version_snapshot(conn, &ctx, "published", &doc)?;
+        // Also stamps `doc` published: publishing a draft row read it back
+        // while it still said `draft`.
+        let snap_ctx =
+            versions::VersionSnapshotCtx::for_collection(slug, id, def, ctx.locale_config);
+        versions::create_version_snapshot(conn, &snap_ctx, "published", &mut doc)?;
     }
 
-    if conn.supports_fts() {
-        query::fts::fts_upsert(conn, slug, &doc.id, def, &locale_cfg)?;
-    }
+    sync_search_index(ctx, conn, &doc.id, &locale_cfg)?;
 
     // Ref count last: minimizes row-level lock hold time on shared targets.
     if let Some(old_refs) = old_refs {
@@ -179,7 +178,7 @@ pub(crate) fn persist_bulk_update(
         query::write_snapshot_base(conn, ctx.slug, def, id, pending, &locale_cfg)?;
     }
 
-    let updated = query::update_partial(conn, ctx.slug, def, id, data, opts.locale_ctx)?;
+    let mut updated = query::update_partial(conn, ctx.slug, def, id, data, opts.locale_ctx)?;
 
     query::save_join_table_data(conn, ctx.slug, &def.fields, id, data, opts.locale_ctx)?;
 
@@ -190,18 +189,12 @@ pub(crate) fn persist_bulk_update(
         // column. Without it a bulk-update snapshot held one value per
         // localized field, and restoring it NULLed every other translation —
         // the single-document path above already passes it.
-        let vs_ctx = versions::VersionSnapshotCtx::builder(ctx.slug, &updated.id)
-            .fields(&def.fields)
-            .versions(def.versions.as_ref())
-            .has_drafts(def.has_drafts())
-            .locale_config(Some(&locale_cfg))
-            .build();
-        versions::create_version_snapshot(conn, &vs_ctx, "published", &updated)?;
+        let vs_ctx =
+            versions::VersionSnapshotCtx::for_collection(ctx.slug, id, def, Some(&locale_cfg));
+        versions::create_version_snapshot(conn, &vs_ctx, "published", &mut updated)?;
     }
 
-    if conn.supports_fts() {
-        query::fts::fts_upsert(conn, ctx.slug, id, def, &locale_cfg)?;
-    }
+    sync_search_index(ctx, conn, id, &locale_cfg)?;
 
     // Ref count last: minimizes row-level lock hold time on shared targets.
     if let Some(old_refs) = old_refs {

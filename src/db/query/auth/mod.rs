@@ -10,7 +10,7 @@ mod totp;
 pub use credentials::{
     CREDENTIAL_COLUMNS, credential_columns, credential_values, read_credentials,
 };
-pub use mfa::{set_mfa_code, verify_mfa_code};
+pub use mfa::{MfaCode, set_mfa_code, verify_mfa_code};
 pub use password::{find_by_email, get_password_hash, has_password, update_password};
 pub use status::{
     bump_session_version, get_session_version, is_locked, is_verified, lock_and_session_version,

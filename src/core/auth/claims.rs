@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{DocumentId, Slug};
+use crate::core::{DocumentId, Slug, collection::Surface};
 
 /// What a signed token is authorized to do.
 ///
@@ -67,6 +67,21 @@ pub struct Claims {
     /// version are rejected during validation.
     #[serde(default)]
     pub session_version: u64,
+    /// The surface that minted the token. A session token records it for
+    /// audit; an MFA-pending token is only consumed on this surface. `None`
+    /// only on a token minted before the claim existed — such a pending
+    /// token is consumed nowhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<Surface>,
+    /// Whether the session satisfied the collection's second factor: the
+    /// user completed the MFA step, or signed in through an auth callback the
+    /// collection exempts because its identity provider enforces one. A
+    /// session without it is refused on every request whose MFA gate
+    /// (the collection's `mfa` mode and `mfa_when`, judged for that request's
+    /// surface and headers) requires the second factor. A token minted before
+    /// the claim existed decodes as `false`.
+    #[serde(default)]
+    pub mfa: bool,
 }
 
 impl Claims {
@@ -88,6 +103,8 @@ pub struct ClaimsBuilder {
     auth_time: Option<u64>,
     session_version: u64,
     token_use: TokenUse,
+    surface: Option<Surface>,
+    mfa: bool,
 }
 
 impl ClaimsBuilder {
@@ -101,6 +118,8 @@ impl ClaimsBuilder {
             auth_time: None,
             session_version: 0,
             token_use: TokenUse::Session,
+            surface: None,
+            mfa: false,
         }
     }
 
@@ -149,6 +168,23 @@ impl ClaimsBuilder {
         self
     }
 
+    /// Set the surface minting the token.
+    #[must_use]
+    pub fn surface(mut self, surface: Surface) -> Self {
+        self.surface = Some(surface);
+
+        self
+    }
+
+    /// Record whether the session satisfied the second factor. Defaults to
+    /// `false`.
+    #[must_use]
+    pub fn mfa(mut self, mfa: bool) -> Self {
+        self.mfa = mfa;
+
+        self
+    }
+
     /// Build the final `Claims` instance.
     ///
     /// # Errors
@@ -172,6 +208,8 @@ impl ClaimsBuilder {
             auth_time: self.auth_time,
             session_version: self.session_version,
             token_use: self.token_use,
+            surface: self.surface,
+            mfa: self.mfa,
         })
     }
 }
@@ -363,6 +401,45 @@ mod builder_tests {
         }"#;
         let claims: Claims = serde_json::from_str(json).unwrap();
         assert_eq!(claims.token_use, TokenUse::Session);
+    }
+
+    // ── surface + mfa stamps ──────────────────────────────────────────────
+
+    #[test]
+    fn surface_and_mfa_stamps_round_trip() {
+        let claims = ClaimsBuilder::new("u", "users")
+            .email("a@b.com")
+            .exp(9999999999)
+            .surface(Surface::Grpc)
+            .mfa(true)
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_string(&claims).unwrap();
+        assert!(json.contains(r#""surface":"grpc""#), "{json}");
+        assert!(json.contains(r#""mfa":true"#), "{json}");
+
+        let round: Claims = serde_json::from_str(&json).unwrap();
+        assert_eq!(round.surface, Some(Surface::Grpc));
+        assert!(round.mfa);
+    }
+
+    /// A token minted before the stamps existed carries no surface and never
+    /// counts as having passed the second factor — the fail-closed reading.
+    #[test]
+    fn claims_missing_stamps_decode_unstamped() {
+        let json = r#"{
+            "sub": "u",
+            "collection": "users",
+            "email": "a@b.com",
+            "exp": 9999999999,
+            "session_version": 0
+        }"#;
+
+        let claims: Claims = serde_json::from_str(json).unwrap();
+
+        assert_eq!(claims.surface, None);
+        assert!(!claims.mfa);
     }
 
     #[test]

@@ -14,7 +14,7 @@ use crate::{
     commands::{
         db::{
             helpers::classify_tar_status,
-            manifest::{BACKUP_FORMAT_VERSION, BackupManifest},
+            manifest::{BACKUP_FORMAT_VERSION, BackupManifest, BackupOrigin, check_backup_origin},
             secret::{configured_secret_overrides, has_generated_secret, restore_secret},
         },
         helpers::{self, load_config_for_recovery},
@@ -150,6 +150,8 @@ fn read_and_display_manifest(backup_dir: &Path) -> Result<()> {
         );
     }
 
+    let origin = check_backup_origin(&manifest.crap_version, env!("CARGO_PKG_VERSION"))?;
+
     cli::header("Restoring from backup");
 
     cli::kv("Version", &manifest.crap_version);
@@ -160,7 +162,7 @@ fn read_and_display_manifest(backup_dir: &Path) -> Result<()> {
         cli::kv("Uploads", &format!("{size} bytes"));
     }
 
-    if manifest.crap_version != env!("CARGO_PKG_VERSION") {
+    if origin == BackupOrigin::OlderVersion {
         cli::warning(&format!(
             "Backup was taken with crap-cms {} but this binary is {} — the restored \
              database will be schema-migrated on the next start.",
@@ -198,6 +200,18 @@ fn remove_sidecars(sidecars: &[PathBuf]) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Give the staged database the live database's permissions. The backup's
+/// copy is owner-only (backups are private); the restored database keeps the
+/// mode the deployment gave its live one instead.
+fn match_live_permissions(staged: &Path, db_path: &Path) -> Result<()> {
+    let Ok(live) = fs::metadata(db_path) else {
+        return Ok(());
+    };
+
+    fs::set_permissions(staged, live.permissions())
+        .with_context(|| format!("Failed to set permissions of {}", staged.display()))
 }
 
 /// Give the current database a second name, `*.db.pre-restore`, *without*
@@ -274,6 +288,7 @@ fn restore_database(
     let staged = db_path.with_extension("db.restore-tmp");
     fs::copy(backup_dir.join("crap.db"), &staged)
         .with_context(|| format!("Failed to stage database copy at {}", staged.display()))?;
+    match_live_permissions(&staged, db_path)?;
 
     let aside = db_path.with_extension("db.pre-restore");
     if kept {
@@ -385,7 +400,29 @@ fn restore_uploads(config_dir: &Path, backup_dir: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
+
     use super::*;
+
+    /// The owner-only backup copy must not make the restored live database
+    /// owner-only: it takes the live database's mode.
+    #[cfg(unix)]
+    #[test]
+    fn restored_database_keeps_the_live_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("crap.db");
+        let staged = dir.path().join("crap.db.restore-tmp");
+        fs::write(&live, b"live").unwrap();
+        fs::write(&staged, b"backup").unwrap();
+        fs::set_permissions(&live, fs::Permissions::from_mode(0o640)).unwrap();
+        fs::set_permissions(&staged, fs::Permissions::from_mode(0o600)).unwrap();
+
+        match_live_permissions(&staged, &live).unwrap();
+
+        let mode = fs::metadata(&staged).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640);
+    }
 
     /// Regression: `--include-uploads` extracted the archive into
     /// `<config>/uploads` and reported "Uploads restored" whatever

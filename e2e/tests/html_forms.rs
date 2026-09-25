@@ -650,3 +650,102 @@ async fn create_form_auth_collection() {
         "password field on auth collection create",
     );
 }
+
+// ── admin_layout_settings_render ──────────────────────────────────────────
+
+fn make_layout_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("layouts");
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text)
+            .admin(FieldAdmin::builder().width("half").build())
+            .build(),
+        FieldDefinition::builder("subtitle", FieldType::Text)
+            .admin(FieldAdmin::builder().width("40%").build())
+            .build(),
+        FieldDefinition::builder("meta", FieldType::Group)
+            .fields(vec![
+                FieldDefinition::builder("summary", FieldType::Text)
+                    .admin(FieldAdmin::builder().width("third").build())
+                    .build(),
+            ])
+            .build(),
+        FieldDefinition::builder("snippet", FieldType::Code)
+            .admin(
+                FieldAdmin::builder()
+                    .rows(4)
+                    .placeholder(LocalizedString::Plain("Paste code".to_string()))
+                    .build(),
+            )
+            .build(),
+        FieldDefinition::builder("data", FieldType::Json)
+            .admin(FieldAdmin::builder().rows(3).build())
+            .build(),
+        FieldDefinition::builder("slides", FieldType::Array)
+            .admin(
+                FieldAdmin::builder()
+                    .labels_singular(LocalizedString::Plain("Slide".to_string()))
+                    .labels_plural(LocalizedString::Plain("Carousel slides".to_string()))
+                    .build(),
+            )
+            .fields(vec![
+                FieldDefinition::builder("caption", FieldType::Text).build(),
+            ])
+            .build(),
+    ];
+    def
+}
+
+/// Regression: `admin.width`, `rows` on code/JSON, `placeholder` on code and
+/// `labels.plural` were accepted but never reached the edit form. Each renders
+/// now: widths as wrapper classes (a custom CSS width as `data-field-width`,
+/// nested fields included), rows and placeholder on the inputs, the plural
+/// label as the array's header.
+#[tokio::test]
+async fn admin_layout_settings_render() {
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_layout_def(), make_users_def()],
+        vec![],
+        "layout@test.com",
+        "pass123",
+    );
+
+    let body = get_create_form(&app, "layouts", &cookie).await;
+    let doc = html::parse(&body);
+
+    html::assert_exists(
+        &doc,
+        "div.form__field.form__field--sized.form__field--half[data-field-name=\"title\"]",
+        "half-width wrapper",
+    );
+    html::assert_exists(
+        &doc,
+        "div.form__field--sized.form__field--custom[data-field-width=\"40%\"][data-field-name=\"subtitle\"]",
+        "custom-width wrapper",
+    );
+    html::assert_exists(
+        &doc,
+        "div.form__field--third[data-field-name=\"meta__summary\"]",
+        "nested third-width wrapper",
+    );
+    html::assert_not_exists(
+        &doc,
+        "div.form__field--sized[data-field-name=\"data\"]",
+        "a field without admin.width stays full width",
+    );
+
+    html::assert_exists(
+        &doc,
+        "crap-code[data-rows=\"4\"] textarea[rows=\"4\"][placeholder=\"Paste code\"]",
+        "code rows + placeholder",
+    );
+    html::assert_exists(&doc, "textarea[name=\"data\"][rows=\"3\"]", "json rows");
+
+    let legend = html::text_of(&doc, "fieldset[data-field-name=\"slides\"] > legend");
+    assert!(
+        legend.contains("Carousel slides"),
+        "plural header: {legend}"
+    );
+    let add = html::text_of(&doc, "button[data-action=\"add-array-row\"]");
+    assert!(add.contains("Slide"), "singular add label: {add}");
+}

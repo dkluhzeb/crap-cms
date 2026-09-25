@@ -188,10 +188,12 @@ return function(ctx)
   return {
     redirect = "https://accounts.google.com/o/oauth2/v2/auth?…&state=" .. state,
     cookies  = { { name = "oauth_state", value = state, http_only = true,
-                   secure = true, same_site = "lax", path = "/auth", max_age = 600 } },
+                   secure = true, same_site = "lax", path = "/admin/auth/callback",
+                   max_age = 600 } },
   }
 end
 ```
 
-The `auth_callback` hook then verifies `ctx.headers["cookie"]` against the
-returned `state`.
+The cookie's `path` must cover the callback URL (`/admin/auth/callback/…`) or
+the browser never sends it there. The `auth_callback` hook then verifies
+`ctx.headers["cookie"]` against the returned `state`.

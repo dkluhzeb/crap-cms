@@ -2,14 +2,17 @@
 
 use std::{fs, path::Path, sync::Arc};
 
-use anyhow::{Context as _, Result};
-use mlua::{Lua, LuaOptions, StdLib, Table, Value};
+use anyhow::{Context as _, Result, bail};
+use mlua::{ChunkMode, Function, Lua, LuaOptions, Result as LuaResult, StdLib, Table, Value};
 use tracing::{debug, info};
 
 use crate::{
     config::CrapConfig,
     core::{FieldDefinition, Registry, SharedRegistry},
-    hooks::lifecycle::InitPhase,
+    hooks::{
+        io_jail::{IoJail, install_io_jail},
+        lifecycle::{InitPhase, apply_vm_limits, reset_instruction_budget},
+    },
 };
 
 use super::lua_api;
@@ -31,14 +34,19 @@ use super::lua_api;
 pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>> {
     let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default())?;
 
-    sandbox_lua(&lua)?;
+    let io_jail = Arc::new(IoJail::new(config_dir, config)?);
+    sandbox_lua(&lua, &io_jail)?;
+
+    // The same `[hooks]` memory and instruction limits as every pool VM:
+    // a runaway definition file or init.lua fails the boot with the limit's
+    // error instead of hanging it or exhausting memory.
+    apply_vm_limits(&lua, &config.hooks)?;
 
     lua.set_app_data(lua_api::VmLabel("init".to_string()));
 
     let registry = Registry::shared();
 
-    setup_package_paths(&lua, config_dir)?;
-    install_relative_chunk_searcher(&lua)?;
+    install_module_loader(&lua, config_dir)?;
     lua_api::register_api(&lua, &registry, config)?;
 
     // Mark init phase so register-only APIs (`crap.pages.register`,
@@ -77,8 +85,10 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     // instead of `&SharedRegistry`).
     let snapshot = Registry::snapshot(&registry);
 
-    // BUG-5: statically-known hook/access refs are resolved at startup so
-    // typos fail to boot instead of surfacing at first request.
+    // Statically-known hook/access refs are resolved at startup so typos
+    // fail to boot instead of surfacing at first request. Resolving them
+    // runs the required modules' top level, under a fresh budget.
+    reset_instruction_budget(&lua);
     super::startup_checks::validate_hook_references(&lua, &snapshot)
         .context("Hook/access reference validation failed")?;
 
@@ -109,6 +119,11 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     // it (and an upload targeting a non-upload collection) at load.
     super::startup_checks::validate_relation_targets(&snapshot)
         .context("Relationship target validation failed")?;
+
+    // A rich text field naming a custom node that was never registered would
+    // silently lose that node in the editor, validation and search.
+    super::startup_checks::validate_richtext_nodes(&snapshot)
+        .context("Rich text node validation failed")?;
 
     // Reject definitions whose generated table names collide (e.g. a
     // collection slugged `posts_tags` vs the `tags` array field of `posts`).
@@ -148,29 +163,56 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     Ok(snapshot)
 }
 
-/// Execute init.lua if present. Returns whether it existed.
-fn execute_init_lua(lua: &Lua, config_dir: &Path) -> Result<bool> {
+/// Execute init.lua if present. Returns whether it existed. Shared by the
+/// init VM and every pool VM.
+pub(crate) fn execute_init_lua(lua: &Lua, config_dir: &Path) -> Result<bool> {
     let init_path = config_dir.join("init.lua");
 
     if !init_path.exists() {
         return Ok(false);
     }
 
-    debug!("[lua:init] Executing init.lua");
+    debug!("[lua:{}] Executing init.lua", vm_label(lua));
+
+    // Each setup file runs under its own instruction budget, like a hook.
+    reset_instruction_budget(lua);
 
     let code = fs::read_to_string(&init_path)
         .with_context(|| format!("Failed to read {}", init_path.display()))?;
 
-    lua.load(&code)
-        .set_name(chunk_name(&init_path))
-        .exec()
+    load_source_file(lua, &code, &init_path)
+        .and_then(|chunk| chunk.call::<()>(()))
         .with_context(|| "Failed to execute init.lua")?;
 
     Ok(true)
 }
 
+/// The VM's log label (`init`, `vm-3`, …).
+fn vm_label(lua: &Lua) -> String {
+    lua.app_data_ref::<lua_api::VmLabel>()
+        .map_or_else(|| "lua".into(), |l| l.0.clone())
+}
+
+/// Compile the source of a config-dir Lua file into a callable chunk — the
+/// one load path for every user file (definitions, init.lua, `require`d
+/// modules, migrations).
+///
+/// The chunk is loaded as **text only**: a precompiled bytecode file is
+/// refused, since Lua does not verify bytecode and a crafted one breaks out
+/// of the VM. It is named relatively (see [`chunk_name`]).
+///
+/// # Errors
+///
+/// The syntax error, or the refusal of a binary chunk.
+pub(crate) fn load_source_file(lua: &Lua, code: &str, path: &Path) -> LuaResult<Function> {
+    lua.load(code)
+        .set_name(chunk_name(path))
+        .set_mode(ChunkMode::Text)
+        .into_function()
+}
+
 /// Load definition files from `{config_dir}/{kind}s/` if the directory exists.
-fn load_def_dir(lua: &Lua, config_dir: &Path, kind: &str) -> Result<usize> {
+pub(crate) fn load_def_dir(lua: &Lua, config_dir: &Path, kind: &str) -> Result<usize> {
     let dir_name = format!("{kind}s");
     let dir = config_dir.join(&dir_name);
 
@@ -236,7 +278,7 @@ fn apply_default_timezone(fields: &mut [FieldDefinition], default_tz: &str) {
 /// travel verbatim to API clients (gRPC `INVALID_ARGUMENT`, admin toasts,
 /// MCP tool results) — an absolute name would disclose the server's
 /// filesystem layout on every hook error.
-pub(crate) fn chunk_name(path: &Path) -> String {
+fn chunk_name(path: &Path) -> String {
     let mut parts: Vec<&str> = path
         .iter()
         .rev()
@@ -247,45 +289,58 @@ pub(crate) fn chunk_name(path: &Path) -> String {
     parts.join("/")
 }
 
-fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
+/// Point module resolution at the config directory — and only there.
+///
+/// `package.path` becomes exactly `{config_dir}/?.lua;{config_dir}/?/init.lua`
+/// (Lua's defaults — the working directory and the system Lua directories —
+/// are dropped, so a module missing from the config dir fails the same way on
+/// every machine instead of resolving to a stray file), and Lua's stock file
+/// searcher (`package.searchers[2]`) is replaced by one over those same two
+/// templates. The templates are fixed here: reassigning `package.path` from
+/// Lua does not widen what `require` reads.
+///
+/// The replacement searcher also names each loaded chunk RELATIVELY
+/// (`hooks/posts.lua`, never `{config_dir}/hooks/posts.lua`): the stock one
+/// names it by the absolute `package.path` entry it matched, so a runtime
+/// `error()` inside a `require`d hook file would disclose the server's
+/// filesystem layout in the client-facing `HookError`. The preload searcher
+/// (index 1) still runs first, so `load_lua_dir`-cached modules are untouched.
+///
+/// # Errors
+///
+/// Returns an error if the config dir path contains `;` or `?` (Lua's
+/// template separator and placeholder), or the `package` table can't be
+/// updated.
+pub(crate) fn install_module_loader(lua: &Lua, config_dir: &Path) -> Result<()> {
     let config_str = config_dir.to_string_lossy();
-    let pkg: Table = lua.globals().get("package")?;
-    let current_path: String = pkg.get("path")?;
-    let new_path = format!("{config_str}/?.lua;{config_str}/?/init.lua;{current_path}");
 
-    pkg.set("path", new_path)?;
+    if config_str.contains([';', '?']) {
+        bail!(
+            "config directory path {} contains ';' or '?', which Lua module paths cannot express",
+            config_dir.display()
+        );
+    }
+
+    let templates = vec![
+        format!("{config_str}/?.lua"),
+        format!("{config_str}/?/init.lua"),
+    ];
+
+    let package: Table = lua.globals().get("package")?;
+    package.set("path", templates.join(";"))?;
+
+    let searchers: Table = package.get("searchers")?;
+    searchers.set(2, module_searcher(lua, templates)?)?;
 
     Ok(())
 }
 
-/// Replace Lua's stock file searcher (`package.searchers[2]`) with one that
-/// loads config-dir modules under a RELATIVE chunk name (`hooks/posts.lua`,
-/// never the absolute `{config_dir}/hooks/posts.lua`).
-///
-/// The stock searcher names a loaded chunk by the exact `package.path` entry
-/// it matched — an absolute path here — so a runtime `error()` inside a hook
-/// file resolved via `require` surfaces that absolute server path in the
-/// client-facing `HookError` message, disclosing the filesystem layout. This
-/// searcher resolves modules identically (it walks the same `package.path`)
-/// but stamps the shortened `chunk_name`, matching the `load_lua_dir` and
-/// init.lua load paths. The preload searcher (index 1) still runs first, so
-/// `load_lua_dir`-cached modules are untouched.
-///
-/// # Errors
-///
-/// Returns an error if `package.searchers` can't be read or the replacement
-/// searcher can't be installed.
-pub(crate) fn install_relative_chunk_searcher(lua: &Lua) -> Result<()> {
-    let searcher = lua.create_function(|lua, module: String| {
-        let package: Table = lua.globals().get("package")?;
-        let path: String = package.get("path")?;
+/// The `require` file searcher over the fixed config-dir `templates`.
+fn module_searcher(lua: &Lua, templates: Vec<String>) -> LuaResult<Function> {
+    lua.create_function(move |lua, module: String| {
         let rel = module.replace('.', "/");
 
-        for template in path.split(';') {
-            if template.is_empty() {
-                continue;
-            }
-
+        for template in &templates {
             let candidate = template.replace('?', &rel);
             let file = Path::new(&candidate);
 
@@ -293,23 +348,15 @@ pub(crate) fn install_relative_chunk_searcher(lua: &Lua) -> Result<()> {
                 continue;
             };
 
-            let loader = lua.load(&code).set_name(chunk_name(file)).into_function()?;
-
-            return Ok(Value::Function(loader));
+            return Ok(Value::Function(load_source_file(lua, &code, file)?));
         }
 
         // No file matched — a string message tells `require` to keep trying
         // its remaining searchers (and feeds the aggregated not-found error).
         Ok(Value::String(lua.create_string(format!(
-            "\n\tno file '{module}' under the configured package.path"
+            "\n\tno file '{module}' under the config directory"
         ))?))
-    })?;
-
-    let package: Table = lua.globals().get("package")?;
-    let searchers: Table = package.get("searchers")?;
-    searchers.set(2, searcher)?;
-
-    Ok(())
+    })
 }
 
 /// Apply sandbox restrictions to a Lua VM.
@@ -320,9 +367,13 @@ pub(crate) fn install_relative_chunk_searcher(lua: &Lua) -> Result<()> {
 /// - no dynamic code loading (`load`/`loadstring`/`loadfile`/`dofile`),
 /// - no native module loading (`package.cpath`/`loadlib`, `string.dump`),
 /// - `os` reduced to time functions,
-/// - `io` file access stays available **deliberately** — custom storage
-///   backends are documented as Lua-may-map-to-filesystem.
-pub(crate) fn sandbox_lua(lua: &Lua) -> Result<()> {
+/// - `io` file access jailed by `io_jail` to the config directory plus
+///   `[hooks] io_roots` (custom storage backends are documented as
+///   Lua-may-map-to-filesystem), with the process's secrets — config file,
+///   data directory, database, backups, logs, `/proc` — refused inside
+///   them; `package.searchpath` (a file-existence probe outside the jail)
+///   is removed.
+pub(crate) fn sandbox_lua(lua: &Lua, io_jail: &Arc<IoJail>) -> Result<()> {
     lua.load_std_libs(StdLib::OS)?;
 
     let os: Table = lua.globals().get("os")?;
@@ -342,17 +393,18 @@ pub(crate) fn sandbox_lua(lua: &Lua) -> Result<()> {
     let pkg: Table = lua.globals().get("package")?;
     pkg.set("cpath", "")?;
     pkg.set("loadlib", Value::Nil)?;
+    pkg.set("searchpath", Value::Nil)?;
 
     let string_table: Table = lua.globals().get("string")?;
     string_table.set("dump", Value::Nil)?;
 
     // `io.popen` is process execution — the sibling of `os.execute`,
-    // which this sandbox has always removed. (The rest of `io` stays:
-    // custom storage backends legitimately touch the filesystem.)
+    // which this sandbox has always removed. The rest of `io` stays, jailed:
+    // custom storage backends legitimately touch the filesystem.
     let io: Table = lua.globals().get("io")?;
     io.set("popen", Value::Nil)?;
 
-    Ok(())
+    install_io_jail(lua, io_jail)
 }
 
 /// Load and execute all `.lua` files in a directory (used for
@@ -385,18 +437,15 @@ pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
             continue;
         };
         let name = name.to_string_lossy();
-        let label = lua
-            .app_data_ref::<lua_api::VmLabel>()
-            .map_or_else(|| "lua".into(), |l| l.0.clone());
-        debug!("[lua:{label}] Loading {kind}: {name}");
+        debug!("[lua:{}] Loading {kind}: {name}", vm_label(lua));
 
         let code = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
 
-        let returned: Value = lua
-            .load(&code)
-            .set_name(chunk_name(&path))
-            .eval()
+        reset_instruction_budget(lua);
+
+        let returned: Value = load_source_file(lua, &code, &path)
+            .and_then(|chunk| chunk.call(()))
             .with_context(|| format!("Failed to execute {}", path.display()))?;
 
         let stem = path
@@ -419,12 +468,20 @@ pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::FieldType;
+    use crate::core::{BlockDefinition, FieldType};
     use mlua::{Lua, LuaOptions, StdLib, Value};
 
     fn sandboxed_lua() -> Lua {
         let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default()).unwrap();
-        sandbox_lua(&lua).unwrap();
+        let jail = Arc::new(IoJail::new(Path::new("."), &CrapConfig::default()).unwrap());
+        sandbox_lua(&lua, &jail).unwrap();
+        lua
+    }
+
+    /// A sandboxed VM whose modules resolve under `config_dir`.
+    fn module_lua(config_dir: &Path) -> Lua {
+        let lua = sandboxed_lua();
+        install_module_loader(&lua, config_dir).unwrap();
         lua
     }
 
@@ -504,6 +561,122 @@ mod tests {
             !collect(&string_table).contains(&"dump".to_string()),
             "string.dump must stay removed"
         );
+
+        let package: mlua::Table = lua.globals().get("package").unwrap();
+        assert!(
+            !collect(&package).contains(&"searchpath".to_string()),
+            "package.searchpath probes files outside the io jail and must stay removed"
+        );
+    }
+
+    /// The sandbox wires the io jail in: the kernel's view of the process
+    /// environment (`CRAP_SECRET_*` included) is refused.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sandbox_jails_io_away_from_proc() {
+        let lua = sandboxed_lua();
+
+        let err = lua
+            .load(r#"io.open("/proc/self/environ")"#)
+            .exec()
+            .expect_err("/proc must be refused")
+            .to_string();
+
+        assert!(err.contains("protected path"), "{err}");
+    }
+
+    /// Regression: `package.path` kept Lua's defaults (`./?.lua`, the system
+    /// Lua directories) after the config dir, so a module missing from the
+    /// config dir silently resolved from the working directory or a system
+    /// install. Only the two config-dir templates remain.
+    #[test]
+    fn package_path_is_only_the_config_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lua = module_lua(tmp.path());
+
+        let path: String = lua.load("return package.path").eval().unwrap();
+        let dir = tmp.path().to_string_lossy();
+
+        assert_eq!(path, format!("{dir}/?.lua;{dir}/?/init.lua"));
+    }
+
+    /// Reassigning `package.path` from Lua does not widen what `require`
+    /// reads — the searcher keeps the config-dir templates it was built with.
+    #[test]
+    fn reassigning_package_path_does_not_widen_require() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("stray.lua"), "return 1").unwrap();
+        let lua = module_lua(tmp.path());
+
+        let code = format!(
+            r#"package.path = "{}/?.lua"; return require("stray")"#,
+            outside.path().to_string_lossy()
+        );
+        let err = lua.load(&code).exec().unwrap_err().to_string();
+
+        assert!(err.contains("no file 'stray'"), "{err}");
+    }
+
+    /// Regression: the pool VMs built `package.path` by pasting the config
+    /// path into Lua source, so a path containing `"` or `\` failed every
+    /// pool VM build with a syntax error (or ran the tail as code). Both VMs
+    /// now share one loader that sets the path through the `package` table.
+    #[cfg(unix)]
+    #[test]
+    fn module_loader_handles_quote_and_backslash_in_the_config_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tmp.path().join(r#"odd"dir\name"#);
+        std::fs::create_dir_all(config.join("hooks")).unwrap();
+        std::fs::write(config.join("hooks/answer.lua"), "return 42").unwrap();
+        let lua = module_lua(&config);
+
+        let answer: i64 = lua
+            .load(r#"return require("hooks.answer")"#)
+            .eval()
+            .unwrap();
+        let path: String = lua.load("return package.path").eval().unwrap();
+
+        assert_eq!(answer, 42);
+        assert!(path.starts_with(&*config.to_string_lossy()), "{path}");
+    }
+
+    /// `;` and `?` are Lua's template separator and placeholder — a config
+    /// dir containing one cannot be expressed as a module path.
+    #[test]
+    fn module_loader_rejects_template_metacharacters() {
+        let lua = sandboxed_lua();
+
+        for dir in ["/srv/a;b", "/srv/a?b"] {
+            let err = install_module_loader(&lua, Path::new(dir)).unwrap_err();
+            assert!(err.to_string().contains("';' or '?'"), "{err}");
+        }
+    }
+
+    /// Precompiled Lua bytecode is unverified by the VM — a crafted chunk
+    /// escapes it. Every config-dir load path accepts text only.
+    #[test]
+    fn binary_chunks_are_refused_on_every_load_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hooks = tmp.path().join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let bytecode = "\x1bLua\x54\x00junk";
+        std::fs::write(hooks.join("bin.lua"), bytecode).unwrap();
+        std::fs::write(tmp.path().join("init.lua"), bytecode).unwrap();
+        let lua = module_lua(tmp.path());
+
+        let err = lua
+            .load(r#"require("hooks.bin")"#)
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("binary chunk"), "require: {err}");
+
+        let err = format!("{:#}", execute_init_lua(&lua, tmp.path()).unwrap_err());
+        assert!(err.contains("binary chunk"), "init.lua: {err}");
+
+        let err = format!("{:#}", load_lua_dir(&lua, &hooks, "hooks").unwrap_err());
+        assert!(err.contains("binary chunk"), "definition dir: {err}");
     }
 
     /// `io.popen` is process execution — `os.execute`'s sibling — and
@@ -564,7 +737,7 @@ mod tests {
     /// file-per-hook and module patterns in `resolve_hook_function`) were
     /// loaded by Lua's stock searcher, which names the chunk by the ABSOLUTE
     /// `package.path` entry it matched — leaking the server's filesystem
-    /// layout into the client-facing `HookError` text. `install_relative_chunk_searcher`
+    /// layout into the client-facing `HookError` text. `install_module_loader`
     /// stamps the relative `chunk_name` instead. Loading `collections/`,
     /// `globals/`, `jobs/`, and init.lua already named their chunks relatively;
     /// this closes the `hooks/` `require` gap so every load path agrees.
@@ -575,9 +748,7 @@ mod tests {
         std::fs::create_dir_all(&hooks_dir).unwrap();
         std::fs::write(hooks_dir.join("boom.lua"), "error('kaboom')").unwrap();
 
-        let lua = sandboxed_lua();
-        setup_package_paths(&lua, tmp.path()).unwrap();
-        install_relative_chunk_searcher(&lua).unwrap();
+        let lua = module_lua(tmp.path());
 
         let err = lua
             .load("require('hooks.boom')")
@@ -675,10 +846,50 @@ mod tests {
         );
     }
 
+    /// Boot `init_lua` over a config dir holding only `init.lua` = `code`,
+    /// with `limits` applied to the config; the boot error, rendered.
+    fn boot_error(code: &str, limits: impl FnOnce(&mut CrapConfig)) -> String {
+        let tmp = tempfile::TempDir::new().unwrap();
+        fs::write(tmp.path().join("init.lua"), code).unwrap();
+
+        let mut config = CrapConfig::test_default();
+        limits(&mut config);
+
+        let Err(err) = init_lua(tmp.path(), &config) else {
+            panic!("the boot must fail");
+        };
+
+        format!("{err:#}")
+    }
+
+    /// Regression: the init VM ran without the `[hooks]` instruction budget,
+    /// so a runaway `init.lua` hung the boot forever. It now fails the boot
+    /// with the limit's error.
+    #[test]
+    fn a_runaway_init_lua_fails_the_boot_on_the_instruction_budget() {
+        let err = boot_error("while true do end", |config| {
+            config.hooks.max_instructions = 200_000;
+        });
+
+        assert!(err.contains("init.lua"), "{err}");
+        assert!(err.contains("instruction limit"), "{err}");
+    }
+
+    /// Regression: the init VM ran without the `[hooks]` memory ceiling.
+    #[test]
+    fn an_init_lua_that_exhausts_memory_fails_the_boot() {
+        let code = "local t = {} for i = 1, 1e8 do t[i] = string.rep('x', 64) .. i end";
+        let err = boot_error(code, |config| {
+            config.hooks.max_instructions = 0;
+            config.hooks.max_memory = 16 * 1024 * 1024;
+        });
+
+        assert!(err.contains("init.lua"), "{err}");
+        assert!(err.contains("memory"), "{err}");
+    }
+
     #[test]
     fn default_timezone_applies_to_date_inside_blocks() {
-        use crate::core::BlockDefinition;
-
         let mut fields = vec![
             FieldDefinition::builder("body", FieldType::Blocks)
                 .blocks(vec![BlockDefinition::new(

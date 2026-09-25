@@ -1,5 +1,7 @@
 //! Shared `manifest.json` shape for the `backup` / `restore` commands.
 
+use anyhow::{Context as _, Result, bail};
+use semver::Version;
 use serde::{Deserialize, Serialize};
 
 /// Structural version of the backup format. Bump ONLY on a
@@ -31,6 +33,49 @@ pub(super) struct BackupManifest {
     /// Whether the backup carries the generated auth secret (`jwt_secret`).
     #[serde(default)]
     pub includes_secret: bool,
+}
+
+/// How the crap-cms that wrote a backup relates to the one restoring it.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum BackupOrigin {
+    /// Written by this very version.
+    SameVersion,
+    /// Written by an older crap-cms: the next start schema-migrates it forward.
+    OlderVersion,
+}
+
+/// Compare the backup's `crap_version` with this binary's.
+///
+/// A backup from a *newer* crap-cms is refused: restoring it is a downgrade.
+/// The database carries schema, system columns and one-time migration gates
+/// (versioned `_crap_meta` values) this binary does not know — it would treat
+/// newer columns as orphans and re-run its older one-time passes over data a
+/// newer computation already wrote. The newer binary must restore it.
+///
+/// # Errors
+///
+/// Returns an error when either version is not valid semver, or when the
+/// backup is newer than `binary`.
+pub(super) fn check_backup_origin(backup: &str, binary: &str) -> Result<BackupOrigin> {
+    let backup_v = Version::parse(backup)
+        .with_context(|| format!("manifest.json names an invalid crap-cms version {backup:?}"))?;
+    let binary_v = Version::parse(binary)
+        .with_context(|| format!("invalid crap-cms binary version {binary:?}"))?;
+
+    if backup_v > binary_v {
+        bail!(
+            "This backup was taken with crap-cms {backup}, newer than this binary ({binary}). \
+             Restoring it would downgrade the database, which an older crap-cms cannot \
+             read safely — restore it with crap-cms {backup} or later \
+             (`crap-cms update use v{backup}`)."
+        );
+    }
+
+    if backup_v == binary_v {
+        return Ok(BackupOrigin::SameVersion);
+    }
+
+    Ok(BackupOrigin::OlderVersion)
 }
 
 #[cfg(test)]
@@ -94,5 +139,35 @@ mod tests {
         }"#;
         let m: BackupManifest = serde_json::from_str(raw).unwrap();
         assert_eq!(m.format_version, 1);
+    }
+
+    /// Regression: a backup from a newer crap-cms was accepted with a message
+    /// promising a forward migration — restoring it is a downgrade.
+    #[test]
+    fn backup_from_a_newer_version_is_refused() {
+        let err = check_backup_origin("0.1.0-alpha.11", "0.1.0-alpha.10").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("newer than this binary"), "{msg}");
+
+        assert!(check_backup_origin("0.2.0", "0.1.9").is_err());
+        assert!(check_backup_origin("1.0.0", "1.0.0-rc.1").is_err());
+    }
+
+    #[test]
+    fn backup_from_the_same_or_an_older_version_is_accepted() {
+        assert_eq!(
+            check_backup_origin("0.1.0-alpha.10", "0.1.0-alpha.10").unwrap(),
+            BackupOrigin::SameVersion
+        );
+        assert_eq!(
+            check_backup_origin("0.1.0-alpha.9", "0.1.0-alpha.10").unwrap(),
+            BackupOrigin::OlderVersion
+        );
+    }
+
+    #[test]
+    fn backup_with_an_invalid_version_is_refused() {
+        let err = check_backup_origin("latest", "0.1.0").unwrap_err();
+        assert!(format!("{err:#}").contains("invalid crap-cms version"));
     }
 }

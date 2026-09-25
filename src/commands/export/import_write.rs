@@ -15,7 +15,11 @@ use crate::{
     core::{nul_character_errors, validate::ValidationError},
     db::{
         DbConnection, LocaleContext, LocaleMode, UpsertSpec,
-        query::{self, ref_count::OutgoingRef},
+        query::{
+            self,
+            fts::{FtsIndex, fts_upsert},
+            ref_count::OutgoingRef,
+        },
     },
     service::{AppInfra, ServiceContext},
 };
@@ -181,7 +185,11 @@ fn write_document(
     write_join_rows(tx, target, id, &row)?;
 
     if tx.supports_fts() {
-        query::fts::fts_upsert(tx, slug, id, def, target.locale)
+        let index = FtsIndex::builder(slug, def, target.locale)
+            .registry(target.registry)
+            .build();
+
+        fts_upsert(tx, &index, id)
             .with_context(|| format!("Failed to index {id} in '{slug}' for search"))?;
     }
 

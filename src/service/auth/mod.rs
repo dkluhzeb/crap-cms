@@ -11,9 +11,14 @@
 //! - [`account`] — lock / unlock / verified-flag mutation + the
 //!   accessors used by middleware to decide whether to accept a
 //!   token (session version, `is_locked`, `user_exists`).
-//! - [`mfa`] — email MFA code persistence + verification.
+//! - [`mfa`] — email / custom MFA code persistence, delivery + verification.
 //! - [`mfa_gate`] — whether a verified authentication (login or auth
-//!   callback) must complete the collection's second factor.
+//!   callback) must complete the collection's second factor, and whether a
+//!   session that did not satisfy it may authenticate a request.
+//! - [`challenge`] — issuing the MFA challenge (throttle, surface-bound
+//!   pending token, code delivery) for every login surface.
+//! - [`session`] — minting a session token, stamped with its surface and
+//!   second-factor state, for every login surface.
 //! - [`totp_flow`] — TOTP challenge/enrollment + the mode-dispatching
 //!   [`totp_flow::verify_second_factor`] chokepoint both login surfaces use.
 //! - [`evaluator`] — the unified per-request auth resolver shared
@@ -23,11 +28,13 @@
 //!   restrict).
 
 pub mod account;
+pub mod challenge;
 pub mod evaluator;
 pub mod local;
 pub mod login_flow;
 pub mod mfa;
 pub mod mfa_gate;
+pub mod session;
 pub mod strategy_user;
 pub mod tokens;
 pub mod totp_flow;
@@ -40,6 +47,7 @@ pub use account::{
     get_session_version, is_locked, is_verified, load_user, lock_user, mark_unverified,
     mark_verified, perform_account_action, reset_totp, set_password, unlock_user, user_exists,
 };
+pub use challenge::{ChallengeRefusal, ChallengeRequest, MfaChallenge, issue_mfa_challenge};
 pub use evaluator::{
     AuthFailure, AuthRequest, AuthenticatedResolution, EvaluateDeps, Resolution, ResolvedMethod,
     evaluate, load_authenticated_user, reload_authenticated_user,
@@ -47,10 +55,11 @@ pub use evaluator::{
 pub use local::{AuthResult, authenticate_local};
 pub use login_flow::{LoginFlowRequest, LoginOutcome, LoginVerified, verify_login};
 pub use mfa::{
-    MFA_PENDING_EXPIRY, deliver_mfa_code, generate_mfa_code, mint_mfa_pending_token, set_mfa_code,
+    MFA_PENDING_EXPIRY, MfaCodeDelivery, deliver_mfa_code, generate_mfa_code, set_mfa_code,
     verify_mfa_code,
 };
-pub use mfa_gate::{MfaGateRequest, mfa_gate};
+pub use mfa_gate::{MfaGateRequest, mfa_gate, second_factor_required};
+pub use session::{MintedSession, SessionGrant, SessionGrantBuilder, mint_session};
 pub use strategy_user::{StrategyAdmission, StrategyRefusal, admit_strategy_user};
 pub use tokens::{
     ResetTokenResult, VERIFICATION_TOKEN_EXPIRY, VerificationTokenResult, consume_reset_token,

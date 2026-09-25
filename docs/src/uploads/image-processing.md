@@ -27,10 +27,19 @@ image_sizes = {
 
 | Mode | Behavior |
 |------|----------|
-| `cover` | Resize to fill the target dimensions, then center-crop. No empty space. Aspect ratio preserved. |
+| `cover` | Center-crop the source to the target's aspect ratio, then resize the crop to the target dimensions. No empty space. Aspect ratio preserved. |
 | `contain` | Resize to fit within the target dimensions. May be smaller than target. Aspect ratio preserved. |
 | `inside` | Same as `contain` — resize to fit within bounds, preserving aspect ratio. |
 | `fill` | Stretch to exact target dimensions. Aspect ratio may change. |
+
+`contain` and `inside` scale up as well as down: a source smaller than the box
+is enlarged until one side meets it.
+
+Every fit mode plans its passes from the dimensions before touching a pixel,
+so the memory a size costs stays within the larger of the source and the
+target whatever the source's aspect ratio — a 65,535 × 10 strip resized to a
+300 × 300 `cover` size crops a 10 × 10 square first and never builds a
+canvas wider than the source.
 
 ## Format Options
 
@@ -49,6 +58,13 @@ format_options = {
 | `avif` | 1-100 | AVIF via the image crate's AVIF encoder (speed=8) |
 
 Format variants are generated for each image size, not for the original. This keeps original files untouched.
+
+Each encoder has a dimension limit: **16,383 pixels** per side for WebP and
+**65,535** for AVIF. A size whose output exceeds it (typically a `contain` /
+`inside` size with a very large box, which enlarges) skips that format
+variant with a logged warning — the size itself and its other variants are
+still stored, and the upload succeeds. With `queue = true` such a variant is
+skipped the same way rather than queued as a conversion that could only fail.
 
 ### Background Queue
 
@@ -96,6 +112,24 @@ For each uploaded image:
 4. **Format variants** — each sized image is also saved as WebP and/or AVIF (if configured)
 
 Non-image files (PDFs, etc.) skip steps 2-4.
+
+### What derived images keep
+
+Sizes and their WebP/AVIF variants are re-encoded from the decoded pixels, so
+they carry only the pixels — the original file keeps everything, byte for
+byte:
+
+- **Color profile** — an embedded ICC profile (Display P3, Adobe RGB) is not
+  carried over, and the pixels are not converted to sRGB. A wide-gamut photo's
+  sizes render slightly desaturated next to the original. Export images in sRGB
+  when the sizes must match the original's color exactly. (The profile is not
+  copied onto the resized PNG/JPEG either, because the WebP and AVIF variants
+  of the same size could not carry it — two renditions of one size would show
+  different colors.)
+- **Animation** — an animated GIF or WebP produces **static sizes of its first
+  frame**. Serve the original when the animation matters.
+- **Metadata** — EXIF (GPS coordinates, camera identifiers) is dropped; the
+  EXIF orientation is applied to the pixels first, so sizes are upright.
 
 ## Decompression Bomb Protection
 

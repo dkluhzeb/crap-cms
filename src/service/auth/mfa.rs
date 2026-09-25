@@ -1,14 +1,11 @@
-//! MFA (email second-factor) code persistence + verification, and the
-//! shared challenge-issuance pieces the login surfaces build on.
+//! MFA (email / custom second-factor) code persistence, delivery and
+//! verification.
 //!
-//! The gRPC `Login`/`VerifyMfa` RPCs and the admin login/MFA pages are
-//! codecs over the same primitives: a short-lived pending token
-//! ([`mint_mfa_pending_token`]), a 6-digit code stored + delivered
-//! ([`generate_mfa_code`] / [`deliver_mfa_code`] — built-in email for
-//! `mfa = "email"`, the collection's `mfa_deliver` hook for
-//! `mfa = "custom"`), and code verification ([`verify_mfa_code`]). Issuance
-//! throttling and the response shape (challenge token vs pending cookie)
-//! stay per surface.
+//! A 6-digit code is generated, stored and delivered ([`generate_mfa_code`] /
+//! [`deliver_mfa_code`] — built-in email for `mfa = "email"`, the
+//! collection's `mfa_deliver` hook for `mfa = "custom"`) by the shared
+//! challenge issuance ([`super::challenge::issue_mfa_challenge`]), and
+//! verified single-use ([`verify_mfa_code`]).
 
 use chrono::Utc;
 use rand::Rng as _;
@@ -16,12 +13,14 @@ use tracing::error;
 
 use crate::{
     core::{
-        Document, Slug,
-        auth::{ClaimsBuilder, TokenUse},
+        Document,
         collection::{Auth, MfaMode},
         email::{self, MfaCodeEmailContext},
     },
-    db::query,
+    db::{
+        DbConnection,
+        query::{self, MfaCode},
+    },
     hooks::lifecycle::MfaDeliverInput,
     service::{AppInfra, ServiceContext, ServiceError},
 };
@@ -29,43 +28,31 @@ use crate::{
 /// MFA pending-token / code lifetime in seconds (5 minutes).
 pub const MFA_PENDING_EXPIRY: u64 = 300;
 
-/// Store an MFA code for a user.
+/// Store `mfa`'s code for its user, expiring at `expiry` (Unix timestamp).
 ///
 /// # Errors
 ///
 /// Returns a backend error if the DB connection or persistence
 /// fails.
-pub fn set_mfa_code(
-    ctx: &ServiceContext,
-    id: &str,
-    code: &str,
-    expiry: i64,
-    auth_secret: &str,
-) -> Result<(), ServiceError> {
+pub fn set_mfa_code(ctx: &ServiceContext, mfa: &MfaCode, expiry: i64) -> Result<(), ServiceError> {
     let conn = ctx.resolve_conn()?;
-    query::set_mfa_code(conn.as_ref(), ctx.slug, id, code, expiry, auth_secret)?;
+    query::set_mfa_code(conn.as_ref(), ctx.slug, mfa, expiry)?;
+
     Ok(())
 }
 
-/// Verify an MFA code. Returns true if valid and not expired.
+/// Verify an MFA code. Returns true if valid and not expired. The stored
+/// code is consumed by the attempt whatever its outcome — atomically, so
+/// concurrent attempts on one issued code get exactly one verdict between
+/// them (see [`query::verify_mfa_code`]).
 ///
 /// # Errors
 ///
 /// Returns a backend error if the DB connection or query fails.
-pub fn verify_mfa_code(
-    ctx: &ServiceContext,
-    id: &str,
-    code: &str,
-    auth_secret: &str,
-) -> Result<bool, ServiceError> {
+pub fn verify_mfa_code(ctx: &ServiceContext, attempt: &MfaCode) -> Result<bool, ServiceError> {
     let conn = ctx.resolve_conn()?;
-    Ok(query::verify_mfa_code(
-        conn.as_ref(),
-        ctx.slug,
-        id,
-        code,
-        auth_secret,
-    )?)
+
+    Ok(query::verify_mfa_code(conn.as_ref(), ctx.slug, attempt)?)
 }
 
 /// Generate a fresh 6-digit MFA code.
@@ -74,113 +61,67 @@ pub fn generate_mfa_code() -> String {
     format!("{:06}", rand::rng().random_range(0..1_000_000))
 }
 
-/// Mint the short-lived MFA-pending token binding a verified login to its
-/// second-factor step. The token carries [`TokenUse::MfaPending`], so it can
-/// never pass as a session/bearer token — and a session token can't be
-/// replayed into the MFA completion step.
-///
-/// # Errors
-///
-/// Returns an error when claims building or token signing fails.
-pub fn mint_mfa_pending_token(
-    infra: &AppInfra,
-    slug: &str,
-    user: &Document,
-    user_email: &str,
-    session_version: u64,
-) -> Result<String, ServiceError> {
-    let claims = ClaimsBuilder::new(user.id.clone(), Slug::new(slug))
-        .email(user_email.to_string())
-        .exp((Utc::now().timestamp().max(0).cast_unsigned()).saturating_add(MFA_PENDING_EXPIRY))
-        .session_version(session_version)
-        .token_use(TokenUse::MfaPending)
-        .build()
-        .map_err(ServiceError::Internal)?;
-
-    infra
-        .token_provider
-        .create_token(&claims)
-        .map_err(ServiceError::Internal)
+/// One MFA code to store and deliver. Owned: delivery runs detached, in the
+/// background.
+pub struct MfaCodeDelivery {
+    /// `[auth] secret`, which keys the stored code digest.
+    pub auth_secret: String,
+    /// The auth collection of the pending login.
+    pub slug: String,
+    /// The user the code is for.
+    pub user: Document,
+    /// The address a built-in email goes to.
+    pub email: String,
+    /// The generated code.
+    pub code: String,
 }
 
-/// Store a 6-digit MFA code and deliver it — the shared body both login
-/// surfaces call (in `spawn_blocking`). The channel follows the collection's
-/// MFA mode: built-in email for `mfa = "email"`, the `mfa_deliver` hook for
-/// `mfa = "custom"` (the code is handed to userland for SMS/push/…).
-/// Best-effort: errors are logged, not propagated — the caller has already
-/// committed to the MFA challenge response, and the previously issued code
-/// (if any) stays valid.
-pub fn deliver_mfa_code(
-    infra: &AppInfra,
-    auth_secret: &str,
-    slug: &str,
-    user: &Document,
-    user_email: &str,
-    code: &str,
-) {
-    let conn = match infra.pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            error!("DB connection for MFA code: {}", e);
-            return;
-        }
+/// Hand the code to the collection's `mfa_deliver` hook (`mfa = "custom"`).
+/// Only reachable with a configured hook (startup validation pairs the mode
+/// with the hook), but fail LOUDLY if the pairing is somehow broken —
+/// silently sending nothing would strand every login on this collection.
+///
+/// Runs with no connection held: the code is already stored, and the hook's
+/// own CRUD takes a write connection only at its first call — so its
+/// delivery I/O (an SMS gateway, a push service) never pins one.
+fn deliver_custom(infra: &AppInfra, auth: &Auth, d: &MfaCodeDelivery) {
+    let Some(hook) = auth.mfa_deliver() else {
+        error!(
+            collection = d.slug,
+            "mfa = \"custom\" without an mfa_deliver hook — no code delivered"
+        );
+        return;
     };
 
-    // Saturate to 0 (immediate expiry) on the impossible overflow path —
-    // never-expires is the wrong fallback for security-sensitive timeouts.
-    let exp = Utc::now().timestamp() + i64::try_from(MFA_PENDING_EXPIRY).unwrap_or(0);
+    let input = MfaDeliverInput {
+        collection: &d.slug,
+        user: &d.user,
+        code: &d.code,
+        expires_in: MFA_PENDING_EXPIRY,
+    };
 
-    let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
-
-    if let Err(e) = set_mfa_code(&ctx, &user.id, code, exp, auth_secret) {
-        error!("Failed to store MFA code: {}", e);
-        return;
+    if let Err(e) = infra.hook_runner.run_mfa_deliver(hook, &input, &infra.pool) {
+        error!(
+            collection = d.slug,
+            hook = hook.reference(),
+            error = ?e,
+            "mfa_deliver hook failed — no code delivered"
+        );
     }
+}
 
-    let auth = infra
-        .registry
-        .get_collection(slug)
-        .and_then(|d| d.auth.as_ref());
-
-    // Custom delivery: the hook owns the channel. Only reachable with a
-    // configured hook (startup validation pairs `mfa = "custom"` with
-    // `mfa_deliver`), but fail LOUDLY if the pairing is somehow broken —
-    // silently sending nothing would strand every login on this collection.
-    if auth.map(Auth::mfa) == Some(MfaMode::Custom) {
-        let Some(hook) = auth.and_then(Auth::mfa_deliver) else {
-            error!(
-                collection = slug,
-                "mfa = \"custom\" without an mfa_deliver hook — no code delivered"
-            );
-            return;
-        };
-
-        let input = MfaDeliverInput {
-            collection: slug,
-            user,
-            code,
-            expires_in: MFA_PENDING_EXPIRY,
-        };
-
-        if let Err(e) = infra.hook_runner.run_mfa_deliver(hook, &input, &conn) {
-            error!(
-                collection = slug,
-                hook = hook.reference(),
-                error = ?e,
-                "mfa_deliver hook failed — no code delivered"
-            );
-        }
-        return;
-    }
-
-    let html = match infra.email.email_renderer.render(
+/// Queue the built-in code email (`mfa = "email"`).
+fn deliver_email(infra: &AppInfra, conn: &dyn DbConnection, d: &MfaCodeDelivery) {
+    let rendered = infra.email.email_renderer.render(
         "mfa_code",
         &MfaCodeEmailContext {
-            code,
+            code: &d.code,
             expiry_minutes: MFA_PENDING_EXPIRY / 60,
             from_name: &infra.email.email_config.from_name,
         },
-    ) {
+    );
+
+    let html = match rendered {
         Ok(h) => h,
         Err(e) => {
             error!("Failed to render MFA email: {}", e);
@@ -188,16 +129,72 @@ pub fn deliver_mfa_code(
         }
     };
 
-    if let Err(e) = email::queue_email(
-        &conn,
-        &email::EmailJobData {
-            to: user_email.to_string(),
-            subject: "Your verification code".to_string(),
-            html,
-            text: None,
-        },
-        infra.email.email_max_attempts,
-    ) {
+    let job = email::EmailJobData {
+        to: d.email.clone(),
+        subject: "Your verification code".to_string(),
+        html,
+        text: None,
+    };
+
+    if let Err(e) = email::queue_email(conn, &job, infra.email.email_max_attempts) {
         error!("Failed to queue MFA email: {}", e);
+    }
+}
+
+/// Store `delivery`'s code on a write connection — and, for the built-in
+/// email channel, queue the email with it. `false` when the code could not
+/// be stored (logged): nothing may be delivered then.
+fn store_mfa_code(infra: &AppInfra, delivery: &MfaCodeDelivery, custom: bool) -> bool {
+    let conn = match infra.pool.write() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("DB connection for MFA code: {}", e);
+            return false;
+        }
+    };
+
+    // Saturate to 0 (immediate expiry) on the impossible overflow path —
+    // never-expires is the wrong fallback for security-sensitive timeouts.
+    let exp = Utc::now().timestamp() + i64::try_from(MFA_PENDING_EXPIRY).unwrap_or(0);
+
+    let ctx = ServiceContext::slug_only(&delivery.slug)
+        .conn(&conn)
+        .build();
+
+    let code = MfaCode::builder(&delivery.user.id, &delivery.code, &delivery.auth_secret).build();
+
+    if let Err(e) = set_mfa_code(&ctx, &code, exp) {
+        error!("Failed to store MFA code: {}", e);
+        return false;
+    }
+
+    if !custom {
+        deliver_email(infra, &conn, delivery);
+    }
+
+    true
+}
+
+/// Store a 6-digit MFA code and deliver it — the body the challenge issuance
+/// runs in the background. The channel follows the collection's MFA mode:
+/// built-in email for `mfa = "email"`, the `mfa_deliver` hook for
+/// `mfa = "custom"` (the code is handed to userland for SMS/push/…). The
+/// write connection that stores the code is released before a custom hook
+/// runs. Best-effort: errors are logged, not propagated — the caller has
+/// already committed to the MFA challenge response, and the previously
+/// issued code (if any) stays valid.
+pub fn deliver_mfa_code(infra: &AppInfra, delivery: &MfaCodeDelivery) {
+    let custom_auth = infra
+        .registry
+        .get_collection(&delivery.slug)
+        .and_then(|d| d.auth.as_ref())
+        .filter(|auth| auth.mfa() == MfaMode::Custom);
+
+    if !store_mfa_code(infra, delivery, custom_auth.is_some()) {
+        return;
+    }
+
+    if let Some(auth) = custom_auth {
+        deliver_custom(infra, auth, delivery);
     }
 }

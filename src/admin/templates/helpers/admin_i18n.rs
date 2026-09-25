@@ -133,6 +133,7 @@ const ADMIN_JS_KEYS: &[&str] = &[
     "richtext.quote",
     "richtext.horizontal_rule",
     "richtext.insert",
+    "richtext.load_error",
     "richtext.undo",
     "richtext.undo_title",
     "richtext.redo",

@@ -54,7 +54,8 @@ pub mod webhook_headers;
 
 pub(crate) use auth::write_new_owner_only;
 pub use auth::{
-    AuthConfig, PasswordPolicy, PasswordViolation, RateLimitBackend, SessionCookieSameSite,
+    AuthConfig, DEFAULT_TOKEN_EXPIRY, PasswordPolicy, PasswordViolation, RateLimitBackend,
+    SessionCookieSameSite,
 };
 pub use cors::CorsConfig;
 pub use features::{

@@ -302,6 +302,7 @@ impl ContentServiceDepsBuilder {
                     .locale_config(config.locale.clone())
                     .password_policy(config.auth.password_policy.clone())
                     .image_max_attempts(config.jobs.system_image_max_attempts())
+                    .token_expiry(config.auth.token_expiry)
                     .populate_singleflight(populate_singleflight)
                     .build(),
             )

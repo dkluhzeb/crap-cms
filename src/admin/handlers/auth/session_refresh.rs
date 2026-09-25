@@ -13,12 +13,18 @@ use crate::{
     admin::{
         AdminState,
         handlers::auth::{
-            SessionGrant, append_cookies, create_session_token, session_cookies, session_same_site,
+            append_cookies, create_session_token, session_cookies, session_same_site,
         },
     },
-    core::auth::{Claims, TokenUse},
+    core::{
+        auth::{Claims, TokenUse},
+        collection::Surface,
+    },
     db::{DbPool, query::is_valid_identifier},
-    service::{self, ServiceContext, ServiceError, auth::ResolvedMethod},
+    service::{
+        self, ServiceContext, ServiceError,
+        auth::{ResolvedMethod, SessionGrant},
+    },
 };
 
 /// Outcome of the absolute-max-age check during session refresh.
@@ -131,18 +137,20 @@ async fn current_session_version(state: &AdminState, claims: &Claims) -> Result<
 /// answer `204` carrying its cookies.
 fn refreshed_session_response(
     state: &AdminState,
-    claims: Claims,
+    claims: &Claims,
     session_version: u64,
     original_auth_time: u64,
 ) -> Response {
+    // A refresh re-mints on the surface that originally minted the session.
     let grant = SessionGrant::builder(
-        claims.sub.to_string(),
+        &claims.sub,
         &claims.collection,
-        claims.email,
+        &claims.email,
         session_version,
+        claims.surface.unwrap_or(Surface::Admin),
     )
     .auth_time(Some(original_auth_time))
-    .build();
+    .mfa(claims.mfa);
 
     let Ok(session) =
         create_session_token(state, grant).inspect_err(|e| error!("Session refresh: {}", e))
@@ -152,7 +160,7 @@ fn refreshed_session_response(
 
     let cookies = session_cookies(
         &session.token,
-        session.expiry,
+        session.lifetime,
         session.exp,
         state.config.admin.dev_mode,
         session_same_site(state),
@@ -189,16 +197,90 @@ pub async fn session_refresh(State(state): State<AdminState>, request: Request<B
         return StatusCode::UNAUTHORIZED.into_response();
     };
 
-    refreshed_session_response(&state, claims, session_version, original_auth_time)
+    refreshed_session_response(&state, &claims, session_version, original_auth_time)
 }
 
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
+    use axum::http::header::SET_COOKIE;
 
     use super::*;
 
-    use crate::core::{Slug, auth::ClaimsBuilder};
+    use crate::{
+        admin::{handlers::auth::SESSION_COOKIE, test_state::test_admin_state_with_registry},
+        core::{
+            CollectionDefinition, Registry, Slug,
+            auth::ClaimsBuilder,
+            collection::{Auth, Surface},
+        },
+    };
+
+    /// The session token a response set.
+    fn session_cookie_token(response: &Response) -> String {
+        let prefix = format!("{SESSION_COOKIE}=");
+
+        response
+            .headers()
+            .get_all(SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .find_map(|c| c.strip_prefix(prefix.as_str()))
+            .and_then(|rest| rest.split(';').next())
+            .expect("a session cookie is set")
+            .to_string()
+    }
+
+    /// Regression guard: a refresh re-mints the session, and must carry its
+    /// second-factor and surface stamps over — dropping the second-factor
+    /// stamp would log an MFA user out on refresh, and setting it would let a
+    /// refresh launder a session that never passed the second factor.
+    #[test]
+    fn a_refresh_keeps_the_session_stamps() {
+        let mut registry = Registry::default();
+        let mut users = CollectionDefinition::new("users");
+        users.auth = Some(Auth::enabled());
+        registry.register_collection(users);
+        let state = test_admin_state_with_registry(registry);
+        let now = Utc::now().timestamp().max(0).cast_unsigned();
+
+        for (mfa, surface) in [(true, Surface::Grpc), (false, Surface::Admin)] {
+            let mut claims = base_claims();
+            claims.mfa = mfa;
+            claims.surface = Some(surface);
+
+            let response = refreshed_session_response(&state, &claims, 0, now);
+            let token = session_cookie_token(&response);
+            let refreshed = state.infra.token_provider.validate_token(&token).unwrap();
+
+            assert_eq!(refreshed.mfa, mfa);
+            assert_eq!(refreshed.surface, Some(surface));
+        }
+    }
+
+    /// Every admin mint goes through `create_session_token`, which seals the
+    /// grant with `[auth] session_absolute_max_age`: a session re-minted near
+    /// its ceiling expires at the ceiling, not a full token lifetime later.
+    #[test]
+    fn an_admin_mint_is_capped_at_the_absolute_session_ceiling() {
+        let mut registry = Registry::default();
+        let mut users = CollectionDefinition::new("users");
+        users.auth = Some(Auth::enabled());
+        registry.register_collection(users);
+        let state = test_admin_state_with_registry(registry);
+
+        let max_age = state.config.auth.session_absolute_max_age;
+        assert!(max_age > 60, "the test needs a ceiling to approach");
+
+        let now = Utc::now().timestamp().max(0).cast_unsigned();
+        let auth_time = now - (max_age - 60);
+
+        let response = refreshed_session_response(&state, &base_claims(), 0, auth_time);
+        let token = session_cookie_token(&response);
+        let refreshed = state.infra.token_provider.validate_token(&token).unwrap();
+
+        assert_eq!(refreshed.exp, auth_time + max_age);
+    }
 
     /// A live, unlocked account continues at its current session version.
     #[test]

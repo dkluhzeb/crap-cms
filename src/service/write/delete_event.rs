@@ -5,12 +5,12 @@ use tracing::warn;
 use crate::{
     config::LocaleConfig,
     core::{
-        CollectionDefinition, EventGateSnapshot, Registry, SharedCache, SharedEventTransport,
-        event::EventViewMeta,
+        CollectionDefinition, EventGateSnapshot, EventViewPlacement, Registry, SharedCache,
+        SharedEventTransport, event::EventViewMeta,
     },
     db::{DbConnection, LocaleContext, query},
     hooks::HookRunner,
-    service::{AppInfra, ServiceContext, ServiceError, purge_document},
+    service::{AppInfra, ServiceContext, ServiceError, owned_file_keys, purge_document},
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
@@ -29,6 +29,23 @@ impl DeleteEvent {
     #[cfg(test)]
     pub(crate) fn new(view: EventViewMeta, gate: EventGateSnapshot) -> Self {
         Self { view, gate }
+    }
+
+    /// Mark the event as a soft delete of a live row: the row moved from its
+    /// status view into the trash (a trash write changes nothing but
+    /// `_deleted_at`, so the stored status is the one it had). Subscribers
+    /// that could see it in that status view but cannot see the trash are
+    /// then told of the removal (see [`EventViewMeta::moved_from`]).
+    #[must_use]
+    pub(crate) fn moved_to_trash(mut self) -> Self {
+        let live = EventViewPlacement {
+            trashed: false,
+            ..self.view.placement()
+        };
+
+        self.view = self.view.moved_from(Some(live));
+
+        self
     }
 
     /// The view the event is gated by and the row subscribers' constraints
@@ -76,6 +93,41 @@ pub(crate) fn read_delete_event(
     }))
 }
 
+/// A trashed document to purge: its id, and how long it must have been in
+/// the trash (`None`: any time) — the threshold its candidate scan used.
+#[derive(Clone, Copy)]
+pub(crate) struct TrashedDoc<'a> {
+    id: &'a str,
+    older_than: Option<i64>,
+}
+
+impl<'a> TrashedDoc<'a> {
+    /// Document `id`, trashed at least `older_than` seconds ago when set.
+    #[must_use]
+    pub(crate) fn new(id: &'a str, older_than: Option<i64>) -> Self {
+        Self { id, older_than }
+    }
+
+    /// The document's id.
+    #[must_use]
+    pub(crate) fn id(&self) -> &'a str {
+        self.id
+    }
+}
+
+/// What [`PurgeEvents::purge_trashed`] did with a document.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum TrashedPurge {
+    /// Purged. The storage keys its upload owned, whose files go once the
+    /// purge commits.
+    Purged(Vec<String>),
+    /// Skipped: the row is gone, was restored, or was trashed again too
+    /// recently since the candidates were read.
+    NotTrashed,
+    /// Skipped: still referenced by this many documents.
+    Referenced(i64),
+}
+
 /// One purged document's delete event, held until its purge commits.
 struct PurgedRow {
     collection: String,
@@ -84,7 +136,7 @@ struct PurgedRow {
 }
 
 /// A row whose delete event has been read and that is not yet purged.
-pub(crate) struct CapturedPurge<'a> {
+struct CapturedPurge<'a> {
     id: &'a str,
     event: Option<DeleteEvent>,
 }
@@ -114,32 +166,62 @@ impl PurgeEvents {
         }
     }
 
-    /// Hard-delete `id` through [`purge_document`], first capturing its
-    /// delete event. Returns whether a row was deleted.
+    /// Hard-delete a trashed document — the one purge of the trash that the
+    /// retention purge, `trash purge` and `trash empty` all run.
+    ///
+    /// Every caller picks its candidates without a lock, and a restore (or a
+    /// new reference) may commit before the purge reaches the row. So the row
+    /// is locked (`FOR UPDATE` on Postgres; `SQLite`'s IMMEDIATE transaction
+    /// already serializes writers) and re-checked — still trashed, for at
+    /// least `doc`'s age, and unreferenced — before anything is read or
+    /// written. Then every read of the row (the storage keys its upload owns,
+    /// its row's and its version snapshots'; its delete event) finishes
+    /// before the hard delete, and the keys go to the caller for deletion
+    /// once the purge commits: a crash in between leaves orphaned files, never
+    /// rows pointing at deleted ones.
     ///
     /// # Errors
     ///
-    /// Returns a backend error if the event read or the purge fails.
-    pub(crate) fn purge(
+    /// Returns a backend error if a read or the purge fails.
+    pub(crate) fn purge_trashed(
         &mut self,
         conn: &dyn DbConnection,
         def: &CollectionDefinition,
-        id: &str,
+        doc: TrashedDoc<'_>,
         locale_config: &LocaleConfig,
-    ) -> Result<bool> {
-        let captured = self.capture(conn, def, id, locale_config)?;
+    ) -> Result<TrashedPurge> {
+        let Some(ref_count) = query::ref_count::get_purgeable_ref_count_locked(
+            conn,
+            &def.slug,
+            doc.id,
+            doc.older_than,
+        )?
+        else {
+            return Ok(TrashedPurge::NotTrashed);
+        };
 
-        self.complete(conn, def, captured, locale_config)
+        if ref_count > 0 {
+            return Ok(TrashedPurge::Referenced(ref_count));
+        }
+
+        let locale_ctx = LocaleContext::default_for(locale_config);
+        let keys = owned_file_keys(conn, def, doc.id, locale_ctx.as_ref())?;
+        let captured = self.capture(conn, def, doc.id, locale_config)?;
+
+        if !self.complete(conn, def, captured, locale_config)? {
+            return Ok(TrashedPurge::NotTrashed);
+        }
+
+        Ok(TrashedPurge::Purged(keys))
     }
 
-    /// Read `id`'s delete event ahead of its purge — the read half of
-    /// [`purge`](Self::purge), for a caller that must finish every read of a
-    /// row before it writes anything. Reads nothing when not capturing.
+    /// Read `id`'s delete event ahead of its purge. Reads nothing when not
+    /// capturing.
     ///
     /// # Errors
     ///
     /// Returns a backend error if the event read fails.
-    pub(crate) fn capture<'a>(
+    fn capture<'a>(
         &self,
         conn: &dyn DbConnection,
         def: &CollectionDefinition,
@@ -163,7 +245,7 @@ impl PurgeEvents {
     /// # Errors
     ///
     /// Returns a backend error if the purge fails.
-    pub(crate) fn complete(
+    fn complete(
         &mut self,
         conn: &dyn DbConnection,
         def: &CollectionDefinition,

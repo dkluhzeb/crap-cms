@@ -8,9 +8,7 @@ use crate::db::LocaleMode;
 
 use crate::{
     db::{AccessResult, DbConnection, LocaleContext, query},
-    hooks::{
-        AccessCheckInput, HookContext, ValidationCtx, lifecycle::access::has_any_field_access,
-    },
+    hooks::{AccessCheckInput, ValidationCtx, lifecycle::access::has_any_field_access},
     service::{
         AfterChangeInput, Gated, PersistOptions, ServiceContext, WriteInput, WriteResult,
         persist_draft_version, persist_update, run_after_change_hooks,
@@ -43,7 +41,6 @@ pub(crate) fn check_update_access(
     id: &str,
     data: &DocumentFields,
     locale: Option<&str>,
-    ui_locale: Option<&str>,
 ) -> Result<()> {
     let access = write_hooks.check_access(
         &AccessCheckInput::builder("update", ctx.slug)
@@ -52,7 +49,7 @@ pub(crate) fn check_update_access(
             .id(Some(id))
             .data(Some(data))
             .locale(locale)
-            .ui_locale(ui_locale)
+            .ui_locale(ctx.ui_locale.as_deref())
             .build(),
     )?;
 
@@ -209,17 +206,16 @@ pub(crate) fn update_document_gated(
     check_update_password(ctx, def, input.password)?;
 
     let is_draft = input.draft && def.has_drafts();
-    let ui_locale = input.ui_locale.as_deref();
+    let ui_locale = ctx.ui_locale.as_deref();
 
     let hook_data = input.data.clone();
 
-    let hook_ctx = HookContext::builder(ctx.slug, "update")
+    let hook_ctx = ctx
+        .hook_context("update")
         .data(hook_data)
         .document_id(id)
         .locale(input.locale_ctx.map(LocaleContext::access_locale))
         .draft(is_draft)
-        .user(ctx.user)
-        .ui_locale(ui_locale)
         .build();
 
     // A publish writes the draft's other locales back over the row after this
@@ -232,8 +228,9 @@ pub(crate) fn update_document_gated(
         .soft_delete(def.soft_delete)
         .collection_required_locales(def.required_locales.as_ref())
         .user(ctx.user)
-        .ui_locale(input.ui_locale.as_deref())
+        .ui_locale(ui_locale)
         .locale_overlay(publishing_draft.as_ref().and_then(Value::as_object))
+        .versioned_drafts(def.has_drafts())
         .build();
 
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
@@ -249,6 +246,11 @@ pub(crate) fn update_document_gated(
     // file. Read last, so a before-hook that rewrote the row through its own
     // CRUD is accounted for.
     let before_files = document_file_keys(ctx, def, id, input.locale_ctx)?;
+
+    // The status the row has going in, read as late as the files are: a
+    // publish of a draft moves it out of the draft view, which the live event
+    // announces.
+    let status_before = ctx.status_before_write(id, snapshot_only)?;
 
     // A draft save reports its snapshot, read for the write's locale with its own
     // rows. A published write reports the stored row, its join fields (arrays,
@@ -320,8 +322,10 @@ pub(crate) fn update_document_gated(
     // rollback.
 
     // The row as stored, before anything is shaped or stripped for the writer:
-    // the live event is built from it.
-    let row = ctx.write_event_row(&doc, input.locale_ctx, snapshot_only)?;
+    // the live event is built from it, with the status view it moved from.
+    let row = ctx
+        .write_event_row(&doc, input.locale_ctx, snapshot_only)?
+        .map(|row| row.status_moved_from(status_before));
 
     // Strip read-denied fields from the returned document, after the hooks have
     // seen the full doc.
@@ -340,7 +344,7 @@ mod write_lock_tests {
     use crate::{
         core::{FieldType, Hooks, upload::CollectionUpload},
         db::query::test_helpers::CountingConn,
-        hooks::HookEvent,
+        hooks::{HookContext, HookEvent},
         service::FieldReadStrip,
     };
 

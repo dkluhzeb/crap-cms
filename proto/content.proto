@@ -822,7 +822,7 @@ message UpdateRequest {
   optional bool draft = 5;
 
   // When true, transitions a published document back to draft status without
-  // modifying field data. Ignored if the collection does not have versions enabled.
+  // modifying field data. Rejected unless the collection has versions with drafts enabled.
   optional bool unpublish = 6;
 
   // Emit a live-update event for the updated document. Default: true.
@@ -893,8 +893,8 @@ message GetGlobalRequest {
   optional string locale = 2;
 
   // When true, reads unpublished (draft) content for a global that has drafts
-  // enabled and has been unpublished. Default false serves the last published
-  // snapshot. Subject to the global's read access.
+  // enabled and has been unpublished. Default false reads an unpublished global as
+  // empty (no field content). Subject to the global's read access.
   optional bool draft = 3;
 }
 

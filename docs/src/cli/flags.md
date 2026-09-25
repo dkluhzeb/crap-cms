@@ -709,7 +709,15 @@ crap-cms blueprint save <NAME> [-f]
 |------|-------|-------------|
 | `--force` | `-f` | Overwrite an existing blueprint of that name |
 
-Saves the current config directory as a reusable blueprint (excluding `data/`, `uploads/`, `types/`). A `.crap-blueprint.toml` manifest is written with the CMS version and timestamp.
+Saves the current config directory as a reusable blueprint. A `.crap-blueprint.toml` manifest is written with the CMS version and timestamp. `crap.toml` must load (it is read to find the configured database and log paths).
+
+A blueprint is meant to be shared, so the project's state and secrets stay out of it:
+
+- `data/`, `uploads/`, `types/` (regenerated on `use`) and `backups/` at the top level;
+- the configured database file and its `-wal` / `-shm` / `-journal` sidecars, and the configured log directory, wherever `crap.toml` puts them;
+- anywhere in the tree: any SQLite database file and its sidecars, any backup directory (`manifest.json` beside `crap.db`, e.g. a `backup -o` inside the project), generated auth-secret files (`.jwt_secret*`) and in-flight upload staging files (`*.crap-tmp`).
+
+`crap.toml` itself is copied verbatim — keep credentials in it as `${ENV_VAR}` references if the blueprint will be shared. Symlinks are neither followed nor copied (each skipped one is reported). The copy is built under a hidden name and swapped into place only when complete, so a failed save — including `--force` over an existing blueprint — leaves the previous blueprint intact.
 
 #### `blueprint use`
 
@@ -896,6 +904,17 @@ crap-cms migrate down -s 2
 crap-cms migrate fresh -y
 ```
 
+Each migration runs in its own transaction together with its record in
+`_crap_migrations`. Two runs racing each other cannot apply or roll back the
+same migration twice: the second `up` fails on the already-recorded file, and
+the second `down` finds the record already gone and is rolled back.
+
+`fresh` drops every table and recreates the schema in **one transaction**
+under the schema-sync lock, so a failure leaves the database as it was. It
+holds the exclusive instance lock of the local project only: on a PostgreSQL
+database shared by several nodes, stop every node's `serve` / `work` first —
+their running servers see an empty database the moment `fresh` commits.
+
 `fresh` refuses while a `serve`, `work` or stdio `mcp` process uses the project, and keeps them from starting until it finishes.
 
 Each migration runs in its own transaction, together with the bookkeeping row that marks it applied (or removes it on `down`). Its Lua CRUD writes behave like writes made on the server: after the commit the configured cache is cleared, live events reach `serve`'s subscribers (over Redis when `[live]` uses it), and the files of upload documents the migration hard-deleted are removed. A migration that fails rolls back with every file still in storage. The command therefore builds the same infrastructure as `user delete`, and a configured Redis that can't be reached fails it before any migration runs — for `fresh`, before any table is dropped.
@@ -919,7 +938,9 @@ crap-cms backup -o /tmp/backups -i
 
 `backup` copies the SQLite database file; back up a Postgres database with `pg_dump`. `--include-uploads` archives the local `uploads/` directory; uploads kept in S3 or custom storage need that service's own backup.
 
-When the auth secret is generated (`[auth] secret` is empty), the backup also contains it as `jwt_secret`, readable by the owner only — sessions, TOTP enrollments and `crap.crypto` ciphertext in the database depend on it. Keep backups as private as the secret.
+`backup` runs beside a live `serve`. With `--include-uploads`, the uploads tree is captured into a private staging directory under `data/` as hard links (copies where the filesystem refuses links) once before the database snapshot and once after it, and the archive is built from that capture, never from the live tree. Every file present when the snapshot was taken is therefore in the archive even if it is deleted or replaced meanwhile, files uploaded during the snapshot are added, and in-flight `*.crap-tmp` staging files are left out — a busy site no longer makes `tar` fail with "file changed as we read it". The only file that can be missing is one uploaded and removed again within the seconds the database snapshot takes. Hard links cost no space; where they are refused (for example when `uploads/` is a mount on another filesystem than `data/`) the capture copies every file, so the backup then needs free space for a second copy of the uploads while it runs. A backup that is killed before it finishes leaves its capture behind; the next `backup --include-uploads` removes it.
+
+Everything the backup writes is owner-only — the backup directory `0700`, `crap.db`, `uploads.tar.gz` and `manifest.json` `0600` — whatever the umask or the permissions of the `--output` directory (on Unix; on Windows the files inherit the directory's ACL, so choose a private `--output`): the snapshot holds password and API-key hashes and sealed TOTP secrets. When the auth secret is generated (`[auth] secret` is empty), the backup also contains it as `jwt_secret` (also `0600`) — sessions, TOTP enrollments and `crap.crypto` ciphertext in the database depend on it. Keep backups as private as the secret.
 
 ### `restore` — Restore from backup
 
@@ -933,7 +954,9 @@ crap-cms restore <BACKUP> [-i] [-y] [--skip-config-validation]
 | `--confirm` | `-y` | Required — confirms the destructive operation |
 | `--skip-config-validation` | | Run even if `crap.toml` fails validation (see [`db console`](#db-console)) |
 
-Replaces the current database with a backup snapshot. Cleans up stale WAL/SHM files. Refuses while a `serve`, `work` or stdio `mcp` process or any other CLI command uses the project (they hold `data/crap.lock`), and keeps them from starting until the restore finishes. A backed-up auth secret is written back to `data/.jwt_secret`; a different secret already there is kept as `data/.jwt_secret.pre-restore-<timestamp>`, so repeated restores never overwrite an earlier one — unless the restore's own config load generated it, when it holds nothing worth keeping. When `crap.toml` sets `[auth] secret`, that secret takes precedence and the restore warns that the backup's secret isn't used.
+Replaces the current database with a backup snapshot. Cleans up stale WAL/SHM files. Refuses while a `serve`, `work` or stdio `mcp` process or any other CLI command uses the project (they hold `data/crap.lock`), and keeps them from starting until the restore finishes. A backed-up auth secret is written back to `data/.jwt_secret`; a different secret already there is kept as `data/.jwt_secret.pre-restore-<timestamp>`, so repeated restores never overwrite an earlier one — unless the restore's own config load generated it, when it holds nothing worth keeping. When `crap.toml` sets `[auth] secret`, that secret takes precedence and the restore warns that the backup's secret isn't used. The restored database gets the permissions of the database it replaces, not the backup's owner-only mode.
+
+A backup taken with an older crap-cms is restored and schema-migrated on the next start. A backup taken with a **newer** crap-cms is refused before anything is touched: restoring it would be a downgrade — the database carries schema and one-time migration state the older binary does not know. Restore it with that version or later (`crap-cms update use <version>`).
 
 ```bash
 crap-cms restore ./backups/backup-2026-03-07T10-00-00 -y
@@ -1265,6 +1288,8 @@ Permanently delete every trashed document in the given collection.
 
 `trash purge` and `trash empty` publish a delete event for each purged document once the purge has committed, gated by the `trash` view, like every other permanent delete (see [Live Updates](../live-updates/overview.md#access-control)). With `[live] transport = "redis"` the events reach `serve`'s subscribers; a configured Redis that can't be reached fails the command before anything is deleted. A preview (`--dry-run`, or no `--confirm`) publishes nothing.
 
+Both run the same purge as the scheduled retention purge, and they are safe to run beside `serve`: each document is locked and re-checked inside the purge's transaction, so one restored (or trashed again more recently than `--older-than`) after the candidates were listed is left alone, as is one other documents still reference. Skipped documents are reported by reason.
+
 ```bash
 crap-cms trash list
 crap-cms trash list -c posts
@@ -1355,6 +1380,12 @@ crap-cms update install <VERSION> [--reinstall]
 ```
 
 Download, verify (SHA256), and stage a version in the local store (`~/.local/share/crap-cms/versions/`). Does not activate — use `update use` to switch. Staging touches only the store, never the running binary or the one on `$PATH`, so it works — without `--force` — even when the running binary is distro-managed.
+
+`<VERSION>` must be a release tag (`v0.1.0-alpha.5` or `0.1.0-alpha.5`); anything that is not a semver version is refused by `install`, `use` and `uninstall` alike. Every published release is searched, not only the most recent page.
+
+The download is written to a hidden partial file inside the version's store directory, fsynced, checked against the release's `SHA256SUMS`, and only then renamed over `versions/<VERSION>/crap-cms`. An interrupted or corrupt download leaves nothing behind that counts as installed, and `--reinstall` of the active version swaps the binary atomically (a running server keeps the file it started from). A stalled connection fails after two minutes without data; a slow but progressing download is never cut off.
+
+`SHA256SUMS` is published in the same GitHub release as the binary, so the check proves the download is complete and uncorrupted — it is an integrity check, not a signature. Releases are not signed; if you need provenance, verify the tag and the release workflow on GitHub yourself.
 
 #### `update use`
 

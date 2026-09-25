@@ -1,15 +1,9 @@
-//! Per-document FTS upsert (delete + insert) with optional richtext extraction.
-
-use std::collections::{HashMap, HashSet};
+//! Per-document FTS upsert (delete + insert), reading rich text columns as text.
 
 use anyhow::{Context as _, Result};
 
-use crate::config::LocaleConfig;
-use crate::core::{CollectionDefinition, Registry};
-use crate::db::query::fts::extract::extract_prosemirror_text_with_nodes;
-use crate::db::query::fts::fields::{
-    build_node_searchable_map, get_fts_columns, is_json_richtext_column, json_richtext_columns,
-};
+use crate::db::query::fts::fields::get_fts_columns;
+use crate::db::query::fts::index::{ColumnText, FtsIndex};
 use crate::db::query::fts::search::{fts_table_name, table_exists};
 use crate::db::query::fts::sync::fts_delete;
 use crate::db::query::helpers::{placeholder_list, quote_ident};
@@ -17,7 +11,7 @@ use crate::db::{DbConnection, DbRow, DbValue};
 
 use super::helpers::pg_tsvector;
 
-/// Insert or update a document in the FTS index.
+/// Insert or update document `id` in `index`.
 ///
 /// Reads the indexed columns straight from the document's row — the same
 /// column set the startup rebuild indexes (`get_fts_columns`, so both
@@ -32,49 +26,38 @@ use super::helpers::pg_tsvector;
 /// # Errors
 ///
 /// Returns a backend error if the row read, DELETE, or INSERT fails.
-pub fn fts_upsert(
-    conn: &dyn DbConnection,
-    slug: &str,
-    id: &str,
-    def: &CollectionDefinition,
-    locale_config: &LocaleConfig,
-) -> Result<()> {
-    fts_upsert_with_registry(conn, slug, id, def, locale_config, None)
-}
-
-/// Like `fts_upsert`, but accepts an optional registry for resolving custom
-/// richtext node searchable attrs.
-pub(crate) fn fts_upsert_with_registry(
-    conn: &dyn DbConnection,
-    slug: &str,
-    id: &str,
-    def: &CollectionDefinition,
-    locale_config: &LocaleConfig,
-    registry: Option<&Registry>,
-) -> Result<()> {
-    let fts_table = fts_table_name(slug);
+pub fn fts_upsert(conn: &dyn DbConnection, index: &FtsIndex<'_>, id: &str) -> Result<()> {
+    let fts_table = fts_table_name(index.slug);
 
     if !table_exists(conn, &fts_table) {
         return Ok(());
     }
 
-    let fts_cols = get_fts_columns(def, locale_config)?;
+    let fts_cols = get_fts_columns(index.def, index.locale_config)?;
     if fts_cols.is_empty() {
         return Ok(());
     }
 
-    let Some(row) = read_indexed_row(conn, slug, id, &fts_cols)? else {
-        return fts_delete(conn, slug, id);
+    let Some(row) = read_indexed_row(conn, index.slug, id, &fts_cols)? else {
+        return fts_delete(conn, index.slug, id);
     };
 
-    let json_rt_cols = json_richtext_columns(def);
-    let node_searchable = build_node_searchable_map(Some(def), registry);
-    let field_texts = extract_field_texts(&row, &fts_cols, &json_rt_cols, &node_searchable);
+    let column_text = ColumnText::new(index);
+    let columns: Vec<(&str, String)> = fts_cols
+        .iter()
+        .enumerate()
+        .map(|(i, col)| {
+            (
+                col.as_str(),
+                column_text.text(col, row.text_at(i).unwrap_or("")),
+            )
+        })
+        .collect();
 
     if conn.is_postgres() {
-        upsert_postgres(conn, &fts_table, id, &field_texts)
+        upsert_postgres(conn, &fts_table, id, &columns)
     } else {
-        upsert_sqlite(conn, &fts_table, id, &fts_cols, field_texts)
+        upsert_sqlite(conn, &fts_table, id, columns)
     }
 }
 
@@ -99,39 +82,18 @@ fn read_indexed_row(
         .with_context(|| format!("FTS row read from {slug}"))
 }
 
-/// Extract the text of each indexed column, expanding JSON richtext to
-/// plain text.
-fn extract_field_texts(
-    row: &DbRow,
-    fts_cols: &[String],
-    json_rt_cols: &HashSet<String>,
-    node_searchable: &HashMap<&str, Vec<&str>>,
-) -> Vec<String> {
-    fts_cols
-        .iter()
-        .enumerate()
-        .map(|(i, col_name)| {
-            let raw = row.text_at(i).unwrap_or("");
-
-            let is_json_rt = is_json_richtext_column(col_name, json_rt_cols);
-
-            if is_json_rt && !raw.is_empty() {
-                extract_prosemirror_text_with_nodes(raw, node_searchable)
-            } else {
-                raw.to_string()
-            }
-        })
-        .collect()
-}
-
 /// Upsert into Postgres FTS (single tsvector column, ON CONFLICT).
 fn upsert_postgres(
     conn: &dyn DbConnection,
     fts_table: &str,
     id: &str,
-    field_texts: &[String],
+    columns: &[(&str, String)],
 ) -> Result<()> {
-    let combined = field_texts.join(" ");
+    let combined = columns
+        .iter()
+        .map(|(_, text)| text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     let sql = format!(
         "INSERT INTO {fts_table}(id, tsv) VALUES ({p1}, {}) \
@@ -149,12 +111,12 @@ fn upsert_postgres(
 }
 
 /// Upsert into `SQLite` FTS5 (delete + insert, no ON CONFLICT support).
+/// `columns` pairs each indexed column with its text.
 fn upsert_sqlite(
     conn: &dyn DbConnection,
     fts_table: &str,
     id: &str,
-    fts_cols: &[String],
-    field_texts: Vec<String>,
+    columns: Vec<(&str, String)>,
 ) -> Result<()> {
     conn.execute(
         &format!(
@@ -166,18 +128,16 @@ fn upsert_sqlite(
     )
     .with_context(|| format!("FTS delete before upsert in {fts_table}"))?;
 
-    let mut values: Vec<DbValue> = vec![DbValue::Text(id.to_string())];
-
-    for text in field_texts {
-        values.push(DbValue::Text(text));
-    }
-
-    let placeholders = placeholder_list(conn, values.len());
-    let quoted_cols = fts_cols
+    let quoted_cols = columns
         .iter()
-        .map(|c| quote_ident(c))
+        .map(|(col, _)| quote_ident(col))
         .collect::<Vec<_>>()
         .join(", ");
+
+    let mut values: Vec<DbValue> = vec![DbValue::Text(id.to_string())];
+    values.extend(columns.into_iter().map(|(_, text)| DbValue::Text(text)));
+
+    let placeholders = placeholder_list(conn, values.len());
     let sql = format!("INSERT INTO {fts_table}(id, {quoted_cols}) VALUES ({placeholders})");
 
     conn.execute(&sql, &values)
@@ -205,10 +165,19 @@ mod tests {
     fn upsert_and_search() {
         let (_dir, conn) = setup_db();
         let def = simple_def(vec![text_field("title"), text_field("body")]);
-        sync_fts_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale()).build(),
+        )
+        .unwrap();
 
         insert_post(&conn, "new1", "Unique Title", "Some content");
-        fts_upsert(&conn, "posts", "new1", &def, &no_locale()).unwrap();
+        fts_upsert(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale()).build(),
+            "new1",
+        )
+        .unwrap();
 
         let results = fts_match_ids(&conn, "posts", "Unique", 10).unwrap();
         assert_eq!(results, vec!["new1"]);
@@ -221,14 +190,23 @@ mod tests {
         let (_dir, conn) = setup_db();
         insert_post(&conn, "1", "Old Title", "");
         let def = simple_def(vec![text_field("title"), text_field("body")]);
-        sync_fts_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale()).build(),
+        )
+        .unwrap();
 
         conn.execute(
             "UPDATE posts SET title = ?1 WHERE id = ?2",
             &[DbValue::Text("New Title".into()), DbValue::Text("1".into())],
         )
         .unwrap();
-        fts_upsert(&conn, "posts", "1", &def, &no_locale()).unwrap();
+        fts_upsert(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale()).build(),
+            "1",
+        )
+        .unwrap();
 
         let old_results = fts_match_ids(&conn, "posts", "Old", 10).unwrap();
         assert!(old_results.is_empty());
@@ -241,7 +219,12 @@ mod tests {
     fn upsert_noop_no_fts_table() {
         let (_dir, conn) = setup_db();
         let def = simple_def(vec![text_field("title")]);
-        fts_upsert(&conn, "posts", "1", &def, &no_locale()).unwrap();
+        fts_upsert(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale()).build(),
+            "1",
+        )
+        .unwrap();
     }
 
     /// A vanished row drops its index entry instead of indexing empty text.
@@ -250,7 +233,11 @@ mod tests {
         let (_dir, conn) = setup_db();
         insert_post(&conn, "gone", "Ephemeral", "");
         let def = simple_def(vec![text_field("title"), text_field("body")]);
-        sync_fts_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale()).build(),
+        )
+        .unwrap();
         assert_eq!(
             fts_match_ids(&conn, "posts", "Ephemeral", 10).unwrap(),
             vec!["gone"]
@@ -258,7 +245,12 @@ mod tests {
 
         conn.execute("DELETE FROM posts WHERE id = 'gone'", &[])
             .unwrap();
-        fts_upsert(&conn, "posts", "gone", &def, &no_locale()).unwrap();
+        fts_upsert(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale()).build(),
+            "gone",
+        )
+        .unwrap();
 
         assert!(
             fts_match_ids(&conn, "posts", "Ephemeral", 10)
@@ -288,14 +280,19 @@ mod tests {
 
         let def = simple_def(vec![localized_text_field("title")]);
         let locale = locale_config_en_de();
-        sync_fts_table(&conn, "posts", &def, &locale).unwrap();
+        sync_fts_table(&conn, &FtsIndex::builder("posts", &def, &locale).build()).unwrap();
 
         conn.execute(
             "INSERT INTO posts (id, title__en, title__de) VALUES ('doc1', 'English Title', 'Deutscher Titel')",
             &[],
         )
         .unwrap();
-        fts_upsert(&conn, "posts", "doc1", &def, &locale).unwrap();
+        fts_upsert(
+            &conn,
+            &FtsIndex::builder("posts", &def, &locale).build(),
+            "doc1",
+        )
+        .unwrap();
 
         let en_results = fts_match_ids(&conn, "posts", "English", 10).unwrap();
         assert_eq!(en_results, vec!["doc1"]);
@@ -317,7 +314,11 @@ mod tests {
                 .build(),
         ]);
         def.admin.list_searchable_fields = vec!["title".into(), "content".into()];
-        sync_fts_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale()).build(),
+        )
+        .unwrap();
 
         let pm_json = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Searchable text inside JSON"}]}]}"#;
         conn.execute(
@@ -330,13 +331,74 @@ mod tests {
         )
         .unwrap();
 
-        fts_upsert(&conn, "posts", "1", &def, &no_locale()).unwrap();
+        fts_upsert(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale()).build(),
+            "1",
+        )
+        .unwrap();
 
         let results = fts_match_ids(&conn, "posts", "Searchable", 10).unwrap();
         assert_eq!(results, vec!["1"]);
 
         let results = fts_match_ids(&conn, "posts", "paragraph", 10).unwrap();
         assert!(results.is_empty());
+    }
+
+    /// Regression: an HTML rich text column was indexed as-is, so markup
+    /// (tag names, class names, link targets) matched searches.
+    #[test]
+    fn fts_upsert_html_richtext_indexes_text_only() {
+        let (_dir, conn) = setup_db();
+        conn.execute_batch("ALTER TABLE posts ADD COLUMN content TEXT")
+            .unwrap();
+
+        let mut def = simple_def(vec![
+            text_field("title"),
+            FieldDefinition::builder("content", FieldType::Richtext).build(),
+        ]);
+        def.admin.list_searchable_fields = vec!["title".into(), "content".into()];
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale()).build(),
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO posts (id, title, content, created_at, updated_at) VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))",
+            &[
+                DbValue::Text("h1".into()),
+                DbValue::Text("Test".into()),
+                DbValue::Text(r#"<p class="lead">Visible <a href="/hidden">words</a></p>"#.into()),
+            ],
+        )
+        .unwrap();
+
+        fts_upsert(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale()).build(),
+            "h1",
+        )
+        .unwrap();
+
+        assert_eq!(
+            fts_match_ids(&conn, "posts", "Visible", 10).unwrap(),
+            vec!["h1"]
+        );
+        assert_eq!(
+            fts_match_ids(&conn, "posts", "words", 10).unwrap(),
+            vec!["h1"]
+        );
+        assert!(
+            fts_match_ids(&conn, "posts", "lead", 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            fts_match_ids(&conn, "posts", "hidden", 10)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -368,7 +430,11 @@ mod tests {
             has_render: false,
         });
 
-        sync_fts_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale()).build(),
+        )
+        .unwrap();
 
         let pm_json = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Hello"}]},{"type":"cta","attrs":{"button_text":"Click Here","url":"/go"}}]}"#;
         conn.execute(
@@ -381,8 +447,14 @@ mod tests {
         )
         .unwrap();
 
-        fts_upsert_with_registry(&conn, "posts", "rg1", &def, &no_locale(), Some(&registry))
-            .unwrap();
+        fts_upsert(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale())
+                .registry(Some(&registry))
+                .build(),
+            "rg1",
+        )
+        .unwrap();
 
         let results = fts_match_ids(&conn, "posts", "Hello", 10).unwrap();
         assert_eq!(results, vec!["rg1"]);
@@ -399,8 +471,13 @@ mod tests {
         let (_dir, conn) = setup_db();
         let def = simple_def(vec![text_field("title")]);
         let registry = Registry::new();
-        let result =
-            fts_upsert_with_registry(&conn, "posts", "1", &def, &no_locale(), Some(&registry));
+        let result = fts_upsert(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale())
+                .registry(Some(&registry))
+                .build(),
+            "1",
+        );
         assert!(result.is_ok(), "should be a no-op when no FTS table exists");
     }
 
@@ -408,10 +485,19 @@ mod tests {
     fn fts_upsert_with_registry_nil_inputs_use_plain_extraction() {
         let (_dir, conn) = setup_db();
         let def = simple_def(vec![text_field("title")]);
-        sync_fts_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale()).build(),
+        )
+        .unwrap();
 
         insert_post(&conn, "plain1", "Plain text", "");
-        fts_upsert_with_registry(&conn, "posts", "plain1", &def, &no_locale(), None).unwrap();
+        fts_upsert(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale()).build(),
+            "plain1",
+        )
+        .unwrap();
 
         let results = fts_match_ids(&conn, "posts", "Plain", 10).unwrap();
         assert_eq!(results, vec!["plain1"]);
@@ -422,14 +508,23 @@ mod tests {
     fn fts_upsert_null_column_indexes_as_empty() {
         let (_dir, conn) = setup_db();
         let def = simple_def(vec![text_field("title"), text_field("body")]);
-        sync_fts_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale()).build(),
+        )
+        .unwrap();
 
         conn.execute(
             "INSERT INTO posts (id, title, body, created_at, updated_at) VALUES ('n1', 'Only', NULL, '', '')",
             &[],
         )
         .unwrap();
-        fts_upsert(&conn, "posts", "n1", &def, &no_locale()).unwrap();
+        fts_upsert(
+            &conn,
+            &FtsIndex::builder("posts", &def, &no_locale()).build(),
+            "n1",
+        )
+        .unwrap();
 
         assert_eq!(
             fts_match_ids(&conn, "posts", "Only", 10).unwrap(),

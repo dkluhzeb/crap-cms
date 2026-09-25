@@ -1,193 +1,29 @@
-//! `HookRunner` methods for auth strategies and access control.
+//! `HookRunner` methods for access control.
 
-use anyhow::{Context as _, Result};
-use mlua::Value;
+use anyhow::Result;
 use serde_json::Map;
 use tracing::error;
 
 use super::vm_pool::reset_instruction_budget;
 use crate::{
-    core::{
-        Document, DocumentFields, FieldDefinition, FieldDenial, HookRef, document::DocumentBuilder,
-    },
+    core::{Document, DocumentFields, FieldDefinition, FieldDenial, HookRef},
     db::{AccessResult, DbConnection},
     hooks::{
         HookRunner,
         lifecycle::{
-            AccessCheckInput, AuthStrategyContext, AuthStrategyInput, MfaDeliverContext,
-            MfaDeliverInput, MfaWhenContext, MfaWhenInput,
+            AccessCheckInput,
             access::{
                 ReadStripInput, WriteStripInput, check_collection_access, collect_denials_flat,
                 collect_read_denied_with_lua, has_any_field_access, strip_access_data_aware,
                 strip_read_access_data_aware, strip_read_access_with_lua,
                 strip_write_access_with_lua,
             },
-            converters::lua_table_to_json_map,
-            execution::resolve_hook_function,
             types::TxContextGuard,
         },
-        lua_api::to_lua_value,
     },
 };
 
-/// Convert a Lua table returned by an auth strategy into a Document.
-fn lua_table_to_auth_user(tbl: &mlua::Table) -> Result<Document> {
-    let id: String = tbl.get("id")?;
-
-    // Reuse the shared table→map converter (the inverse of
-    // `document_to_lua_table`), then drop the reserved keys carried separately.
-    let mut fields = lua_table_to_json_map(tbl)?;
-    fields.remove("id");
-    fields.remove("created_at");
-    fields.remove("updated_at");
-
-    let created_at: Option<String> = tbl.get("created_at").ok();
-    let updated_at: Option<String> = tbl.get("updated_at").ok();
-
-    Ok(DocumentBuilder::new(id)
-        .fields(fields)
-        .created_at(created_at)
-        .updated_at(updated_at)
-        .build())
-}
-
 impl HookRunner {
-    /// Run a custom auth strategy function. Takes a strategy function ref and
-    /// a headers map, returns Some(Document) if the strategy authenticates a user.
-    /// The strategy function gets CRUD access via the provided connection.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if VM acquisition, function resolution, or the
-    /// strategy call itself fails.
-    pub fn run_auth_strategy(
-        &self,
-        authenticate: &HookRef,
-        input: &AuthStrategyInput,
-        conn: &dyn DbConnection,
-    ) -> Result<Option<Document>> {
-        let lua = self.pool.acquire()?;
-
-        // Inject connection for CRUD access — guard ensures cleanup on all exit paths
-        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
-
-        let func = resolve_hook_function(&lua, authenticate.reference())?;
-
-        // Build context table from a typed Rust struct so the Lua-side
-        // shape is the single source of truth (see
-        // `hooks::lifecycle::AuthStrategyContext`).
-        let ctx = AuthStrategyContext {
-            headers: input.headers,
-            collection: input.collection,
-            email: input.email,
-            password: input.password,
-            remote_addr: input.remote_addr,
-            options: authenticate.options(),
-        };
-        let ctx_value = to_lua_value(&lua, &ctx)?;
-
-        // The strategy runs inside a transaction that COMMITS only when it
-        // authenticates someone. A failed or erroring attempt rolls back —
-        // strategy attempts are attacker-controlled (unauthenticated input),
-        // so persistent writes keyed to failures would let anyone grow the
-        // database from the login endpoint. Counters belong in the rate
-        // limiters, observability in `crap.log` (neither lives in this tx).
-        conn.execute("BEGIN", &[])
-            .context("failed to open the auth-strategy transaction")?;
-
-        let outcome = (|| -> Result<Option<Document>> {
-            let result: Value = func.call(ctx_value)?;
-
-            match result {
-                Value::Table(tbl) => Ok(Some(lua_table_to_auth_user(&tbl)?)),
-                _ => Ok(None),
-            }
-        })();
-
-        match &outcome {
-            Ok(Some(_)) => {
-                conn.execute("COMMIT", &[])
-                    .context("failed to commit the auth-strategy transaction")?;
-            }
-            Ok(None) | Err(_) => {
-                let _ = conn
-                    .execute("ROLLBACK", &[])
-                    .inspect_err(|e| error!("auth-strategy rollback failed: {e:#}"));
-            }
-        }
-
-        outcome
-    }
-
-    /// Run a `password_login` method's `mfa_when` gate: decides whether THIS
-    /// verified login must complete a second factor. Lua truthiness applies —
-    /// `false`/`nil` skips MFA, anything else requires it (so
-    /// `return ctx.user.mfa_enabled` works without a boolean cast). Errors
-    /// propagate; the caller fails CLOSED (requires MFA).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if VM acquisition or the hook call fails.
-    pub fn run_mfa_when(
-        &self,
-        hook: &HookRef,
-        input: &MfaWhenInput,
-        conn: &dyn DbConnection,
-    ) -> Result<bool> {
-        let lua = self.pool.acquire()?;
-
-        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
-
-        let func = resolve_hook_function(&lua, hook.reference())?;
-
-        let ctx = MfaWhenContext {
-            collection: input.collection,
-            user: &input.user.fields,
-            surface: input.surface,
-            headers: input.headers,
-            options: hook.options(),
-        };
-        let ctx_value = to_lua_value(&lua, &ctx)?;
-
-        let result: Value = func.call(ctx_value)?;
-
-        Ok(!matches!(result, Value::Boolean(false) | Value::Nil))
-    }
-
-    /// Run a `password_login` method's `mfa_deliver` hook (`mfa = "custom"`):
-    /// hand the freshly stored code to userland for delivery (SMS, push, …).
-    /// The return value is ignored; errors propagate for the caller to log —
-    /// delivery is best-effort, like the built-in email path.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if VM acquisition or the hook call fails.
-    pub fn run_mfa_deliver(
-        &self,
-        hook: &HookRef,
-        input: &MfaDeliverInput,
-        conn: &dyn DbConnection,
-    ) -> Result<()> {
-        let lua = self.pool.acquire()?;
-
-        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
-
-        let func = resolve_hook_function(&lua, hook.reference())?;
-
-        let ctx = MfaDeliverContext {
-            collection: input.collection,
-            user: &input.user.fields,
-            code: input.code,
-            expires_in: input.expires_in,
-            options: hook.options(),
-        };
-        let ctx_value = to_lua_value(&lua, &ctx)?;
-
-        let _: Value = func.call(ctx_value)?;
-
-        Ok(())
-    }
-
     /// Run a collection-level or global-level access check.
     ///
     /// `access_ref` is the Lua function ref (e.g., "`hooks.access.admin_only`").

@@ -322,6 +322,23 @@ next round is where most of a round's reading goes, so they are recorded
 here per round; a lens prompt carries the instruction to skip them unless the
 files changed since. Entries are dropped when the area is touched.
 
+- **R27 (2026-09-25)**
+  - *Sessions:* token validation purpose checks, per-request lock and
+    session-version checks, TOTP replay protection, refresh absolute max age,
+    cookie flags, reset/verify mint no session, MCP HTTP key-only.
+  - *Outbound:* `crap.http` DNS pinning + per-hop re-pin, method allowlist,
+    body cap, error redaction; email CRLF checks; `crap.crypto` constant-time,
+    CSPRNG, per-call nonce; signed URLs; S3 `validate_key` on every op.
+  - *Rich text renderer:* escaping, heading clamp, link allowlist, the shared
+    `<crap-node>` tokenizer; node-attr validate fails closed at every depth.
+  - *Globals:* update pipeline parity with collections, published/draft read
+    views, definition strictness, back-references, prune keeps newest
+    published snapshot.
+  - *Ops:* backup/restore staging + locks + tar member restriction, additive
+    schema sync + type-change refusal, ref-count topology gate, `db cleanup`
+    classification, retention purge re-check, image-convert job guards, local
+    atomic puts, EXIF stripping.
+
 - **R26 (2026-09-24)**
   - *Jobs:* system-tx scope/flush, in-tx migration records, retention
     batching/resume/claim, `PurgeEvents` settle, claim, backoff docs,
@@ -1271,6 +1288,76 @@ files changed since. Entries are dropped when the area is touched.
     chokepoint pass needs its own completeness review — the new primitive's
     call sites are exactly where the next copies are written — and a scan
     guard the day the chokepoint lands, not later. UNCOMMITTED.
+- 2026-09-25 (37) — **CONVERGENCE ROUND 27** (budget lifted; live Postgres 16
+  and the example booted on OLD SQLite + Postgres databases to exercise the
+  new one-time migrations; 5 Opus lenses — sessions/MFA end to end, outbound
+  calls + Lua sandbox, globals + the draft/publish state machine, rich text,
+  operator tooling + the image pipeline — 6 fix batches, 5 post-fix reviews,
+  5 follow-up batches, 1 split batch). **~75 confirmed — 7 HIGH (3 security),
+  ~30 MED, ~38 LOW — NOT quiet; no new class.**
+  - **F (HIGH, security) — surface-scoped MFA was bypassable.** A session
+    minted on gRPC without the second factor (`mfa_when` = admin only) was a
+    valid admin bearer/cookie; pending MFA tokens crossed surfaces too. User
+    decision: tokens carry their minting surface + an `mfa` stamp; one
+    `mint_session` chokepoint for every mint site; acceptance re-runs the MFA
+    gate for an unstamped token on the request's surface (fail closed).
+  - **F (HIGH, security) — a draft create reached read-only subscribers** as
+    a published document (the row was read back before the status flip; the
+    returned doc, `after_change` and the event all said "published"), and a
+    publish said "draft". The version step now stamps the doc it is handed.
+    User decision extended: a subscriber who could see a row and no longer
+    can (unpublish, trash, publish out of the draft view, undelete out of
+    trash) gets a removal — `EventViewMeta.prior` placement, coalescing-aware,
+    mixed-version compatible.
+  - **HIGH — schema:** NOT NULL was set at table creation and never relaxed
+    (removing `required`, enabling drafts, removing a required field blocked
+    writes at the DB). User-field columns are never NOT NULL now; a one-time
+    per-table relax (SQLite rebuild / PG `DROP NOT NULL`). **The post-fix
+    review caught the rebuild dropping unmanaged indexes and triggers** (a
+    fix-introduced HIGH) and a later follow-up made it keep dependent views
+    and triggers on other tables; verified on a real pre-round SQLite DB and
+    the PG example (rows, indexes, uniqueness, integrity unchanged).
+  - **HIGH — `cover` resize enlarged before cropping** (1.4 kB 65535×10 JPEG →
+    ~1.8 GB canvas): a dimension-only resize plan crops first. **HIGH —
+    versions+drafts with `timestamps = false` broke every write.**
+  - **F (security, MED):** Lua `io` reached `/proc/self/environ` and
+    `data/.jwt_secret` despite the documented `CRAP_SECRET_*` promise — user
+    decision: `io` jailed to the config dir (minus data/backups/crap.toml/logs/
+    db) + opt-in `[hooks] io_roots`; binary Lua chunks were loadable (text-only
+    now); `require` only from the config dir; `update` tag traversal; backups
+    world-readable; blueprints copied backups + secrets; redirect credential
+    scrub ignored the port; SSRF gaps (NAT64, 6to4, site-local, 0/8).
+  - **Rich text:** JSON values only shape-checked with custom nodes; the
+    editor blanked an unloadable doc (next save overwrote it) — now kept
+    read-only and accepted unchanged at any depth (held-value rule, now also
+    for retired options inside rows and node attrs); `required` satisfied by
+    an empty editor; `searchable_attrs` never indexed (pre-existing); an HTML
+    lexer slip (found by the gate run) dropped text from search/required/
+    length.
+  - **Other:** POST auth callbacks couldn't work (CSRF + unread body); trash
+    didn't end sessions; MFA code check not atomic; auth writes on the read
+    pool; job deadline didn't bound HTTP / custom email providers; remote
+    uploads read whole objects into memory (now streamed; custom Lua backends
+    gained `stat`/`get_range`); CLI trash purge raced restore (shared purge
+    primitive); `has_many` toggles stranded data (carry both ways); the global
+    `[auth] token_expiry` never applied; admin `width`/`labels.plural`/`rows`
+    were inert (now work) and `position` on nested fields is rejected;
+    type-scoped admin keys; a filter-table access result was treated as
+    allowed on five admin pages.
+  - **Process:** a Postgres test used `std::thread` without a runtime
+    (caught only by the live harness). 37 byte-identical duplicate tests
+    dropped (user rule: only if redundant); eight oversized files split.
+    Gates (2026-09-25): clippy clean in both forms; full suite 8,888 green
+    over 129 binaries (default features) + lib 7,127 under `--all-features`;
+    Postgres harness 30/30 on a fresh PG16; the new binary booted on an old
+    SQLite example DB and the old PG example DB (relax migration: rows,
+    indexes, uniqueness and integrity unchanged; only join-table system
+    columns keep NOT NULL); LuaLS clean on golden + example; all five `gen-*`
+    checks, `cargo fmt`, `crap-cms fmt`, biome clean; e2e 349 green over 82
+    binaries (per binary). The first full run caught 6 failures — 2 stale test
+    setups and 4 guard drifts (dispatch inventory, config-doc and upgrade-
+    guide parity) — fixed before the one re-run.
+    Streak: 0 quiet rounds.
 - 2026-09-24 (36) — **CONVERGENCE ROUND 26** (budget lifted; live Postgres 16
   for the harness and the example; 5 Opus lenses — authentication paths,
   jobs/scheduler, read access beyond find, uploads, filter-path grammar —
@@ -1603,7 +1690,7 @@ files changed since. Entries are dropped when the area is touched.
     read-only Group/Array/Blocks rendered fully editable sub-fields — and the
     array/blocks row controls (move, duplicate, remove, drag) were gated by
     *nothing*, so even a locale-locked array could be reordered and emptied.
-    The codebase's own pin at `builder/single.rs` documents that this exact
+    The codebase's own pin at `builder/single/entry.rs` documents that this exact
     shape was fixed for Checkbox/Select and never extended to containers.
     (M2.) Two helpers, not one: only `admin.readonly` cascades
     (`cascaded_readonly`), because cascading the rendered flag would fold in

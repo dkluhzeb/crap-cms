@@ -4,7 +4,7 @@
 //! [`TargetRef`].
 
 use anyhow::{Context as _, Result};
-use serde_json::{Value, json, to_string_pretty};
+use serde_json::{Value, to_string_pretty};
 
 use crate::{
     db::LocaleContext,
@@ -37,28 +37,65 @@ pub(in crate::mcp::tools) fn exec_read_global(
         op_args,
     );
 
-    match result.map_err(op::CoreError::into_service_error) {
-        Ok(d) => Ok(to_string_pretty(&doc_to_json(&d))?),
+    // A global's table and its `default` row exist from startup, so a read
+    // that fails is a real backend error on this surface as on every other —
+    // never an empty global an agent might then "fill in".
+    let doc = result
+        .map_err(op::CoreError::into_service_error)
+        .map_err(ServiceError::into_anyhow_scrubbed)
+        .with_context(|| format!("Failed to read global '{slug}'"))?;
 
-        // The global may never have been initialized (backing table missing or
-        // the `default` row not inserted yet) — surface that as an empty object
-        // rather than an error. Only an internal/backend error can carry that
-        // signal; typed access/validation errors must still propagate. The
-        // string probe is scoped here because "table does not exist" has no
-        // typed variant — it is inherently a backend-specific message.
-        Err(ServiceError::Internal(e)) if is_uninitialized_global(&e) => {
-            Ok(to_string_pretty(&json!({}))?)
-        }
-
-        Err(e) => Err(e.into_anyhow_scrubbed()).context(format!("Failed to read global '{slug}'")),
-    }
+    Ok(to_string_pretty(&doc_to_json(&doc))?)
 }
 
-/// Whether an internal error means the global has not been initialized yet:
-/// its backing table is missing, or the `default` row has never been inserted.
-fn is_uninitialized_global(err: &anyhow::Error) -> bool {
-    err.chain().any(|cause| {
-        let msg = cause.to_string();
-        msg.contains("no such table") || msg.starts_with("Failed to get global")
-    })
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::exec_read_global;
+    use crate::{
+        config::CrapConfig,
+        core::{Registry, collection::GlobalDefinition},
+        db::{DbConnection, migrate, pool},
+        hooks::lifecycle::HookRunner,
+        mcp::tools::test_helpers::make_exec_ctx,
+    };
+
+    /// Regression: a read whose backend error mentioned a missing table came
+    /// back as an empty global `{}` on MCP only — a broken schema looked like
+    /// an unfilled global an agent might then "fill in". It is an error, as on
+    /// every other surface.
+    #[test]
+    fn a_missing_table_is_an_error_not_an_empty_global() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = CrapConfig::test_default();
+        config.database.path = "test.db".to_string();
+
+        let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+        let shared = Registry::shared();
+        shared
+            .write()
+            .unwrap()
+            .register_global(GlobalDefinition::new("settings"));
+        let registry = Registry::snapshot(&shared);
+        migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+
+        db_pool
+            .get()
+            .unwrap()
+            .execute_batch("DROP TABLE _global_settings")
+            .unwrap();
+
+        let runner = HookRunner::builder()
+            .config_dir(tmp.path())
+            .registry(Arc::clone(&registry))
+            .config(&config)
+            .build()
+            .unwrap();
+        let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config, tmp.path());
+
+        assert!(exec_read_global(&json!({}), "settings", &ctx).is_err());
+    }
 }

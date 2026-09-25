@@ -56,7 +56,6 @@ impl Operation for UpdateGlobal {
             WriteInput::builder(data)
                 .locale_ctx(locale_ctx.as_ref())
                 .draft(draft)
-                .ui_locale(ctx.ui_locale.clone())
                 .build(),
         )
     }

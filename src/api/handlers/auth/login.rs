@@ -8,10 +8,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::Utc;
 use tokio::task;
 use tonic::{Request, Response, Status};
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{
     api::{
@@ -22,15 +21,16 @@ use crate::{
         },
     },
     core::{
-        CollectionDefinition, Document, SharedPasswordProvider, Slug,
-        auth::ClaimsBuilder,
+        CollectionDefinition, Document, SharedPasswordProvider,
         collection::{Auth, MfaMode, Surface},
         normalize_email,
-        rate_limit::MFA_ISSUE_KEYSPACE,
     },
     service::{
         AppInfra,
-        auth::{self, LoginFlowRequest, LoginOutcome, LoginVerified, verify_login},
+        auth::{
+            self, ChallengeRefusal, ChallengeRequest, LoginFlowRequest, LoginOutcome,
+            LoginVerified, SessionGrant, mint_session, verify_login,
+        },
     },
 };
 
@@ -204,24 +204,23 @@ impl ContentService {
             .unwrap_or(&req.email)
             .to_string();
 
-        let expiry = def.auth.as_ref().map_or(7200, |a| a.token_expiry);
-        let now = Utc::now().timestamp().max(0).cast_unsigned();
+        // gRPC tokens are never refreshed, so no absolute ceiling applies:
+        // the token's lifetime is the collection's `token_expiry` (or the
+        // global `[auth] token_expiry` when it sets none).
+        let grant = SessionGrant::builder(
+            &user.id,
+            &req.collection,
+            &user_email,
+            verified.session_version,
+            Surface::Grpc,
+        )
+        .mfa(verified.mfa)
+        .build();
 
-        let claims = ClaimsBuilder::new(user.id.clone(), Slug::new(&req.collection))
-            .email(user_email)
-            .exp(now.saturating_add(expiry))
-            .auth_time(now)
-            .session_version(verified.session_version)
-            .build()
-            .inspect_err(|e| error!("Claims build error: {}", e))
-            .map_err(|_| Status::internal("Internal error"))?;
-
-        let token = self
-            .infra
-            .token_provider
-            .create_token(&claims)
-            .inspect_err(|e| error!("Token creation error: {}", e))
-            .map_err(|_| Status::internal("Internal error"))?;
+        let token = mint_session(&self.infra, &grant)
+            .inspect_err(|e| error!("Session mint error: {e}"))
+            .map_err(|_| Status::internal("Internal error"))?
+            .token;
 
         // Clear the per-email limiter (this account just proved its
         // identity). For the SHARED per-IP limiter, only REFUND this one
@@ -241,26 +240,33 @@ impl ContentService {
         }))
     }
 
-    /// Record one MFA code issuance for `user` and report whether it is over
-    /// budget. Over budget, the caller refuses the login: codes are single-use
-    /// and expire with the pending token, so there is no earlier code a
-    /// challenge could fall back on.
-    fn mfa_issue_blocked(&self, user: &Document) -> bool {
-        let blocked = self
-            .forgot_password_limiter
-            .rescoped(MFA_ISSUE_KEYSPACE)
-            .check_and_block(user.id.as_ref());
+    /// Resolve the TOTP enrollment state for an issued TOTP challenge, so an
+    /// unconfirmed user receives the provisioning URI in-band.
+    async fn totp_provisioning_uri(
+        &self,
+        collection: &str,
+        user: &Document,
+    ) -> Result<Option<String>, Status> {
+        let infra = Arc::clone(&self.infra);
+        let secret = self.auth_secret.clone();
+        let slug = collection.to_string();
+        let user = user.clone();
 
-        if blocked {
-            warn!(user = %user.id, "MFA code issuance throttled");
-        }
+        let provisioning =
+            task::spawn_blocking(move || auth::totp_challenge(&infra, &secret, &slug, &user))
+                .await
+                .inspect_err(|e| error!("TOTP challenge task error: {e}"))
+                .map_err(|_| Status::internal("Internal error"))?
+                .inspect_err(|e| error!("TOTP challenge error: {e:?}"))
+                .map_err(|_| Status::internal("Internal error"))?;
 
-        blocked
+        Ok(provisioning.map(|p| p.uri))
     }
 
-    /// Issue the MFA challenge for a credential-verified but MFA-gated login:
-    /// mint the pending token, store + email a fresh 6-digit code (background,
-    /// best-effort), and encode the challenge response (no session token).
+    /// Issue the MFA challenge for a credential-verified but MFA-gated login
+    /// through the shared service chokepoint, and encode it as the challenge
+    /// response (no session token). The pending token is bound to the gRPC
+    /// surface, so only `VerifyMfa` can complete it.
     async fn issue_mfa_challenge(
         &self,
         collection: &str,
@@ -272,69 +278,30 @@ impl ContentService {
             .fields
             .get("email")
             .and_then(|v| v.as_str())
-            .unwrap_or(fallback_email)
-            .to_string();
+            .unwrap_or(fallback_email);
 
-        let is_totp = self
-            .infra
-            .registry
-            .get_collection(collection)
-            .and_then(|d| d.auth.as_ref())
-            .is_some_and(|a| a.mfa() == MfaMode::Totp);
-
-        if !is_totp && self.mfa_issue_blocked(&verified.user) {
-            return Err(Status::resource_exhausted(
-                "Too many verification codes requested. Please try again later.",
-            ));
-        }
-
-        let mfa_challenge = auth::mint_mfa_pending_token(
-            &self.infra,
+        let request = ChallengeRequest::builder(
             collection,
-            &verified.user,
-            &user_email,
-            verified.session_version,
+            verified,
+            user_email,
+            Surface::Grpc,
+            &self.auth_secret,
+            &self.forgot_password_limiter,
         )
-        .inspect_err(|e| error!("MFA pending token error: {e}"))
-        .map_err(|_| Status::internal("Internal error"))?;
+        .build();
 
-        let totp_provisioning_uri = if is_totp {
-            // TOTP: nothing to deliver — resolve the enrollment state so an
-            // unconfirmed user receives the provisioning URI in-band.
-            let infra = Arc::clone(&self.infra);
-            let secret = self.auth_secret.clone();
-            let slug = collection.to_string();
-            let user_owned = verified.user.clone();
+        let challenge =
+            auth::issue_mfa_challenge(&self.infra, &request).map_err(|refusal| match refusal {
+                ChallengeRefusal::Throttled => Status::resource_exhausted(
+                    "Too many verification codes requested. Please try again later.",
+                ),
+                ChallengeRefusal::Internal => Status::internal("Internal error"),
+            })?;
 
-            task::spawn_blocking(move || auth::totp_challenge(&infra, &secret, &slug, &user_owned))
-                .await
-                .map_err(|e| {
-                    error!("TOTP challenge task error: {e}");
-                    Status::internal("Internal error")
-                })?
-                .map_err(|e| {
-                    error!("TOTP challenge error: {e:?}");
-                    Status::internal("Internal error")
-                })?
-                .map(|p| p.uri)
+        let totp_provisioning_uri = if challenge.mode == MfaMode::Totp {
+            self.totp_provisioning_uri(collection, &verified.user)
+                .await?
         } else {
-            let code = auth::generate_mfa_code();
-            let infra = Arc::clone(&self.infra);
-            let slug = collection.to_string();
-            let user_owned = verified.user.clone();
-            let auth_secret = self.auth_secret.clone();
-
-            task::spawn_blocking(move || {
-                auth::deliver_mfa_code(
-                    &infra,
-                    &auth_secret,
-                    &slug,
-                    &user_owned,
-                    &user_email,
-                    &code,
-                );
-            });
-
             None
         };
 
@@ -342,7 +309,7 @@ impl ContentService {
             token: String::new(),
             user: None,
             mfa_required: Some(true),
-            mfa_challenge: Some(mfa_challenge),
+            mfa_challenge: Some(challenge.pending_token),
             totp_provisioning_uri,
         }))
     }

@@ -262,7 +262,8 @@ crap.fields.blocks({
 
 ## Custom Labels (`labels`)
 
-Customize the "Add Block" button text with singular/plural labels.
+Customize the labels: `singular` is the "Add Block" button text, and `plural` is the field
+header when `admin.label` is not set. (Block rows are titled by their block's label.)
 
 ```lua
 crap.fields.blocks({
@@ -274,7 +275,8 @@ crap.fields.blocks({
 })
 ```
 
-With this config, the add button reads "Add Section" instead of "Add Block".
+With this config, the field header reads "Sections" and the add button "Add Section"
+instead of "Add Block".
 
 ## Block Groups
 

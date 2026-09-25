@@ -47,6 +47,7 @@ fn update_upload_blocking(
     let ctx = ServiceContext::collection(&input.slug, &input.def)
         .infra(&input.infra)
         .user(input.user_doc.as_ref())
+        .ui_locale(input.ui_locale.clone())
         .build();
 
     // Recover the real error kind from a bare `Internal` before the HTTP mapper,
@@ -66,7 +67,6 @@ fn update_upload_blocking(
             form,
             locale_ctx: None,
             password,
-            ui_locale: input.ui_locale,
             draft,
             upload_max_file_size: input.max_file_size,
             image_max_attempts: input.image_max_attempts,

@@ -8,7 +8,6 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
@@ -18,8 +17,12 @@ use crate::{
         content,
         handlers::{ContentService, proto::document_to_proto},
     },
-    core::{Slug, auth::ClaimsBuilder},
-    service::{AppInfra, ServiceError, auth},
+    core::collection::Surface,
+    db::query::MfaCode,
+    service::{
+        AppInfra, ServiceError,
+        auth::{self, SessionGrant, mint_session},
+    },
 };
 
 /// Owned inputs for the second-factor verification `spawn_blocking` body.
@@ -35,14 +38,10 @@ struct VerifyCodeInput {
 /// stored (single-use, expiring) code — dispatched on the collection's MFA
 /// mode by the shared service chokepoint.
 fn verify_code_blocking(input: &VerifyCodeInput) -> anyhow::Result<bool> {
-    auth::verify_second_factor(
-        &input.infra,
-        &input.auth_secret,
-        &input.slug,
-        &input.user_id,
-        &input.code,
-    )
-    .map_err(ServiceError::into_anyhow)
+    let attempt = MfaCode::builder(&input.user_id, &input.code, &input.auth_secret).build();
+
+    auth::verify_second_factor(&input.infra, &input.slug, &attempt)
+        .map_err(ServiceError::into_anyhow)
 }
 
 #[cfg(not(tarpaulin_include))]
@@ -59,11 +58,12 @@ impl ContentService {
         let req = request.into_inner();
 
         // Validate the pending token FIRST (cheap, no DB) — purpose-bound to
-        // MfaPending, expiring with the 5-minute window.
+        // MfaPending, issued by this surface's `Login`, expiring with the
+        // 5-minute window.
         let Ok(pending) = self
             .infra
             .token_provider
-            .validate_pending_token(&req.mfa_challenge)
+            .validate_pending_token(&req.mfa_challenge, Surface::Grpc)
         else {
             return Err(Status::unauthenticated("Invalid or expired MFA challenge"));
         };
@@ -121,25 +121,22 @@ impl ContentService {
             return Err(Status::unauthenticated("Invalid or expired MFA challenge"));
         };
 
-        let def = self.get_collection_def(&req.collection)?;
-        let expiry = def.auth.as_ref().map_or(7200, |a| a.token_expiry);
-        let now = Utc::now().timestamp().max(0).cast_unsigned();
+        // The second factor is proven: the session carries the stamp, so it
+        // authenticates every surface the collection's gate would require it on.
+        let grant = SessionGrant::builder(
+            &pending.sub,
+            &req.collection,
+            &pending.email,
+            pending.session_version,
+            Surface::Grpc,
+        )
+        .mfa(true)
+        .build();
 
-        let claims = ClaimsBuilder::new(pending.sub.clone(), Slug::new(&req.collection))
-            .email(pending.email.clone())
-            .exp(now.saturating_add(expiry))
-            .auth_time(now)
-            .session_version(pending.session_version)
-            .build()
-            .inspect_err(|e| error!("Claims build error: {e}"))
-            .map_err(|_| Status::internal("Internal error"))?;
-
-        let token = self
-            .infra
-            .token_provider
-            .create_token(&claims)
-            .inspect_err(|e| error!("Token creation error: {e}"))
-            .map_err(|_| Status::internal("Internal error"))?;
+        let token = mint_session(&self.infra, &grant)
+            .inspect_err(|e| error!("Session mint error: {e}"))
+            .map_err(|_| Status::internal("Internal error"))?
+            .token;
 
         // This identity just completed its second factor — clear its guess
         // budget and refund the shared per-IP attempt (mirrors the login

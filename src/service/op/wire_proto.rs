@@ -286,7 +286,7 @@ pub static PROTO_MESSAGES: &[ProtoMessage] = &[
                 name: "unpublish",
                 ty: "optional bool",
                 tag: 6,
-                doc: "When true, transitions a published document back to draft status without\nmodifying field data. Ignored if the collection does not have versions enabled.",
+                doc: "When true, transitions a published document back to draft status without\nmodifying field data. Rejected unless the collection has versions with drafts enabled.",
             },
             ProtoField {
                 name: "events",
@@ -604,7 +604,7 @@ pub static PROTO_MESSAGES: &[ProtoMessage] = &[
                 name: "draft",
                 ty: "optional bool",
                 tag: 3,
-                doc: "When true, reads unpublished (draft) content for a global that has drafts\nenabled and has been unpublished. Default false serves the last published\nsnapshot. Subject to the global's read access.",
+                doc: "When true, reads unpublished (draft) content for a global that has drafts\nenabled and has been unpublished. Default false reads an unpublished global as\nempty (no field content). Subject to the global's read access.",
             },
         ],
     },

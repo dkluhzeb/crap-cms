@@ -8,6 +8,7 @@ mod manifest;
 mod migrate;
 mod restore;
 mod secret;
+mod uploads_snapshot;
 
 pub use backup::{BackupOpts, backup};
 pub use cleanup::cleanup;

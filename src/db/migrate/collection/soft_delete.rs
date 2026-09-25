@@ -3,29 +3,19 @@
 //! manages, so a trashed row stops blocking a new one with the same value.
 //!
 //! Postgres drops the constraints in place. `SQLite` cannot, so the table is
-//! rebuilt — built under a temporary name, filled, then swapped in — in the
-//! one order that leaves every child table's foreign key pointing at the
-//! collection: with foreign keys on, renaming the live table first rewrites
-//! the children's `REFERENCES` clauses and dropping it afterwards cascades
-//! into them.
+//! rebuilt (see `super::rebuild`).
 
 use std::collections::HashSet;
 
 use anyhow::{Context as _, Result, bail};
-use tracing::info;
 
 use crate::{
     config::LocaleConfig,
     core::CollectionDefinition,
     db::{
-        DbConnection, DbValue,
-        migrate::helpers::{collect_column_specs, get_table_columns},
-        query::helpers::quote_ident,
+        DbConnection, DbValue, migrate::helpers::collect_column_specs, query::helpers::quote_ident,
     },
 };
-
-use super::alter::SYSTEM_COLUMNS;
-use super::create::create_collection_table;
 
 /// Whether the stored table still has to lose an inline UNIQUE before the
 /// partial unique indexes can take over: `soft_delete` is on for a table that
@@ -97,36 +87,13 @@ pub(super) fn check_no_trashed_rows(
     )
 }
 
-/// Remove the inline UNIQUE constraints that `sync_indexes` replaces with
-/// partial unique indexes (`WHERE _deleted_at IS NULL`), so a soft-deleted row
-/// stops blocking a new one with the same value.
-///
-/// Postgres drops the constraints in place, leaving the table — and every
-/// foreign key pointing at it — alone. `SQLite` has no such statement: an
-/// inline UNIQUE owns an implicit index that cannot be dropped, so the table
-/// has to be rebuilt.
-pub(super) fn drop_inline_unique_constraints(
-    conn: &dyn DbConnection,
-    slug: &str,
-    def: &CollectionDefinition,
-    locale_config: &LocaleConfig,
-) -> Result<()> {
-    info!("Removing inline UNIQUE constraints from '{slug}' (soft_delete transition)");
-
-    if conn.is_postgres() {
-        return drop_unique_constraints(conn, slug);
-    }
-
-    rebuild_without_inline_unique(conn, slug, def, locale_config)
-}
-
 /// Drop every table-level UNIQUE constraint on `slug`.
 ///
 /// `contype = 'u'` selects exactly those: the primary key is `'p'` and stays.
 /// Nothing else about the table changes, so the junction tables and
 /// `_versions_{slug}` keep both their rows and their foreign keys — which a
 /// rebuild on this backend could not promise.
-fn drop_unique_constraints(conn: &dyn DbConnection, slug: &str) -> Result<()> {
+pub(super) fn drop_unique_constraints(conn: &dyn DbConnection, slug: &str) -> Result<()> {
     for name in unique_constraint_names(conn, slug)? {
         let sql = format!(
             "ALTER TABLE {} DROP CONSTRAINT {}",
@@ -167,135 +134,19 @@ fn unique_constraint_names(conn: &dyn DbConnection, slug: &str) -> Result<Vec<St
         .collect())
 }
 
-/// The quoted, comma-separated list of columns present in both the old and the
-/// new table — the copy list of a rebuild, in a deterministic order (the sets
-/// are hashed, and the same string has to serve as the INSERT list and the
-/// SELECT list).
-fn sorted_quoted_columns(old_cols: &HashSet<String>, new_cols: &HashSet<String>) -> String {
-    let mut common: Vec<&String> = old_cols.intersection(new_cols).collect();
-    common.sort();
-
-    common
-        .iter()
-        .map(|c| quote_ident(c.as_str()))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// The temporary name a rebuild assembles the replacement table under.
-fn rebuild_table_name(slug: &str) -> String {
-    format!("_rebuild_{slug}")
-}
-
-/// Rebuild `slug` without its inline UNIQUE constraints, in the order `SQLite`
-/// documents: build the replacement under a temporary name, copy into it, drop
-/// the original, rename the replacement into its place.
-///
-/// The order is the whole point. Renaming the original out of the way first
-/// rewrites every child's `REFERENCES` clause to the temporary name — `SQLite`
-/// does that whenever foreign keys are enabled — and dropping that table then
-/// runs an implicit `DELETE FROM`, which fires the children's `ON DELETE
-/// CASCADE` and takes the junction and version rows with it.
-///
-/// Both the drop and the rename here are only correct with foreign-key
-/// enforcement off: off, the drop cascades nothing and the rename leaves the
-/// children pointing at `slug`, which the renamed replacement then *is*. The
-/// pragma is ignored inside a transaction, so `migrate::sync` opens that window
-/// around the sync transaction and verifies the result with
-/// `PRAGMA foreign_key_check` before committing.
-///
-/// `create_collection_table` creates no indexes, so the temporary table carries
-/// none to collide with the managed `idx_{slug}_…` names; `sync_indexes` builds
-/// them on the renamed table afterwards.
-fn rebuild_without_inline_unique(
-    conn: &dyn DbConnection,
-    slug: &str,
-    def: &CollectionDefinition,
-    locale_config: &LocaleConfig,
-) -> Result<()> {
-    let temp = rebuild_table_name(slug);
-    let old_cols = get_table_columns(conn, slug)?;
-
-    conn.execute_batch_ddl(&format!("DROP TABLE IF EXISTS \"{temp}\""))?;
-    create_collection_table(conn, &temp, def, locale_config)?;
-
-    if let Err(e) = fill_rebuilt_table(conn, slug, &temp, &old_cols) {
-        // Nothing has been dropped yet: discard the half-filled replacement and
-        // leave the original table exactly as it was.
-        let _ = conn.execute_batch_ddl(&format!("DROP TABLE IF EXISTS \"{temp}\""));
-
-        return Err(e);
-    }
-
-    conn.execute_batch_ddl(&format!("DROP TABLE \"{slug}\""))
-        .with_context(|| format!("Failed to drop the old table during rebuild of '{slug}'"))?;
-
-    conn.execute_batch_ddl(&format!("ALTER TABLE \"{temp}\" RENAME TO \"{slug}\""))
-        .with_context(|| format!("Failed to rename the rebuilt table into '{slug}'"))?;
-
-    info!("Table '{slug}' rebuilt successfully");
-
-    Ok(())
-}
-
-/// Carry the old table's data into the replacement.
-fn fill_rebuilt_table(
-    conn: &dyn DbConnection,
-    slug: &str,
-    temp: &str,
-    old_cols: &HashSet<String>,
-) -> Result<()> {
-    add_orphan_columns(conn, temp, old_cols)?;
-
-    let new_cols = get_table_columns(conn, temp)?;
-    let col_list = sorted_quoted_columns(old_cols, &new_cols);
-
-    conn.execute(
-        &format!("INSERT INTO \"{temp}\" ({col_list}) SELECT {col_list} FROM \"{slug}\""),
-        &[],
-    )
-    .with_context(|| format!("Failed to copy data during rebuild of '{slug}'"))?;
-
-    Ok(())
-}
-
-/// Re-add the columns the old table has and the definition no longer does.
-///
-/// The normal alter path preserves them (it warns, it never drops), so the
-/// rebuild must not silently destroy their data either. Their original type is
-/// unused — no field references them — so TEXT is fine.
-fn add_orphan_columns(
-    conn: &dyn DbConnection,
-    temp: &str,
-    old_cols: &HashSet<String>,
-) -> Result<()> {
-    let fresh_cols = get_table_columns(conn, temp)?;
-    let system: HashSet<&str> = SYSTEM_COLUMNS.iter().copied().collect();
-
-    for col in old_cols.difference(&fresh_cols) {
-        if system.contains(col.as_str()) {
-            continue;
-        }
-
-        conn.execute_batch_ddl(&format!(
-            "ALTER TABLE \"{temp}\" ADD COLUMN {} TEXT",
-            quote_ident(col)
-        ))?;
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::collection::*;
     use crate::core::{FieldDefinition, FieldType, Registry, RelationshipConfig};
-    use crate::db::migrate::collection::alter::alter_collection_table;
-    use crate::db::migrate::collection::sync_collection_table;
-    use crate::db::migrate::collection::test_helpers::*;
-    use crate::db::migrate::helpers::table_exists;
-    use crate::db::migrate::sync_all;
+    use crate::db::migrate::{
+        collection::{
+            alter::alter_collection_table, create::create_collection_table, sync_collection_table,
+            test_helpers::*,
+        },
+        helpers::{get_table_columns, table_exists},
+        sync_all,
+    };
 
     /// A `posts` collection with a unique field and a has-many relationship,
     /// versioned — so its table has both a junction table and a versions table
@@ -417,12 +268,6 @@ mod tests {
             .expect("the inline UNIQUE must be gone after the transition");
     }
 
-    /// Regression: the rebuild's copy list joined the column names bare, so a
-    /// locale column carrying the locale code's capitals (`title__de_DE`) was
-    /// folded to lowercase by Postgres — the `INSERT … SELECT` named a column
-    /// that does not exist and the migration aborted at boot. Only columns in
-    /// both tables are copied, and the one list serves as both the INSERT and
-    /// the SELECT list, so it is built once and ordered deterministically.
     /// A `$1::regclass` parameter is inferred as `regclass` and cannot be
     /// bound from a string; the name has to go through `to_regclass`.
     #[test]
@@ -434,39 +279,17 @@ mod tests {
     }
 
     #[test]
-    fn the_rebuild_copy_list_quotes_every_column() {
-        let old_cols: HashSet<String> = ["id", "title__de_DE", "title__en", "dropped"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        let new_cols: HashSet<String> = ["id", "title__de_DE", "title__en", "added"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-
-        assert_eq!(
-            sorted_quoted_columns(&old_cols, &new_cols),
-            "\"id\", \"title__de_DE\", \"title__en\"",
-            "columns present in both tables, each quoted, in a stable order"
-        );
-    }
-
-    #[test]
     fn alter_rebuilds_table_to_remove_inline_unique_on_soft_delete_transition() {
         let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
 
-        // Create collection WITHOUT soft_delete — unique fields get inline UNIQUE
-        let def1 = simple_collection(
-            "posts",
-            vec![
-                FieldDefinition::builder("slug", FieldType::Text)
-                    .unique(true)
-                    .build(),
-                text_field("title"),
-            ],
-        );
-        create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
+        // The table an older release created without soft_delete: the unique
+        // field carries an inline UNIQUE.
+        conn.execute_batch(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY, slug TEXT UNIQUE, title TEXT, \
+             _ref_count INTEGER NOT NULL DEFAULT 0, created_at TEXT, updated_at TEXT)",
+        )
+        .unwrap();
 
         // Insert a row to verify data survives rebuild
         conn.execute(
@@ -515,7 +338,7 @@ mod tests {
     }
 
     /// Regression: a unique field NESTED in a group (column `seo__slug`) also
-    /// gets an inline UNIQUE at create time, but the soft-delete rebuild trigger
+    /// got an inline UNIQUE at create time in older releases, but the soft-delete rebuild trigger
     /// only inspected top-level `def.fields` — the group wrapper is not itself
     /// `unique`, so the rebuild was skipped and the stale inline UNIQUE survived,
     /// blocking re-insert after soft-delete. The trigger now walks the flattened
@@ -535,8 +358,11 @@ mod tests {
                 .build()
         };
 
-        let def1 = simple_collection("posts", vec![group(), text_field("title")]);
-        create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY, seo__slug TEXT UNIQUE, title TEXT, \
+             _ref_count INTEGER NOT NULL DEFAULT 0, created_at TEXT, updated_at TEXT)",
+        )
+        .unwrap();
 
         conn.execute(
             "INSERT INTO posts (id, seo__slug, title) VALUES ('a', 'hello', 'Hello')",
@@ -636,53 +462,6 @@ mod tests {
 
         let cols = get_table_columns(&conn, "posts").unwrap();
         assert!(cols.contains("_deleted_at"));
-    }
-
-    /// The rebuild carries the table's rows across and leaves no temporary
-    /// behind.
-    ///
-    /// Nothing is dropped until the copy has succeeded, so a failing copy
-    /// discards the half-filled replacement and leaves the original exactly as
-    /// it was — there is no window in which the data lives only in a table the
-    /// rebuild is still assembling.
-    #[test]
-    fn rebuild_preserves_rows_and_leaves_no_temporary() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
-
-        // Create a table with a unique constraint (simulates pre-soft_delete state)
-        conn.execute(
-            "CREATE TABLE items (id TEXT PRIMARY KEY, title TEXT UNIQUE, created_at TEXT, updated_at TEXT, _ref_count INTEGER DEFAULT 0)",
-            &[],
-        )
-        .unwrap();
-
-        // Insert some data
-        conn.execute(
-            "INSERT INTO items (id, title) VALUES ('1', 'Hello'), ('2', 'World')",
-            &[],
-        )
-        .unwrap();
-
-        let mut def = simple_collection("items", vec![text_field("title")]);
-        def.soft_delete = true;
-
-        rebuild_without_inline_unique(&conn, "items", &def, &no_locale()).unwrap();
-
-        // Verify data was preserved through the rebuild
-        let rows = conn
-            .query_all("SELECT id, title FROM items ORDER BY id", &[])
-            .unwrap();
-        assert_eq!(rows.len(), 2, "both rows should survive rebuild");
-
-        // Verify the temp table was cleaned up
-        let temp_exists = conn
-            .query_one(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='_rebuild_items'",
-                &[],
-            )
-            .unwrap();
-        assert!(temp_exists.is_none(), "temp table should be dropped");
     }
 
     /// Regression: turning `soft_delete` off dropped the `_deleted_at IS NULL`

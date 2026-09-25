@@ -6,10 +6,8 @@ use axum::{
     http::{HeaderMap, header::COOKIE},
     response::{IntoResponse, Redirect, Response},
 };
-use chrono::Utc;
 use ipnet::IpNet;
 
-use crate::core::collection::Auth;
 use crate::{
     admin::{
         AdminState,
@@ -27,11 +25,14 @@ use crate::{
     },
     config::ServerConfig,
     core::{
-        Builder, CollectionDefinition, Document, Registry, Slug,
-        auth::{Claims, ClaimsBuilder},
+        CollectionDefinition, Document, Registry,
+        auth::Claims,
+        collection::{Auth, MfaMode},
         email,
     },
-    service::auth::{TotpProvisioning, totp_challenge},
+    service::auth::{
+        MintedSession, SessionGrantBuilder, TotpProvisioning, mint_session, totp_challenge,
+    },
 };
 
 /// Extract the client IP from the request, honoring `X-Forwarded-For`
@@ -288,109 +289,32 @@ pub(in crate::admin::handlers) fn extract_user_email(user: &Document) -> String 
         .to_string()
 }
 
-/// Result of creating a session token.
-pub(in crate::admin::handlers) struct SessionToken {
-    pub token: String,
-    pub expiry: u64,
-    pub exp: u64,
-}
-
-/// Expiry for a session token issued at `now`: `now + expiry`, capped at
-/// `auth_time + max_age` so a refreshed token never outlives the session's
-/// absolute ceiling. `max_age = 0` disables the cap.
-fn session_exp(now: u64, expiry: u64, auth_time: u64, max_age: u64) -> u64 {
-    let exp = now.saturating_add(expiry);
-
-    if max_age == 0 {
-        return exp;
-    }
-
-    exp.min(auth_time.saturating_add(max_age))
-}
-
-/// Who a session is minted for.
-///
-/// `auth_time` is the Unix timestamp of the **original** authentication.
-/// Unset, it is "now" — a fresh login; the refresh handler forwards the
-/// previous token's `auth_time` so `auth.session_absolute_max_age` caps
-/// cumulative session lifetime independently of how often the token has been
-/// refreshed.
-#[derive(Builder)]
-pub(in crate::admin::handlers) struct SessionGrant<'a> {
-    #[builder(required)]
-    user_id: String,
-    #[builder(required)]
-    collection: &'a str,
-    #[builder(required)]
-    email: String,
-    #[builder(required)]
-    session_version: u64,
-    auth_time: Option<u64>,
-}
-
-/// Build a JWT session token for `grant`, resolving expiry from collection
-/// config or global default.
+/// Mint an admin-issued session through the service chokepoint
+/// ([`mint_session`]). The caller describes the grant (user, collection,
+/// minting surface, second-factor stamp, original `auth_time` on a refresh);
+/// this seals it with the admin surface's absolute session ceiling
+/// (`[auth] session_absolute_max_age`), so no admin mint site can forget it.
 pub(in crate::admin::handlers) fn create_session_token(
     state: &AdminState,
-    grant: SessionGrant,
-) -> Result<SessionToken, String> {
-    let SessionGrant {
-        user_id,
-        collection,
-        email,
-        session_version,
-        auth_time,
-    } = grant;
+    grant: SessionGrantBuilder<'_>,
+) -> Result<MintedSession, String> {
+    let grant = grant
+        .absolute_max_age(state.config.auth.session_absolute_max_age)
+        .build();
 
-    let now = Utc::now().timestamp().max(0).cast_unsigned();
-    let auth_time = auth_time.unwrap_or(now);
-
-    let expiry = state
-        .infra
-        .registry
-        .get_collection(collection)
-        .and_then(|def| def.auth.as_ref().map(|a| a.token_expiry))
-        .unwrap_or(state.config.auth.token_expiry);
-
-    let exp = session_exp(
-        now,
-        expiry,
-        auth_time,
-        state.config.auth.session_absolute_max_age,
-    );
-
-    let claims = ClaimsBuilder::new(user_id, Slug::new(collection))
-        .email(email)
-        .exp(exp)
-        .auth_time(auth_time)
-        .session_version(session_version)
-        .build()
-        .map_err(|e| format!("Claims build error: {e}"))?;
-
-    let token = state
-        .infra
-        .token_provider
-        .create_token(&claims)
-        .map_err(|e| format!("Token creation error: {e}"))?;
-
-    // The cookie lives exactly as long as the (possibly capped) token.
-    Ok(SessionToken {
-        token,
-        expiry: exp.saturating_sub(now),
-        exp: claims.exp,
-    })
+    mint_session(&state.infra, &grant).map_err(|e| format!("Session mint error: {e}"))
 }
 
 /// Build a redirect-to-/admin response with session cookies set.
 pub(in crate::admin::handlers) fn session_redirect(
     state: &AdminState,
-    session: &SessionToken,
+    session: &MintedSession,
 ) -> Response {
     let dev_mode = state.config.admin.dev_mode;
     let same_site = session_same_site(state);
     let cookies = session_cookies(
         &session.token,
-        session.expiry,
+        session.lifetime,
         session.exp,
         dev_mode,
         same_site,
@@ -433,13 +357,13 @@ pub(in crate::admin::handlers) fn render_mfa_form(
 }
 
 /// Whether `slug`'s password login uses `mfa = "totp"`.
-pub(in crate::admin::handlers) fn is_totp_collection(state: &AdminState, slug: &str) -> bool {
+fn is_totp_collection(state: &AdminState, slug: &str) -> bool {
     state
         .infra
         .registry
         .get_collection(slug)
         .and_then(|d| d.auth.as_ref())
-        .is_some_and(|a| a.mfa() == crate::core::collection::MfaMode::Totp)
+        .is_some_and(|a| a.mfa() == MfaMode::Totp)
 }
 
 /// Blocking body: resolve the TOTP page state for the pending user — the
@@ -654,17 +578,5 @@ mod tests {
         let addr: SocketAddr = "1.2.3.4:80".parse().unwrap();
         let cfg = trust_proxies(&["*"]);
         assert_eq!(client_ip(&headers, &addr, &cfg), "203.0.113.5");
-    }
-
-    /// A refresh near the end of the absolute session lifetime must not mint
-    /// a token that outlives it.
-    #[test]
-    fn session_exp_is_capped_by_the_absolute_max_age() {
-        // Logged in at 0, refreshing at 3000 with a 2h token and a 1h ceiling.
-        assert_eq!(session_exp(3000, 7200, 0, 3600), 3600);
-        // Far from the ceiling the normal expiry applies.
-        assert_eq!(session_exp(1000, 100, 0, 3600), 1100);
-        // No ceiling configured.
-        assert_eq!(session_exp(3000, 7200, 0, 0), 10_200);
     }
 }

@@ -5,10 +5,12 @@
 
 mod create;
 mod email_change;
+mod search_index;
 mod update;
 mod version;
 
 pub use create::persist_create;
+pub(crate) use search_index::sync_search_index;
 pub(crate) use update::persist_bulk_update;
 pub use update::persist_update;
 pub use version::{DraftDocumentArgs, draft_document, persist_draft_version, persist_unpublish};

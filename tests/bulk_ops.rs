@@ -674,15 +674,22 @@ return M
     };
     let opts = UpdateManyOptions::builder()
         .locale_ctx(Some(&lctx))
-        .ui_locale(Some("fr".to_string()))
         .max_documents(100)
         .build();
     let mut data = DocumentFields::new();
     data.insert("status".to_string(), json!("published"));
 
+    // The admin UI locale travels on the service context (its single source).
+    let ctx = ServiceContext::collection("posts", &s.def)
+        .pool(&s.pool)
+        .runner(&s.runner)
+        .override_access(true)
+        .ui_locale(Some("fr".to_string()))
+        .build();
+
     // If the before_change hook saw `ctx.locale == nil` on update, it errors and
     // the bulk update fails.
-    let result = update_many(&ctx(&s), &[], &data, &config.locale, &opts);
+    let result = update_many(&ctx, &[], &data, &config.locale, &opts);
     assert!(
         result.is_ok(),
         "update_many before_change hook must see resolved locale 'en', got: {result:?}"

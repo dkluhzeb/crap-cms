@@ -12,6 +12,7 @@ mod option;
 mod polymorphic;
 mod relationship_shape;
 mod required;
+mod richtext;
 mod row_bounds;
 mod shared;
 mod unique;
@@ -24,9 +25,12 @@ pub use self::email::is_valid_email_format;
 pub(crate) use self::has_many::{HasManyCheck, check_has_many_elements};
 pub(crate) use self::length::check_length_bounds;
 pub(crate) use self::numeric::check_numeric_bounds;
-pub(crate) use self::option::{OptionCheck, check_option_valid, held_values, undeclared_values};
+pub(in crate::hooks::lifecycle::validation) use self::option::{OptionCheck, check_option_valid};
 pub(crate) use self::polymorphic::check_polymorphic_allowlist;
 pub(crate) use self::relationship_shape::check_relationship_shape;
 pub(crate) use self::required::{check_required, is_value_present};
+pub(in crate::hooks::lifecycle::validation) use self::richtext::{
+    RichtextCheck, check_richtext_value,
+};
 pub(crate) use self::row_bounds::check_row_bounds;
 pub(crate) use self::unique::check_unique;

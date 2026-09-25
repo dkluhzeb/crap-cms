@@ -15,6 +15,17 @@
 //!    normal read pipeline) — yielding the visible data map; in `Metadata`
 //!    mode, emit no data.
 //!
+//! An event that moved its row between content views (a publish or unpublish,
+//! a version restore that changes the status, a move into or out of the
+//! trash) is also a removal for a subscriber that could see the row where it
+//! was but cannot see it where it is now: when steps 3–4 drop it, but the
+//! view the row left would have admitted it, the subscriber receives the
+//! removal instead — a collection document as a `delete` (no data), a global
+//! leaving the published view as an `update` carrying the empty global its
+//! own published-view read now returns. A subscriber that could not see the
+//! row where it was learns nothing, so a draft's id never reaches a
+//! published-only subscriber.
+//!
 //! The `Full`-mode payload the strip starts from is the event's document: the
 //! stored row, read-shaped and stripped for no one (as `before_broadcast` left
 //! it) — never the document as reported to the writer. So what a subscriber
@@ -36,19 +47,73 @@ use crate::{
     core::{
         CollectionDefinition, Document, DocumentFields, GlobalDefinition, HookRef, LiveMode,
         MutationEvent, Registry,
-        event::{EventOperation, EventTarget},
+        event::{EventOperation, EventTarget, EventViewMeta},
     },
     db::{AccessResult, DbConnection, EventViewGate, FilterClause},
     hooks::{AccessCheckInput, EventAfterReadInput, HookRunner},
-    service::helpers::strip_unreadable_fields,
+    service::{helpers::strip_unreadable_fields, unpublished_global},
 };
 
-/// Map an event operation to the canonical lowercase string used by hooks,
-/// constraint matching, and the requested-ops filter. Shared so the two stream
-/// surfaces can't drift on the spelling.
+/// What one subscriber receives for an event: the operation it is delivered
+/// as — the event's own, or the removal a subscriber is sent when the row left
+/// the only view it could see it in — and the visible data (empty in
+/// `Metadata` mode and for a removed collection document).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventDelivery {
+    pub operation: EventOperation,
+    pub data: Map<String, Value>,
+}
+
+impl EventDelivery {
+    #[must_use]
+    pub fn new(operation: EventOperation, data: Map<String, Value>) -> Self {
+        Self { operation, data }
+    }
+}
+
+/// The operation a subscriber receives when the row leaves the only view it
+/// could see it in: a collection document disappears from that view
+/// (`delete`); a global stays, empty (`update`).
+fn removal_operation(target: &EventTarget) -> EventOperation {
+    match target {
+        EventTarget::Collection => EventOperation::Delete,
+        EventTarget::Global => EventOperation::Update,
+    }
+}
+
+/// The view `event`'s row was in before the event moved it, when leaving it
+/// is a removal to announce: any view a collection document left, but only
+/// the published view for a global — a global is always there to read in its
+/// draft view, while one that left the published view reads as empty there.
+/// `None` when the row did not move.
+fn removal_view(event: &MutationEvent) -> Option<EventViewMeta> {
+    let prior = event.view.as_ref()?.prior_view()?;
+
+    if event.target == EventTarget::Global && !prior.in_published_view() {
+        return None;
+    }
+
+    Some(prior)
+}
+
+/// Every operation `event` can reach a subscriber as: its own, plus the
+/// removal when it moved the row between views (once — trashing a document
+/// is a `delete` either way). A subscriber scoped to some operations wants
+/// the event when any of these is among them.
 #[must_use]
-pub fn event_op_str(op: &EventOperation) -> &'static str {
-    op.as_str()
+pub fn delivered_operations(event: &MutationEvent) -> Vec<EventOperation> {
+    let mut ops = vec![event.operation.clone()];
+
+    if removal_view(event).is_none() {
+        return ops;
+    }
+
+    let removal = removal_operation(&event.target);
+    if removal != event.operation {
+        ops.push(removal);
+    }
+
+    ops
 }
 
 /// Borrowed view of a subscriber's resolved access, plus the registry and hook
@@ -90,12 +155,12 @@ impl EventGate<'_> {
         .unwrap_or_default()
     }
 
-    /// Run the full per-event gate + strip pipeline. Returns the visible data
-    /// map (empty in `Metadata` mode) when the subscriber may receive this
-    /// event, or `None` when it must be dropped. Every drop point fails closed.
+    /// Run the full per-event gate + strip pipeline. Returns what the
+    /// subscriber receives — the operation and the visible data (empty in
+    /// `Metadata` mode) — or `None` when the event must be dropped. Every drop
+    /// point fails closed.
     #[must_use]
-    pub fn evaluate(&self, event: &MutationEvent) -> Option<Map<String, Value>> {
-        let slug: &str = event.collection.as_ref();
+    pub fn evaluate(&self, event: &MutationEvent) -> Option<EventDelivery> {
         let views = self.views_for(event)?;
 
         // Fail closed: an event without view metadata (e.g. from a pre-view node
@@ -103,23 +168,68 @@ impl EventGate<'_> {
         // than default to the published view.
         let view = event.view.as_ref()?;
 
-        // Gate by the content view this event belongs to (published/draft/trash).
-        // `None` means the subscriber cannot see that view, so the event is
-        // dropped — closing the draft/trash leak. The `view` metadata is carried
-        // independent of `live_mode`, so this holds for empty-`data` events too
-        // (metadata-only collections, all deletes); so is the gating snapshot
-        // the row constraint below is judged against.
-        let constraints = views.constraints_for(view)?;
+        if self.admits(event, views.constraints_for(view)) {
+            let data = self.visible_data(event, &event.data, event.operation.as_str());
 
-        if !constraints.is_empty() && !self.row_constraints_match(event, constraints) {
+            return Some(EventDelivery::new(event.operation.clone(), data));
+        }
+
+        self.removal(event, views)
+    }
+
+    /// Whether the subscriber may see the event's row in the view whose
+    /// `constraints` were selected: `None` means the view is hidden from it
+    /// (closing the draft/trash leak); a non-empty constraint must match the
+    /// gating snapshot. The view metadata and the snapshot are carried
+    /// independent of `live_mode`, so this holds for empty-`data` events too
+    /// (metadata-only collections, all deletes).
+    fn admits(&self, event: &MutationEvent, constraints: Option<&[FilterClause]>) -> bool {
+        let Some(constraints) = constraints else {
+            return false;
+        };
+
+        constraints.is_empty() || self.row_constraints_match(event, constraints)
+    }
+
+    /// The removal a subscriber receives when the event moved the row out of
+    /// a view the subscriber could see it in, into one it cannot — without it
+    /// the client kept showing a row every read of its own now hides. The
+    /// view the row left is judged exactly as the event's own view is, its
+    /// row constraint against the event's gating snapshot. `None` for any
+    /// other drop, and for a subscriber that could not see the row where it
+    /// was either.
+    fn removal(&self, event: &MutationEvent, views: &EventViewGate) -> Option<EventDelivery> {
+        let left = removal_view(event)?;
+
+        if !self.admits(event, views.constraints_for(&left)) {
             return None;
         }
 
+        let operation = removal_operation(&event.target);
+
+        let data = match event.target {
+            EventTarget::Collection => Map::new(),
+            EventTarget::Global => {
+                self.visible_data(event, &unpublished_global().fields, operation.as_str())
+            }
+        };
+
+        Some(EventDelivery::new(operation, data))
+    }
+
+    /// The data a delivery carries: nothing in `Metadata` mode, the stripped
+    /// and `after_read`-enriched `data` in `Full` mode.
+    fn visible_data(
+        &self,
+        event: &MutationEvent,
+        data: &DocumentFields,
+        operation: &str,
+    ) -> Map<String, Value> {
         if self.mode_for(event) != LiveMode::Full {
-            return Some(Map::new()); // metadata mode: no data
+            return Map::new();
         }
 
-        Some(self.strip_full_payload(event, slug))
+        self.strip_full_payload(event, data, operation)
     }
 
     /// Whether the event's row satisfies a non-empty row constraint.
@@ -153,15 +263,23 @@ impl EventGate<'_> {
     /// `Full`-mode payload: the data-aware field-read strip, then the
     /// document-independent API-hidden strip, then `after_read` enrichment —
     /// the same order as the normal read pipeline (`post_process`) — applied
-    /// to the event's document, which is the stored row stripped for no one
-    /// (see [`crate::service::EventRow`]).
+    /// to `data`: the event's document, which is the stored row stripped for
+    /// no one (see [`crate::service::EventRow`]), or the empty global a
+    /// removal announces. `operation` is the one the subscriber receives.
     ///
     /// Strip-before-`after_read` is load-bearing: the per-subscriber
     /// `after_read` hook must only ever see the already-access-stripped form
     /// (as documented), otherwise it could copy a read-denied field's value
     /// into an unprotected field that survives the strip — leaking it to a
     /// subscriber the access rule denies.
-    fn strip_full_payload(&self, event: &MutationEvent, slug: &str) -> Map<String, Value> {
+    fn strip_full_payload(
+        &self,
+        event: &MutationEvent,
+        data: &DocumentFields,
+        operation: &str,
+    ) -> Map<String, Value> {
+        let slug: &str = event.collection.as_ref();
+
         let (hooks, field_defs) = match event.target {
             EventTarget::Collection => self
                 .registry
@@ -174,11 +292,8 @@ impl EventGate<'_> {
         }
         .unwrap_or_default();
 
-        let mut visible: Map<String, Value> = event
-            .data
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let mut visible: Map<String, Value> =
+            data.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
         // Data-aware field-read strip (each `access.read` rule sees the event's
         // original document as `ctx.data` / `ctx.document`, matching the
@@ -189,7 +304,7 @@ impl EventGate<'_> {
             self.hook_runner.strip_read_access_for_event(
                 &field_defs,
                 visible,
-                &event.data,
+                data,
                 slug,
                 self.user_doc,
             );
@@ -210,7 +325,7 @@ impl EventGate<'_> {
                 document_id: event.document_id.as_ref(),
                 data: &stripped,
                 user: self.user_doc,
-                operation: event_op_str(&event.operation),
+                operation,
                 timestamp: event.timestamp.as_str(),
             });
 
@@ -429,5 +544,7 @@ fn view_from_access(
     }
 }
 
+#[cfg(all(test, feature = "sqlite"))]
+mod removal_tests;
 #[cfg(all(test, feature = "sqlite"))]
 mod tests;

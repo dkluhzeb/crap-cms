@@ -104,8 +104,9 @@ pub struct DraftDocumentArgs<'a> {
     pub locale_ctx: Option<&'a LocaleContext>,
 }
 
-/// Persist an unpublish operation: find existing doc, set status to draft,
-/// create a draft version snapshot. Returns the existing doc.
+/// Persist an unpublish operation: lock and read the row, set its status to
+/// draft, record a draft version snapshot. Returns the stored row, stamped
+/// `_status = "draft"`.
 ///
 /// # Errors
 ///
@@ -117,6 +118,12 @@ pub fn persist_unpublish(ctx: &ServiceContext, id: &str) -> Result<Document> {
     let def = ctx.collection_def()?;
     let slug = ctx.slug;
 
+    // The row this snapshots must be the row the status write lands on: on
+    // Postgres a concurrent publish committing between an unlocked read and
+    // the status UPDATE would otherwise leave a stale draft snapshot as the
+    // pending draft. No-op on SQLite.
+    conn.lock_row(slug, id)?;
+
     // Same reasoning as `unpublish_document_in_conn`: when the def has localized
     // fields and locales are enabled, the bare-column fallback in
     // `find_by_id_raw` references columns that don't exist (`title` instead
@@ -125,18 +132,11 @@ pub fn persist_unpublish(ctx: &ServiceContext, id: &str) -> Result<Document> {
     // value (the version snapshot must preserve all locales, not just one).
     let locale_ctx = ctx.default_locale_ctx();
 
-    let doc = query::find_by_id_raw(conn, slug, def, id, locale_ctx.as_ref(), false)?
+    let mut doc = query::find_by_id_raw(conn, slug, def, id, locale_ctx.as_ref(), false)?
         .ok_or_else(|| anyhow!("Document {id} not found in {slug}"))?;
 
-    versions::unpublish_with_snapshot(
-        conn,
-        slug,
-        id,
-        &def.fields,
-        def.versions.as_ref(),
-        &doc,
-        ctx.locale_config,
-    )?;
+    let snap_ctx = versions::VersionSnapshotCtx::for_collection(slug, id, def, ctx.locale_config);
+    versions::unpublish_with_snapshot(conn, &snap_ctx, &mut doc)?;
 
     Ok(doc)
 }

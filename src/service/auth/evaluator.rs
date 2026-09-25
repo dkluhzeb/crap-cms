@@ -21,7 +21,9 @@
 //! credentials from the request body, not from request metadata.
 //!
 //! All three branches share the same locked-user + stale-session-
-//! version rejection paths.
+//! version rejection paths. The bearer and cookie branches also refuse a
+//! session that did not satisfy the second factor where the collection's
+//! MFA gate requires it for this request.
 
 use std::collections::HashMap;
 
@@ -38,7 +40,9 @@ use crate::db::{DbConnection, query};
 use crate::hooks::{HookRunner, lifecycle::AuthStrategyInput};
 use crate::service::{
     AppInfra, ServiceContext,
-    auth::{StrategyAdmission, admit_strategy_user, load_user},
+    auth::{
+        MfaGateRequest, StrategyAdmission, admit_strategy_user, load_user, second_factor_required,
+    },
 };
 
 /// Per-request inputs for [`evaluate`].
@@ -131,6 +135,12 @@ pub enum AuthFailure {
     /// not the token. Distinct from a silent `Anonymous` so admin
     /// clears the now-dead cookie instead of redirect-looping.
     Unaccepted,
+    /// A session token that did not satisfy the second factor, on a request
+    /// whose MFA gate (the collection's `mfa` mode and `mfa_when`, judged for
+    /// this request's surface and headers) requires it — e.g. a token minted
+    /// by a surface without MFA replayed on one with it, or a token minted
+    /// before sessions recorded the second factor.
+    MfaRequired,
 }
 
 impl AuthFailure {
@@ -146,6 +156,7 @@ impl AuthFailure {
             Self::Locked => "account_locked",
             Self::StaleSession => "stale_session",
             Self::Unaccepted => "issuer_unaccepted",
+            Self::MfaRequired => "mfa_required",
         }
     }
 }
@@ -239,7 +250,7 @@ pub fn evaluate(request: &AuthRequest<'_>, deps: &EvaluateDeps<'_>) -> Resolutio
     // ── 1. Bearer ──────────────────────────────────────────────────
     if let Some(token) = request.bearer_token {
         credential_supplied = true;
-        match resolve_token(token, request.surface, deps, Auth::accepts_bearer) {
+        match resolve_token(token, request, deps, Auth::accepts_bearer) {
             TokenOutcome::Authenticated(payload) => {
                 let (user, slug) = *payload;
                 return Resolution::Authenticated(Box::new(AuthenticatedResolution {
@@ -255,7 +266,7 @@ pub fn evaluate(request: &AuthRequest<'_>, deps: &EvaluateDeps<'_>) -> Resolutio
     // ── 2. Session cookie ──────────────────────────────────────────
     if let Some(token) = request.session_cookie_token {
         credential_supplied = true;
-        match resolve_token(token, request.surface, deps, Auth::accepts_session_cookie) {
+        match resolve_token(token, request, deps, Auth::accepts_session_cookie) {
             TokenOutcome::Authenticated(payload) => {
                 let (user, slug) = *payload;
                 return Resolution::Authenticated(Box::new(AuthenticatedResolution {
@@ -366,6 +377,10 @@ fn try_strategy(
         remote_addr: None,
     };
 
+    // The request's own connection, never a write-pool checkout: resolution
+    // runs for every request the strategy authenticates, and would queue reads
+    // behind writes. A hook that provisions its user still writes, in the
+    // strategy's commit-on-success transaction.
     let doc =
         match deps
             .hook_runner
@@ -386,7 +401,7 @@ fn try_strategy(
 
     let ctx = user_ctx(def, deps.conn, deps.locale_config);
     let (user, session_version) = admitted_strategy_user(&ctx, &doc, auth, &entry.name)?;
-    let user = build_strategy_authuser(user, session_version, &entry.slug, auth.token_expiry)?;
+    let user = build_strategy_authuser(user, session_version, &entry.slug)?;
 
     Some(Resolution::Authenticated(Box::new(
         AuthenticatedResolution {
@@ -469,13 +484,15 @@ enum TokenOutcome {
 
 fn resolve_token<F>(
     token: &str,
-    surface: Surface,
+    request: &AuthRequest<'_>,
     deps: &EvaluateDeps<'_>,
     accepts: F,
 ) -> TokenOutcome
 where
     F: Fn(&Auth, Surface) -> bool,
 {
+    let surface = request.surface;
+
     let Ok(claims) = deps.token_provider.validate_token(token) else {
         debug!(surface = ?surface, "token validation failed");
         return TokenOutcome::Invalid(AuthFailure::BadToken);
@@ -513,7 +530,31 @@ where
         return TokenOutcome::Invalid(failure);
     }
 
+    let gate = MfaGateRequest::builder(&def.slug, def, surface, request.headers).build();
+
+    if lacks_required_second_factor(&claims, &doc, &gate, deps) {
+        debug!(user = %claims.sub, surface = ?surface, "session lacks the required second factor");
+        return TokenOutcome::Invalid(AuthFailure::MfaRequired);
+    }
+
     TokenOutcome::Authenticated(Box::new((AuthUser::new(claims, doc), def.slug.clone())))
+}
+
+/// Whether a session token is refused for lack of the second factor: it did
+/// not satisfy it, and the collection's MFA gate requires it for this
+/// request's surface and headers. A session minted by a surface without MFA
+/// therefore never authenticates a surface with it.
+fn lacks_required_second_factor(
+    claims: &Claims,
+    user: &Document,
+    gate: &MfaGateRequest<'_>,
+    deps: &EvaluateDeps<'_>,
+) -> bool {
+    if claims.mfa {
+        return false;
+    }
+
+    second_factor_required(deps.hook_runner, deps.conn, gate, user)
 }
 
 /// Whether the account a token names may still use it: not locked, and on the
@@ -589,20 +630,15 @@ pub fn reload_authenticated_user(infra: &AppInfra, claims: &Claims) -> Option<Au
 /// no handler can mistake them for a session's claims. They carry the
 /// user's stored `session_version` (read when the user was admitted), so
 /// work the request queues is revoked by a later session-version bump
-/// exactly like a token user's. The `exp` field is set from the
-/// collection's `token_expiry` for consistency but isn't re-validated;
-/// treating it as informative metadata.
+/// exactly like a token user's. A strategy credential is re-presented and
+/// re-judged on every request, so it has no lifetime of its own: `exp` is
+/// the request's time — the claims are good for this request only.
 ///
 /// Refuses (returns `None`) any doc with an empty `id` — a strategy
 /// hook returning such a doc is operator error, and propagating an
 /// empty `sub` claim downstream would silently break session-
 /// version lookups and audit logging.
-fn build_strategy_authuser(
-    doc: Document,
-    session_version: u64,
-    slug: &Slug,
-    token_expiry: u64,
-) -> Option<AuthUser> {
+fn build_strategy_authuser(doc: Document, session_version: u64, slug: &Slug) -> Option<AuthUser> {
     if doc.id.is_empty() {
         warn!(collection = %slug, "strategy returned document with empty id; refusing");
         return None;
@@ -616,7 +652,7 @@ fn build_strategy_authuser(
         .to_string();
     let claims: Claims = match ClaimsBuilder::new(doc.id.clone(), slug.clone())
         .email(email)
-        .exp(now.saturating_add(token_expiry))
+        .exp(now)
         .auth_time(now)
         .session_version(session_version)
         .token_use(TokenUse::Strategy)
@@ -646,7 +682,7 @@ mod tests {
     fn strategy_claims_are_marked_as_strategy_claims() {
         let doc = Document::builder("m1").build();
 
-        let user = build_strategy_authuser(doc, 0, &Slug::new("members"), 3600).unwrap();
+        let user = build_strategy_authuser(doc, 0, &Slug::new("members")).unwrap();
 
         assert_eq!(user.claims.token_use, TokenUse::Strategy);
     }
@@ -658,7 +694,7 @@ mod tests {
     fn strategy_claims_carry_the_stored_session_version() {
         let doc = Document::builder("m1").build();
 
-        let user = build_strategy_authuser(doc, 7, &Slug::new("members"), 3600).unwrap();
+        let user = build_strategy_authuser(doc, 7, &Slug::new("members")).unwrap();
 
         assert_eq!(user.claims.session_version, 7);
     }
@@ -743,7 +779,7 @@ mod tests {
         let slug = Slug::new("users");
         let doc = Document::new(String::new());
         assert!(
-            build_strategy_authuser(doc, 0, &slug, 7200).is_none(),
+            build_strategy_authuser(doc, 0, &slug).is_none(),
             "doc with empty id must be refused"
         );
     }
@@ -753,7 +789,7 @@ mod tests {
         let slug = Slug::new("users");
         let mut doc = Document::new("u1".to_string());
         doc.fields.insert("email".to_string(), json!("a@x.com"));
-        let user = build_strategy_authuser(doc, 0, &slug, 7200).expect("well-formed doc");
+        let user = build_strategy_authuser(doc, 0, &slug).expect("well-formed doc");
         assert_eq!(user.claims.sub, "u1");
         assert_eq!(user.claims.email, "a@x.com");
     }

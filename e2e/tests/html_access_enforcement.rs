@@ -61,12 +61,20 @@ return function(_context)
 end
 ";
 
+/// A row filter: only posts titled "Mine".
+const ACCESS_TITLED_MINE: &str = r#"
+return function(_context)
+    return { title = "Mine" }
+end
+"#;
+
 fn access_files() -> Vec<(&'static str, &'static str)> {
     vec![
         ("admin_only", ACCESS_ADMIN_ONLY),
         ("editor_or_above", ACCESS_EDITOR_OR_ABOVE),
         ("authenticated", ACCESS_AUTHENTICATED),
         ("never", ACCESS_NEVER),
+        ("titled_mine", ACCESS_TITLED_MINE),
     ]
 }
 
@@ -424,4 +432,47 @@ async fn unreadable_reference_keeps_its_stored_id() {
         assert_eq!(selected[0]["id"], secret_id.as_str(), "{field}: {selected}");
         assert_eq!(selected[0]["unavailable"], true, "{field}: {selected}");
     }
+}
+
+// ── delete_confirm_judges_a_row_filter_against_the_item ─────────────────
+//
+// Regression: the delete confirmation page read a filter-table `delete` rule
+// as "allowed" for every item, offering a delete the service then refused.
+// It is judged against the item, as the delete judges it.
+
+#[tokio::test]
+async fn delete_confirm_judges_a_row_filter_against_the_item() {
+    let mut posts = make_restricted_posts_def();
+    posts.access.delete = Some(HookRef::new("access.titled_mine"));
+
+    let app = setup_app_with_access_files(
+        vec![make_users_def_with_role(), posts],
+        vec![],
+        &access_files(),
+    );
+    let editor_id = create_test_user_with_role(&app, "rows@test.com", "pw", "editor");
+    let cookie = make_auth_cookie(&app, &editor_id, "rows@test.com");
+    let mine = seed_post(&app, "Mine");
+    let theirs = seed_post(&app, "Theirs");
+
+    let confirm = |id: String| {
+        let router = app.router.clone();
+        let cookie = cookie.clone();
+
+        async move {
+            router
+                .oneshot(
+                    Request::get(format!("/admin/collections/posts/{id}/delete"))
+                        .header("Cookie", cookie)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+
+    assert_eq!(confirm(mine).await, StatusCode::OK);
+    assert_eq!(confirm(theirs).await, StatusCode::FORBIDDEN);
 }

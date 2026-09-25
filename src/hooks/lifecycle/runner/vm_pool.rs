@@ -18,9 +18,11 @@ use std::{
     time::Duration,
 };
 
+use crate::config::HooksConfig;
 use crate::core::lua_lease::LuaVmLease;
 use crate::hooks::lifecycle::types::{
-    InstructionCounter, MaxInstructions, check_execution_deadline,
+    ExecutionDeadline, ExecutionDeadlineGuard, InstructionCounter, MaxInstructions,
+    check_execution_deadline,
 };
 
 /// Builds a fresh, fully-initialized pool VM. The `usize` is the VM index
@@ -85,6 +87,23 @@ impl LuaVmLease for VmPool {
     /// the pool and can deadlock; use a `LocalLease` there instead.
     fn with_vm(&self, f: &mut dyn FnMut(&Lua) -> Result<()>) -> Result<()> {
         let guard = self.acquire()?;
+        f(&guard)
+    }
+
+    /// [`with_vm`](Self::with_vm) under an [`ExecutionDeadline`] of
+    /// `timeout_secs`, with the VM hook armed so even a CPU-bound callback
+    /// stops at it — the same bound a job handler's lease carries.
+    fn with_vm_until(
+        &self,
+        timeout_secs: u64,
+        f: &mut dyn FnMut(&Lua) -> Result<()>,
+    ) -> Result<()> {
+        let guard = self.acquire()?;
+        let _deadline =
+            ExecutionDeadlineGuard::install(&guard, ExecutionDeadline::new(timeout_secs));
+        let _hook = DeadlineHookGuard::arm(&guard)
+            .map_err(|e| anyhow!("failed to arm the Lua VM hook: {e}"))?;
+
         f(&guard)
     }
 }
@@ -240,6 +259,34 @@ pub(crate) fn reset_instruction_budget(vm: &Lua) {
     }
 }
 
+/// Apply the configured `[hooks]` resource limits to a fresh VM: the memory
+/// ceiling (`max_memory`) and the instruction budget (`max_instructions`),
+/// armed right away so the VM's own setup — definition files, `init.lua`,
+/// required modules — runs under it too. Shared by the init VM and every
+/// pool VM, so a runaway `init.lua` fails the boot with the limit's error
+/// instead of hanging it. Setup code re-arms the budget per file
+/// ([`reset_instruction_budget`]); a lease re-arms it at check-out.
+///
+/// # Errors
+///
+/// Returns an error if the memory limit or the VM hook cannot be installed.
+pub(crate) fn apply_vm_limits(lua: &Lua, hooks: &HooksConfig) -> Result<()> {
+    if hooks.max_memory > 0 {
+        // 32-bit overflow path falls back to 256 MiB (a sane VM memory ceiling)
+        // rather than usize::MAX, which would effectively disable the limit.
+        let memory_limit = usize::try_from(hooks.max_memory).unwrap_or(256 * 1024 * 1024);
+        lua.set_memory_limit(memory_limit)?;
+    }
+
+    lua.set_app_data(MaxInstructions(hooks.max_instructions));
+
+    if hooks.max_instructions > 0 {
+        set_vm_hook(lua).context("failed to arm the Lua instruction budget")?;
+    }
+
+    Ok(())
+}
+
 /// The lease's instruction budget; `0` means none is configured.
 fn instruction_budget(vm: &Lua) -> u64 {
     vm.app_data_ref::<MaxInstructions>().map_or(0, |m| m.0)
@@ -367,7 +414,6 @@ mod tests {
     use std::thread;
 
     use super::*;
-    use crate::hooks::lifecycle::types::{ExecutionDeadline, ExecutionDeadlineGuard};
 
     /// A pool whose factory builds bare VMs and counts how many it built.
     fn make_pool_counting(prewarm: usize, cap: usize) -> (Arc<VmPool>, Arc<AtomicUsize>) {
@@ -729,6 +775,34 @@ mod tests {
 
             assert_eq!(result, 5_000_050_000);
         }
+    }
+
+    /// Regression: a scheduler-run custom email provider ran on a pooled VM
+    /// with no deadline, so a hung `send` held the email queue slot (and the
+    /// MFA / reset mails behind it) far past the queue's timeout. The
+    /// deadline-bounded lease stops it — and leaves the VM deadline-free for
+    /// the next lease.
+    #[test]
+    fn a_deadline_bounded_lease_stops_its_callback() {
+        let pool = make_pool(1, 1);
+
+        let err = pool
+            .with_vm_until(0, &mut |lua| {
+                lua.load("while true do end").exec()?;
+                Ok(())
+            })
+            .expect_err("the callback must stop at the deadline");
+        assert!(err.to_string().contains("exceeded its timeout"), "{err}");
+
+        pool.with_vm(&mut |lua| {
+            assert!(
+                check_execution_deadline(lua).is_ok(),
+                "the deadline must not leak"
+            );
+            lua.load(LONG_LOOP).exec()?;
+            Ok(())
+        })
+        .expect("the next lease runs unbounded");
     }
 
     #[test]

@@ -6,7 +6,9 @@ use anyhow::Result;
 
 use crate::cli;
 
-use super::helpers::{SAVE_BLUEPRINT_HINT, blueprints_dir, count_lua_files};
+use super::helpers::{
+    SAVE_BLUEPRINT_HINT, blueprints_dir, count_lua_files, validate_blueprint_name,
+};
 use super::manifest::read_manifest;
 
 /// List all saved blueprints, printing a table to stdout.
@@ -66,8 +68,12 @@ pub fn list_blueprint_names() -> Result<Vec<String>> {
     for entry in fs::read_dir(&bp_dir)? {
         let entry = entry?;
 
-        if entry.path().is_dir() {
-            names.push(entry.file_name().to_string_lossy().to_string());
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        // Staging directories of an in-flight or interrupted `blueprint save`
+        // are dot-prefixed, which no valid blueprint name is.
+        if entry.path().is_dir() && validate_blueprint_name(&name).is_ok() {
+            names.push(name);
         }
     }
 
@@ -96,6 +102,7 @@ mod tests {
             fs::create_dir_all(bp_dir.join("alpha")).unwrap();
             fs::create_dir_all(bp_dir.join("beta")).unwrap();
             fs::write(bp_dir.join("not-a-dir.txt"), "ignored").unwrap();
+            fs::create_dir_all(bp_dir.join(".alpha.saving-abc")).unwrap();
 
             let names = list_blueprint_names().unwrap();
             assert_eq!(names, vec!["alpha", "beta"]);

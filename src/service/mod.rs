@@ -102,10 +102,18 @@ pub(crate) use email::{
     VerificationMailer, VerificationRecipient, resend_verification_email, send_reset_email,
     send_verification_email,
 };
-pub(crate) use events::{EventAccessInput, EventAccessMap, EventGate, event_op_str};
-pub(crate) use globals::{check_global_update_access, stored_global_fields_for_update_rules};
-pub use globals::{unpublish_global_document, update_global_document, update_global_in_conn};
-pub(crate) use helpers::{StateChange, run_after_change_hooks, run_state_before_change};
+pub(crate) use events::{
+    EventAccessInput, EventAccessMap, EventDelivery, EventGate, delivered_operations,
+};
+pub(crate) use globals::{
+    check_global_update_access, reject_global_filter, stored_global_fields_for_update_rules,
+};
+pub use globals::{
+    global_access_allowed, unpublish_global_document, update_global_document, update_global_in_conn,
+};
+pub(crate) use helpers::{
+    StateChange, access_admits_row, run_after_change_hooks, run_state_before_change,
+};
 pub use hooks::{
     FieldReadStrip, LuaReadHooks, LuaWriteHooks, ReadHooks, ReadStripArgs, RunnerReadHooks,
     RunnerWriteHooks, SnapshotLocales, WriteHooks,
@@ -120,18 +128,22 @@ pub use read::{
     unreadable_query_paths, validate_access_constraint_locales, validate_access_constraints,
     validate_user_filters,
 };
-pub(crate) use read::{join_child_readable, reject_unreadable_filter_fields};
-pub(crate) use versions::{find_stored_version, read_version_snapshot, unpublish_with_snapshot};
+pub(crate) use read::{join_child_readable, reject_unreadable_filter_fields, unpublished_global};
+pub(crate) use versions::{
+    find_stored_version, read_version_snapshot, require_unpublish_capability,
+    unpublish_with_snapshot,
+};
 pub use versions::{
     find_version_by_id, list_versions, restore_collection_version, restore_global_version,
 };
 #[cfg(test)]
 pub(crate) use write::update_document_in_conn;
 pub(crate) use write::{
-    DeleteEvent, PendingDraft, admit_create_input, admit_global_update_input, admit_update_input,
-    check_create_access, check_update_access, create_document_gated, delete_document_in_conn,
-    owned_file_keys, purge_document, read_delete_event, stored_fields_for_update_rules,
-    update_document_gated, update_many_single_in_conn, warn_orphaned_files,
+    DeleteEvent, PendingDraft, TrashedDoc, TrashedPurge, admit_create_input,
+    admit_global_update_input, admit_update_input, check_create_access, check_update_access,
+    create_document_gated, delete_document_in_conn, owned_file_keys, purge_document,
+    read_delete_event, reject_create_filter, stored_fields_for_update_rules, update_document_gated,
+    update_many_single_in_conn, warn_orphaned_files,
 };
 pub use write::{
     PurgeEvents, ValidateContext, create_document_in_conn, validate_document, validate_outcome,

@@ -66,15 +66,15 @@ crap = {}
 --- @field description? crap.LocalizedString Help text shown below the input.
 --- @field hidden? boolean Hide from the admin edit form only (default: false). The field's value is still returned in API responses (gRPC, Lua, MCP, REST). For full API stripping, use top-level `hidden` on `crap.FieldDefinition` instead.
 --- @field readonly? boolean Non-editable in admin (default: false).
---- @field width? crap.FieldWidth Field width: `"full"`, `"half"`, `"third"`, or an arbitrary CSS value (e.g. `"50%"`, `"200px"`).
+--- @field width? crap.FieldWidth Field width in the edit form: `"full"`, `"half"`, `"third"`, or an arbitrary CSS value (e.g. `"40%"`, `"20rem"`). Narrower fields share a row; they stack in a narrow container and in the sidebar.
 --- @field collapsed? boolean Start collapsed in admin UI — groups, collapsibles, array/block rows (default: true). Set `false` to start expanded.
 --- @field label_field? string Sub-field name to use as row label in admin (arrays/blocks). The value of this sub-field is shown as the row title. For blocks, per-block `label_field` on `BlockDefinition` takes priority.
 --- @field row_label? string Lua function ref for computed row labels (arrays/blocks). Receives the row data table, returns a display string or nil. Takes priority over `label_field`. Signature: `fun(row: table): string?`.
---- @field labels? crap.FieldAdminLabels Custom singular/plural labels for row items (e.g., `{ singular = "Slide", plural = "Slides" }` → "Add Slide" button).
---- @field position? string "main" or "sidebar".
+--- @field labels? crap.FieldAdminLabels Custom singular/plural labels (arrays/blocks): `singular` names one row ("Add Slide", untitled rows "Slide 1"); `plural` is the field header when `label` is not set.
+--- @field position? string "main" or "sidebar" — top-level fields only; a load error on a nested field.
 --- @field condition? string | crap.HookRef Lua function ref (string) for conditional show/hide — e.g. `"hooks.conditions.show_external_url"`. Inline condition tables are not accepted here; this field is the name of the function, not the condition itself. The referenced function receives form data and returns either: - a boolean (server-evaluated on each change via HTMX), or - a condition table (serialized to JSON, client-evaluated instantly). See `docs/src/admin-ui/guides/display-conditions.md`.
 --- @field step? string Step value for number inputs (default: "any"). Use "1" for integers, "0.01" for cents, etc.
---- @field rows? integer Number of rows for textarea fields (default: 8).
+--- @field rows? integer Visible rows: textarea (default 8) and JSON (default 12) fields; the editor height in lines for code fields.
 --- @field language? string Default language mode for code fields (default: "json"). Options: "json", "javascript", "html", "css", "python", "plain". When `languages` is non-empty, this is the initial value; the editor can switch to any other language in the allow-list at edit time.
 --- @field languages? string[] Allow-list of languages the editor can pick from at edit time for code fields. When set, the form renders a `<select>` next to the editor and persists the choice in a `<name>_lang` companion column. When empty/absent, the language is fixed to `language`.
 --- @field features? string[] Enabled toolbar features for richtext fields. When absent, all features are enabled. Options: "bold", "italic", "code", "link", "heading", "blockquote", "orderedList", "bulletList", "codeBlock", "horizontalRule".
@@ -176,8 +176,8 @@ crap = {}
 
 --- Custom singular/plural labels for row items (arrays/blocks).
 --- @class crap.FieldAdminLabels
---- @field singular? crap.LocalizedString Custom singular label for row items (e.g., "Slide" → "Add Slide" button).
---- @field plural? crap.LocalizedString Custom plural label for the field header.
+--- @field singular? crap.LocalizedString Custom singular label for row items (e.g., "Slide" → "Add Slide" button, untitled rows "Slide 1").
+--- @field plural? crap.LocalizedString Custom plural label: the field header when `admin.label` is not set.
 
 --- Complete definition of a single field within a collection.
 --- Use the per-type factory classes (`crap.fields.text(...)`,
@@ -643,7 +643,7 @@ function crap.fields.join(config) end
 --- password+bearer+cookie set.
 --- @class crap.Auth
 --- @field enabled? boolean Enable auth for this collection. Required true when `methods` is non-empty.
---- @field token_expiry? integer JWT lifetime in seconds (default: 7200).
+--- @field token_expiry? integer Session token lifetime in seconds. Unset, the global `[auth] token_expiry` applies.
 --- @field methods? crap.AuthMethod[] Ordered list of auth methods. Use `crap.auth.default_methods()` for the standard set or `crap.auth.with_defaults({...})` to extend it.
 
 --- Resize fit mode for image processing.
@@ -690,7 +690,7 @@ function crap.fields.join(config) end
 --- @field fields? crap.FieldDefinition[] Field definitions.
 --- @field admin? crap.AdminConfig Admin UI options.
 --- @field hooks? crap.Hooks Hook references.
---- @field auth? boolean | crap.Auth Enable authentication on this collection. `true` for defaults, or a config table with `strategies`/`token_expiry`/`disable_local`.
+--- @field auth? boolean | crap.Auth Enable authentication on this collection. `true` for defaults, or a config table with `enabled`/`token_expiry`/`methods`.
 --- @field upload? boolean | crap.CollectionUpload Enable file uploads. `true` for defaults, or a config table with `mime_types`/`max_file_size`/`image_sizes`.
 --- @field access? crap.Access Access control function refs.
 --- @field mcp? crap.McpCollectionConfig MCP tool description and options.
@@ -1034,7 +1034,7 @@ function crap.collections.create(collection, data, opts) end
 --- @field override_access? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass collection-level and field-level access for the current user.
 --- @field draft? boolean When `true` and the collection has `versions.drafts`, performs a version-only save (main table unchanged, only a draft version snapshot is created).
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass hooks.
---- @field unpublish? boolean When `true`, sets `_status` to `"draft"` (unpublishes). Data is not modified. Requires `versions` on the collection — errors otherwise.
+--- @field unpublish? boolean When `true`, sets `_status` to `"draft"` (unpublishes). Data is not modified. Requires `versions` with drafts on the collection — errors otherwise.
 --- @field events? boolean Emit a live-update event for the updated document (default: `true`). Set `false` for a quiet write.
 
 --- Update an existing document.
@@ -1311,7 +1311,7 @@ function crap.globals.config.list() end
 --- @class crap.GlobalGetOptions
 --- @field locale? string Locale code for localized fields. Nil = default locale.
 --- @field override_access? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass the global's read access function.
---- @field draft? boolean Include unpublished (draft) content (default: `false`). When the global has drafts enabled and has been unpublished, a normal read serves the last published snapshot; set this to `true` to read the draft instead.
+--- @field draft? boolean Include unpublished (draft) content (default: `false`). When the global has drafts enabled and has been unpublished, a normal read returns it empty (no field content); set this to `true` to read the draft instead.
 
 --- Optional options for `crap.globals.update`.
 --- @class crap.GlobalUpdateOptions
@@ -1412,7 +1412,7 @@ function crap.hooks.list(event) end
 crap.richtext = {}
 
 --- Register a custom `ProseMirror` node type.
---- @param name string  Node name (alphanumeric + underscores only).
+--- @param name string  Node name (lowercase letters, digits and underscores).
 --- @param spec crap.RichtextNodeSpec  Node specification.
 function crap.richtext.register_node(name, spec) end
 
@@ -1428,15 +1428,23 @@ function crap.richtext.register_node(name, spec) end
 --- @class crap.RichtextNodeSpec
 --- @field label? string Display label (defaults to `name`).
 --- @field inline? boolean Whether the node is inline (default: `false` = block).
---- @field attrs? crap.FieldDefinition[] Attribute definitions (scalar types only: text, number, textarea, select, radio, checkbox, date, email, json, code). Use `crap.fields.*` factory functions.
+--- @field attrs? crap.FieldDefinition[] Attribute definitions (scalar types only: text, number, textarea, select, radio, checkbox, date, email, json, code). Use `crap.fields.*` factory functions. Settings with no effect on a node attr (`unique`, `index`, `localized`, `has_many`, `required_when`, `access`, `before_change` / `after_change` / `after_read` hooks, `admin.condition`, `admin.position`, `mcp.description`) are refused.
 --- @field searchable_attrs? string[] Attr names to include in FTS search index.
 --- @field render? fun(attrs: table): string Server-side render function. Receives the node attrs as a Lua table; returns the rendered HTML string.
 
---- Render richtext content, replacing custom nodes with their rendered HTML.
---- Detects format automatically: starts with '{' = JSON, otherwise HTML.
---- @param content string  Richtext content (HTML or `ProseMirror` JSON).
+--- Render rich text to HTML, replacing custom nodes with their rendered HTML.
+--- Takes a field's value as read: a JSON-format field's document table, or
+--- the string of either format. A string's format is `opts.format` when
+--- given, otherwise detected — JSON only when it holds a document object
+--- (`"type": "doc"`), HTML otherwise. `nil` renders as `""`.
+--- @param content string|table|nil  Rich text: HTML, `ProseMirror` JSON text, or a JSON document table.
+--- @param opts crap.RichtextRenderOptions?  Rendering options.
 --- @return string # Rendered HTML output.
-function crap.richtext.render(content) end
+function crap.richtext.render(content, opts) end
+
+--- Options for `crap.richtext.render(content, opts)`.
+--- @class crap.RichtextRenderOptions
+--- @field format? "html" | "json" The content's storage format — the field's `admin.format`. Omit to detect it: a table, or a string holding a JSON document object (`"type": "doc"`), is JSON; any other string is HTML.
 
 
 -- ── crap.log ─────────────────────────────────────────────────
@@ -1764,17 +1772,16 @@ function crap.http.request(opts) end
 --- @field url string Request URL.
 --- @field method? string HTTP method (default: `"GET"`).
 --- @field headers? table<string, string> Request headers.
---- @field body? string Request body.
+--- @field body? string Request body — any Lua string, binary data included.
 --- @field timeout? number Request timeout in seconds; fractional values allowed (e.g. `0.5` = 500 ms). Default: `30`.
 
---- Response returned by `crap.http.request(opts)`. Both `LuaAnnotation`
---- (for `types/crap.lua`) and `Serialize` (for the runtime
---- `to_lua_value` conversion); the same Rust struct is the
---- single source of truth.
+--- Response returned by `crap.http.request(opts)`. The same Rust struct
+--- drives the `types/crap.lua` annotation and the runtime table
+--- ([`HttpResponse::into_lua`]).
 --- @class crap.HttpResponse
 --- @field status integer HTTP status code.
 --- @field headers table<string, string> Response headers.
---- @field body string Response body.
+--- @field body string Response body — the bytes as received (a Lua string holds binary data too).
 
 
 -- ── crap.email ───────────────────────────────────────────────
@@ -1821,8 +1828,15 @@ crap.storage = {}
 --- Register a custom storage backend's handler. **Init-only** — call from
 --- `init.lua` when `[upload] storage = "custom"`. Stores the handler as
 --- `crap._storage`; the custom backend delegates every operation to it.
---- @param handler { put: fun(key: string, data: string, content_type: string), get: (fun(key: string): string?), delete: fun(key: string), exists?: (fun(key: string): boolean) }  Storage handler. `put`/`get`/`delete` required; `exists` optional. `get` returns nil for a missing key.
+--- @param handler { put: fun(key: string, data: string, content_type: string), get: (fun(key: string): string?), delete: fun(key: string), exists?: (fun(key: string): boolean), stat?: (fun(key: string): crap.StorageStat?), get_range?: (fun(key: string, first: integer, last: integer): string?) }  Storage handler. `put`/`get`/`delete` required; `exists` optional. `get` returns nil for a missing key. `stat` and `get_range` are optional and come together: `stat` returns the object's metadata (nil when missing), `get_range` returns exactly bytes `first`..`last` (0-based, inclusive; nil when missing) — the serve route then streams bodies in ranged reads.
 function crap.storage.register(handler) end
+
+--- What a custom backend's `stat` handler returns for a stored object.
+--- Unknown keys are rejected.
+--- @class crap.StorageStat
+--- @field size integer Size of the stored object in bytes.
+--- @field etag? string The object's entity tag: an opaque version string that changes whenever the object's bytes change (surrounding quotes are stripped).
+--- @field last_modified? integer|string When the object last changed: Unix seconds, or an HTTP-date string (`"Sun, 06 Nov 1994 08:49:37 GMT"`).
 
 
 -- ── crap.config ──────────────────────────────────────────────

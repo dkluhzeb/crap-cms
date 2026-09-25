@@ -122,7 +122,7 @@ const PURGE_DOCUMENT: Chokepoint = Chokepoint {
           document's files and releases the references it holds — the raw \
           row delete does neither.",
     allowlist: &[(
-        "src/service/write/delete.rs",
+        "src/service/write/delete/purge.rs",
         "The chokepoint itself: `purge_document` issues the row delete",
     )],
 };
@@ -751,16 +751,17 @@ struct WriteShapes {
     execute: Regex,
     /// A write verb in SQL text.
     verb: Regex,
-    /// The job-row writes that run as autocommit statements on the
-    /// connection they are handed — the writes the scheduler issues outside
-    /// any transaction of its own, and therefore the ones that were reaching
-    /// the read pool.
-    job_write: Regex,
+    /// The job-row and account-state writes that run as autocommit
+    /// statements on the connection they are handed — the writes the
+    /// scheduler and the auth flows (MFA codes, TOTP enrollment, session
+    /// version bumps, account actions) issue outside any transaction of their
+    /// own, and therefore the ones that were reaching the read pool.
+    known_write: Regex,
 }
 
 impl WriteShapes {
     fn new() -> Self {
-        let job_writes = [
+        let known_writes = [
             "update_heartbeat",
             "fail_job",
             "mark_stale",
@@ -774,22 +775,43 @@ impl WriteShapes {
             "cancel_pending_job",
             "cancel_pending_jobs",
             "delete_pending_failed_jobs_matching",
+            "retry_failed_jobs",
             "recover_stale_jobs",
             "strip_finished_payload",
+            // Account state and credentials.
+            "set_mfa_code",
+            "verify_mfa_code",
+            "set_totp_secret",
+            "record_totp_success",
+            "reset_totp",
+            "bump_session_version",
+            "set_session_version",
+            "lock_user",
+            "unlock_user",
+            "mark_verified",
+            "mark_unverified",
+            "perform_account_action",
+            "apply_account_action",
+            "set_reset_token",
+            "clear_reset_token",
+            "set_verification_token",
+            "clear_verification_token",
+            "update_password",
+            "queue_email",
         ]
         .join("|");
 
         Self {
             execute: Regex::new(r"\.execute(_batch)?\(").expect("execute pattern compiles"),
             verb: Regex::new(r"\b(UPDATE|INSERT|DELETE)\b").expect("verb pattern compiles"),
-            job_write: Regex::new(&format!(r"\b({job_writes})\("))
-                .expect("job-write pattern compiles"),
+            known_write: Regex::new(&format!(r"\b({known_writes})\("))
+                .expect("known-write pattern compiles"),
         }
     }
 
     /// Whether the statement at `idx` writes without a transaction of its
     /// own: a raw `execute` whose SQL text (this statement or the next few)
-    /// carries a write verb, or one of the autocommit job-row writes.
+    /// carries a write verb, or one of the known autocommit writes.
     fn is_autocommit_write(&self, stmts: &[Statement], idx: usize) -> bool {
         let text = &stmts[idx].text;
 
@@ -799,7 +821,7 @@ impl WriteShapes {
             return stmts[idx..end].iter().any(|s| self.verb.is_match(&s.text));
         }
 
-        self.job_write.is_match(text)
+        self.known_write.is_match(text)
     }
 }
 
@@ -931,6 +953,20 @@ fn the_autocommit_write_scan_flags_a_read_checkout() {
     assert!(
         autocommit_writes_on_read_checkouts(&shapes, &in_transaction).is_empty(),
         "a write inside a transaction is the transaction guard's to flag"
+    );
+
+    // An account-state write is flagged the same way: an MFA code consumed
+    // on a read checkout.
+    let auth_write = "fn verify(pool: &DbPool) {\n    let conn = pool.get().unwrap();\n    \
+                      query::verify_mfa_code(&conn, slug, &attempt).unwrap();\n}\n";
+    let hits = autocommit_writes_on_read_checkouts(&shapes, auth_write);
+    assert_eq!(hits.len(), 1);
+    assert!(
+        autocommit_writes_on_read_checkouts(
+            &shapes,
+            &auth_write.replace("pool.get()", "pool.write()")
+        )
+        .is_empty()
     );
 
     let read_only = "fn count(pool: &DbPool) {\n    let conn = pool.get().unwrap();\n    \

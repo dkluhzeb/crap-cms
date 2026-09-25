@@ -63,7 +63,6 @@ impl Operation for Create {
                 .password(password.as_deref())
                 .locale_ctx(locale_ctx.as_ref())
                 .draft(draft)
-                .ui_locale(ctx.ui_locale.clone())
                 .trusted_upload_metadata(trusted_upload_metadata)
                 .build(),
         )

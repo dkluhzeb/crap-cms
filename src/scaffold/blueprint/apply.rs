@@ -9,7 +9,8 @@ use crate::cli;
 use crate::scaffold::init::LUA_API_TYPES;
 
 use super::helpers::{
-    SAVE_BLUEPRINT_HINT, blueprints_dir, copy_dir_recursive, validate_blueprint_name,
+    SAVE_BLUEPRINT_HINT, blueprints_dir, copy_dir_recursive, keep_all, report_skipped_links,
+    validate_blueprint_name,
 };
 use super::list::list_blueprint_names;
 use super::manifest::{check_blueprint_version, read_manifest};
@@ -49,13 +50,14 @@ pub fn blueprint_use(name: &str, dir: Option<PathBuf>) -> Result<()> {
     fs::create_dir_all(&target)
         .with_context(|| format!("Failed to create directory '{}'", target.display()))?;
 
-    copy_dir_recursive(&source, &target, &[]).with_context(|| {
+    let skipped_links = copy_dir_recursive(&source, &target, &keep_all).with_context(|| {
         format!(
             "Failed to copy blueprint '{}' to '{}'",
             name,
             target.display()
         )
     })?;
+    report_skipped_links(&skipped_links);
 
     // Regenerate types/crap.lua -- blueprints skip types/ during save.
     let types_dir = target.join("types");
@@ -212,7 +214,7 @@ mod tests {
 
         let target = tmp.path().join("new-project");
         fs::create_dir_all(&target).unwrap();
-        copy_dir_recursive(&bp_source, &target, &[]).unwrap();
+        copy_dir_recursive(&bp_source, &target, &keep_all).unwrap();
 
         let types_dir = target.join("types");
         fs::create_dir_all(&types_dir).unwrap();

@@ -22,10 +22,10 @@ pub use sign::{sign_upload_path, signed_upload_url, verify_upload_sig};
 
 pub use crate::config::UploadConfig;
 pub use backend::{SharedStorage, StorageBackend, StorageNotFound};
-pub use custom::CustomStorage;
+pub use custom::{CustomStorage, StorageStat};
 pub use factory::{create_storage, create_storage_with_lease};
-pub use local::LocalStorage;
-pub use range::{ByteRange, RangedObject, RangedObjectBuilder};
+pub use local::{LocalStorage, is_staging_file_name};
+pub use range::{ByteRange, ObjectMeta, RangedObject, RangedObjectBuilder, slice_locally};
 
 /// URL path prefix of the built-in upload-serve proxy route.
 ///

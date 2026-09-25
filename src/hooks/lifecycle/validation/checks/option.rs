@@ -1,6 +1,9 @@
 use serde_json::Value;
 
-use crate::core::{FieldDefinition, FieldType, validate::FieldError};
+use crate::{
+    core::{FieldDefinition, FieldType, validate::FieldError},
+    hooks::lifecycle::validation::{richtext_attrs::NodeAttrSite, stored::StoredDocument},
+};
 
 use super::shared::{decode_element_list, element_display};
 
@@ -11,48 +14,10 @@ fn declares(field: &FieldDefinition, value: &str) -> bool {
     field.options.is_empty() || field.options.iter().any(|opt| opt.value == value)
 }
 
-/// Whether a submitted value passes: one the field still declares, or one the
-/// stored document already holds.
-///
-/// Retiring an option must not make every later save of a document that carries
-/// it fail — an editor fixing an unrelated typo cannot be asked to pick a new
-/// one. A value the document does not already hold is still rejected, so a
-/// retired option can never be newly chosen.
-fn accepted(field: &FieldDefinition, held: &[String], value: &str) -> bool {
-    declares(field, value) || held.iter().any(|h| h == value)
-}
-
-/// Every value a select/radio submission carries, whatever its encoding: the
-/// whole list for a `has_many` field, the single value otherwise.
-fn submitted_values(field: &FieldDefinition, value: Option<&Value>) -> Vec<Value> {
-    if field.has_many {
-        return decode_element_list(value).unwrap_or_default();
-    }
-
-    value.into_iter().cloned().collect()
-}
-
-/// The values a select/radio submission carries that the field no longer
-/// declares — empty when every value is still declared, which is the common
-/// case. Lets a caller decide whether reading what the document already holds
-/// is worth a query at all.
-pub(crate) fn undeclared_values(field: &FieldDefinition, value: Option<&Value>) -> Vec<String> {
-    if field.field_type != FieldType::Select && field.field_type != FieldType::Radio {
-        return Vec::new();
-    }
-
-    submitted_values(field, value)
-        .iter()
-        .filter_map(Value::as_str)
-        .filter(|s| !declares(field, s))
-        .map(ToString::to_string)
-        .collect()
-}
-
-/// The values a stored select/radio column holds: its whole list for a
-/// `has_many` field, the single stored value otherwise. A null or
-/// wrongly-shaped stored value holds nothing.
-pub(crate) fn held_values(field: &FieldDefinition, stored: &Value) -> Vec<String> {
+/// The values a stored select/radio value holds: its whole list for a
+/// `has_many` field, the single value otherwise. A null or wrongly-shaped
+/// stored value holds nothing.
+fn held_values(field: &FieldDefinition, stored: &Value) -> Vec<String> {
     if field.has_many {
         return decode_element_list(Some(stored))
             .unwrap_or_default()
@@ -69,22 +34,59 @@ pub(crate) fn held_values(field: &FieldDefinition, stored: &Value) -> Vec<String
         .collect()
 }
 
+/// Whether a submitted value passes: one the field still declares, or one the
+/// edited document already holds in this very position.
+///
+/// Retiring an option must not make every later save of a document that carries
+/// it fail — an editor fixing an unrelated typo cannot be asked to pick a new
+/// one. A value the document does not already hold is still rejected, so a
+/// retired option can never be newly chosen. The document is read only for a
+/// value the field no longer declares, so an ordinary save costs no query.
+fn accepted(check: &OptionCheck<'_>, value: &str) -> bool {
+    let field = check.field;
+
+    if declares(field, value) {
+        return true;
+    }
+
+    let holds_value = |held: &Value| held_values(field, held).iter().any(|h| h == value);
+
+    match check.holder {
+        Holder::Nothing => false,
+        Holder::Field(stored) => stored.holds(field, holds_value),
+        Holder::NodeAttr(site) => site.holds(&field.name, holds_value),
+    }
+}
+
+/// Where the value under check may already be held.
+#[derive(Clone, Copy)]
+enum Holder<'a> {
+    /// Nowhere: the value is judged on the declared options alone.
+    Nothing,
+    /// The edited document, in the field itself.
+    Field(&'a StoredDocument<'a>),
+    /// The edited document, as this attr of a custom rich text node.
+    NodeAttr(&'a NodeAttrSite<'a>),
+}
+
 /// A select/radio value under validation.
 ///
-/// [`held`](Self::held) attaches the values the stored document already carries
-/// for the field; without it the value is judged on the declared options alone,
-/// which is what a create wants and all a value with no column of its own (a
-/// sub-field inside an array/blocks row) can be judged on.
-pub(crate) struct OptionCheck<'a> {
+/// [`stored`](Self::stored) attaches the edited document, whose own values stay
+/// acceptable unchanged at whatever depth the field sits — top level, a group,
+/// an array or blocks row, or JSON nested inside a row;
+/// [`node_attr`](Self::node_attr) does the same for an attr of a custom rich
+/// text node. Without either the value is judged on the declared options alone,
+/// which is what a create wants.
+pub(in crate::hooks::lifecycle::validation) struct OptionCheck<'a> {
     field: &'a FieldDefinition,
     data_key: &'a str,
     value: Option<&'a Value>,
     is_empty: bool,
-    held: &'a [String],
+    holder: Holder<'a>,
 }
 
 impl<'a> OptionCheck<'a> {
-    pub(crate) fn new(
+    pub(in crate::hooks::lifecycle::validation) fn new(
         field: &'a FieldDefinition,
         data_key: &'a str,
         value: Option<&'a Value>,
@@ -95,14 +97,31 @@ impl<'a> OptionCheck<'a> {
             data_key,
             value,
             is_empty,
-            held: &[],
+            holder: Holder::Nothing,
         }
     }
 
-    /// The values the stored row already holds for this field.
+    /// The document the write lands on.
     #[must_use]
-    pub(crate) fn held(mut self, held: &'a [String]) -> Self {
-        self.held = held;
+    pub(in crate::hooks::lifecycle::validation) fn stored(
+        mut self,
+        stored: &'a StoredDocument<'a>,
+    ) -> Self {
+        self.holder = Holder::Field(stored);
+
+        self
+    }
+
+    /// Where the node attr under check sits in the edited document; `None`
+    /// when there is no edited document.
+    #[must_use]
+    pub(in crate::hooks::lifecycle::validation) fn node_attr(
+        mut self,
+        site: Option<&'a NodeAttrSite<'a>>,
+    ) -> Self {
+        if let Some(site) = site {
+            self.holder = Holder::NodeAttr(site);
+        }
 
         self
     }
@@ -111,7 +130,10 @@ impl<'a> OptionCheck<'a> {
 /// Validate that Select/Radio value exists in the options list. A present
 /// value of the wrong shape (non-string single value, undecodable `has_many`
 /// list) is an invalid option — never a silent pass.
-pub(crate) fn check_option_valid(check: &OptionCheck<'_>, errors: &mut Vec<FieldError>) {
+pub(in crate::hooks::lifecycle::validation) fn check_option_valid(
+    check: &OptionCheck<'_>,
+    errors: &mut Vec<FieldError>,
+) {
     let field = check.field;
 
     if (field.field_type != FieldType::Select && field.field_type != FieldType::Radio)
@@ -127,7 +149,7 @@ pub(crate) fn check_option_valid(check: &OptionCheck<'_>, errors: &mut Vec<Field
 
     let valid = matches!(
         check.value,
-        Some(Value::String(s)) if accepted(field, check.held, s)
+        Some(Value::String(s)) if accepted(check, s)
     );
     if !valid {
         errors.push(
@@ -163,7 +185,7 @@ fn check_has_many_options(check: &OptionCheck<'_>, errors: &mut Vec<FieldError>)
     };
 
     for v in &values {
-        let valid = v.as_str().is_some_and(|s| accepted(field, check.held, s));
+        let valid = v.as_str().is_some_and(|s| accepted(check, s));
 
         if !valid {
             errors.push(

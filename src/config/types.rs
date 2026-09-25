@@ -196,49 +196,70 @@ impl CrapConfig {
         self.validate().context("Invalid configuration")
     }
 
+    /// Read and parse `crap.toml` (or the defaults) — env substitution and
+    /// queue defaults applied — WITHOUT validating it or resolving the auth
+    /// secret. For tools that only inspect what the config names (the
+    /// database path, the log directory) and must not write into the project:
+    /// resolving the secret generates and persists one when none exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file can't be read, TOML parsing fails, or env
+    /// substitution references an unset variable without a default.
+    pub fn parse(config_dir: &Path) -> Result<Self> {
+        let config_path = config_dir.join("crap.toml");
+
+        let mut config = if config_path.exists() {
+            Self::parse_file(&config_path)?
+        } else {
+            CrapConfig::default()
+        };
+
+        // Apply framework defaults for queues the operator didn't
+        // set explicitly. See `JobsConfig::apply_queue_defaults`.
+        config.jobs.apply_queue_defaults();
+
+        Ok(config)
+    }
+
+    /// Parse one `crap.toml` with env substitution.
+    fn parse_file(config_path: &Path) -> Result<Self> {
+        let contents = fs::read_to_string(config_path)
+            .with_context(|| format!("Failed to read {}", config_path.display()))?;
+        // Parse TOML first (strips comments), then substitute env vars only in string values.
+        // This avoids errors from `${VAR}` patterns in comments.
+        let mut value: toml::Value = toml::from_str(&contents)
+            .with_context(|| format!("Failed to parse {}", config_path.display()))?;
+
+        substitute_in_value(&mut value)?;
+
+        value
+            .try_into()
+            .with_context(|| format!("Failed to deserialize {}", config_path.display()))
+    }
+
     /// Read `crap.toml` (or the defaults), validating unless `validate` is
     /// false. Validation runs before the secret is resolved, so an invalid
     /// config never gets a generated secret written for it on a normal load.
     fn read(config_dir: &Path, validate: bool) -> Result<Self> {
         let config_path = config_dir.join("crap.toml");
+        let mut config = Self::parse(config_dir)?;
 
         if config_path.exists() {
-            let contents = fs::read_to_string(&config_path)
-                .with_context(|| format!("Failed to read {}", config_path.display()))?;
-            // Parse TOML first (strips comments), then substitute env vars only in string values.
-            // This avoids errors from `${VAR}` patterns in comments.
-            let mut value: toml::Value = toml::from_str(&contents)
-                .with_context(|| format!("Failed to parse {}", config_path.display()))?;
-
-            substitute_in_value(&mut value)?;
-
-            let mut config: CrapConfig = value
-                .try_into()
-                .with_context(|| format!("Failed to deserialize {}", config_path.display()))?;
-
-            // Apply framework defaults for queues the operator didn't
-            // set explicitly. See `JobsConfig::apply_queue_defaults`.
-            config.jobs.apply_queue_defaults();
-
             if validate {
                 config.check_loaded()?;
             }
 
             warn_on_loose_permissions(&config_path, &config);
-
-            // One resolved secret for every consumer (JWT, crypto, TOTP
-            // sealing, signed URLs) — see `AuthConfig::resolve_secret`.
-            config.auth.resolve_secret(config_dir)?;
-
-            Ok(config)
         } else {
             info!("No crap.toml found, using defaults");
-
-            let mut config = CrapConfig::default();
-            config.jobs.apply_queue_defaults();
-            config.auth.resolve_secret(config_dir)?;
-            Ok(config)
         }
+
+        // One resolved secret for every consumer (JWT, crypto, TOTP
+        // sealing, signed URLs) — see `AuthConfig::resolve_secret`.
+        config.auth.resolve_secret(config_dir)?;
+
+        Ok(config)
     }
 
     /// Put a loaded configuration into service: validate it, then install the
@@ -326,6 +347,7 @@ impl CrapConfig {
         self.validate_pagination()?;
         self.validate_depth()?;
         self.validate_jobs()?;
+        self.hooks.validate_io_roots()?;
         self.validate_auth()?;
         self.validate_email()?;
         self.validate_logging()?;

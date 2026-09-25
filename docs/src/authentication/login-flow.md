@@ -32,7 +32,7 @@ Two bounds apply to an admin session:
 - **`token_expiry`** (default 2h) — the lifetime of the current cookie. Shortly before it elapses the admin UI's session dialog offers to stay signed in and calls `POST /admin/api/session-refresh`, which reissues the cookie for another `token_expiry` (sliding refresh). Refresh only succeeds for a still-valid session **established by the session cookie**: a request authenticated by a bearer token or a [custom strategy](custom-strategies.md) has no cookie session to extend and is refused with `401` — a strategy credential is never exchanged for a session token.
 - **`[auth] session_absolute_max_age`** (default 30d, `0` to disable) — a hard ceiling measured from the original login (`auth_time` claim), regardless of how many refreshes happened. After it, refresh is refused and the user must log in again. Values above 30 days log a startup warning.
 
-Changing the password, locking the account, un-verifying it, or resetting its TOTP enrollment (`crap-cms user reset-totp`) bumps the user's `session_version`, which invalidates every existing cookie and token immediately.
+Changing the password, locking the account, un-verifying it, moving it to the trash, resetting its TOTP enrollment (`crap-cms user reset-totp`), or **logging out** bumps the user's `session_version`, which invalidates every existing cookie and token of that user immediately — on every device and surface, not just the browser that logged out. Restoring a trashed account does not bring its old tokens back; the user logs in again. A bump also abandons every [bulk run the user queued](../grpc-api/rpcs.md#queued-mode-queue--true) that has not started yet, so an ordinary sign-out in one browser drops the user's pending queued runs from any surface.
 
 ## Security
 
@@ -84,6 +84,8 @@ All admin UI form submissions and HTMX requests are protected by a double-submit
 - Mismatched or missing tokens return 403 Forbidden
 
 This is handled automatically by JavaScript included in the admin templates.
+
+The [auth callback routes](custom-strategies.md#auth-callbacks-oauth2--oidc) (`/admin/auth/callback/...`) are the one exemption: an identity provider answering with `response_mode=form_post` makes the browser `POST` to them cross-site, which never carries the `SameSite=Strict` token cookie. Their login-CSRF defense is the OAuth `state` parameter, which the callback hook must verify.
 
 ### Timing Safety
 

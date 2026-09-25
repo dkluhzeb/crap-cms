@@ -3,7 +3,7 @@
 use crate::{
     core::{CollectionDefinition, DocumentFields},
     db::{AccessResult, LocaleContext},
-    hooks::{AccessCheckInput, HookContext, ValidationCtx},
+    hooks::{AccessCheckInput, ValidationCtx},
     service::{
         AfterChangeInput, Gated, PersistOptions, ServiceContext, WriteInput, WriteResult,
         persist_create, run_after_change_hooks,
@@ -36,7 +36,6 @@ pub(crate) fn check_create_access(
     def: &CollectionDefinition,
     data: &DocumentFields,
     locale: Option<&str>,
-    ui_locale: Option<&str>,
 ) -> Result<()> {
     let access = write_hooks.check_access(
         &AccessCheckInput::builder("create", ctx.slug)
@@ -44,7 +43,7 @@ pub(crate) fn check_create_access(
             .user(ctx.user)
             .data(Some(data))
             .locale(locale)
-            .ui_locale(ui_locale)
+            .ui_locale(ctx.ui_locale.as_deref())
             .build(),
     )?;
 
@@ -53,13 +52,23 @@ pub(crate) fn check_create_access(
     }
 
     if matches!(access, AccessResult::Constrained(_)) {
-        return Err(ServiceError::HookError(format!(
-            "Access hook for '{}.create' returned a filter table; filter-table returns are only valid for update/delete/undelete/unpublish (where a target row exists). Return true/false based on the incoming 'data' in ctx.",
-            ctx.slug
-        )));
+        return Err(reject_create_filter(ctx.slug));
     }
 
     Ok(())
+}
+
+/// The error a collection's `create` access hook raises by returning a filter
+/// table: there is no target row to match it against (see
+/// [`check_create_access`]), so every surface treats it as a configuration
+/// error.
+#[must_use]
+pub(crate) fn reject_create_filter(slug: &str) -> ServiceError {
+    ServiceError::HookError(format!(
+        "Access hook for '{slug}.create' returned a filter table; filter-table returns are only \
+         valid for update/delete/undelete/unpublish (where a target row exists). Return \
+         true/false based on the incoming 'data' in ctx."
+    ))
 }
 
 /// Create a document on an existing connection/transaction.
@@ -102,7 +111,6 @@ pub(crate) fn create_document_gated(
         def,
         &input.data,
         input.locale_ctx.map(LocaleContext::access_locale),
-        input.ui_locale.as_deref(),
     )?;
 
     // Authoritative password-policy enforcement — one chokepoint for every
@@ -119,7 +127,7 @@ pub(crate) fn create_document_gated(
     )?;
 
     let is_draft = input.draft && def.has_drafts();
-    let ui_locale = input.ui_locale.as_deref();
+    let ui_locale = ctx.ui_locale.as_deref();
 
     // Strip write-denied fields before hook processing (data-aware: each
     // `access.create` rule sees `ctx.data` = its level and `ctx.document` = the
@@ -132,12 +140,11 @@ pub(crate) fn create_document_gated(
         input.locale_ctx.map(LocaleContext::access_locale),
     );
 
-    let hook_ctx = HookContext::builder(ctx.slug, "create")
+    let hook_ctx = ctx
+        .hook_context("create")
         .data(input.data.clone())
         .locale(input.locale_ctx.map(LocaleContext::access_locale))
         .draft(is_draft)
-        .user(ctx.user)
-        .ui_locale(ui_locale)
         .build();
 
     let val_ctx = ValidationCtx::builder(conn, ctx.slug)
@@ -146,7 +153,7 @@ pub(crate) fn create_document_gated(
         .soft_delete(def.soft_delete)
         .collection_required_locales(def.required_locales.as_ref())
         .user(ctx.user)
-        .ui_locale(input.ui_locale.as_deref())
+        .ui_locale(ui_locale)
         .build();
 
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
@@ -220,7 +227,7 @@ mod tests {
             SharedEventTransport, ValidationError, event::InProcessEventBus,
         },
         db::{DbConnection, DbPool, Filter, FilterClause, FilterOp, migrate, pool},
-        hooks::HookEvent,
+        hooks::{HookContext, HookEvent},
         service::{EventQueue, FieldReadStrip, create_document, update_document_gated},
     };
 
@@ -286,6 +293,125 @@ mod tests {
         ) {
             level.remove("notes");
         }
+    }
+
+    /// Records the UI locale every stage of a write is handed — the access
+    /// check, the before-write chain and its validator, the after-change
+    /// hooks — and otherwise runs nothing.
+    #[derive(Default)]
+    struct UiLocaleSpy {
+        seen: RefCell<Vec<(&'static str, Option<String>)>>,
+    }
+
+    impl UiLocaleSpy {
+        fn record(&self, stage: &'static str, ui_locale: Option<&str>) {
+            self.seen
+                .borrow_mut()
+                .push((stage, ui_locale.map(str::to_string)));
+        }
+    }
+
+    impl WriteHooks for UiLocaleSpy {
+        fn run_before_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            ctx: HookContext,
+            val_ctx: &ValidationCtx,
+        ) -> AnyResult<HookContext> {
+            self.record("before", ctx.ui_locale.as_deref());
+            self.record("validate", val_ctx.ui_locale);
+
+            Ok(ctx)
+        }
+
+        fn run_after_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> AnyResult<HookContext> {
+            self.record("after", ctx.ui_locale.as_deref());
+
+            Ok(ctx)
+        }
+
+        fn run_hooks_with_conn(
+            &self,
+            _hooks: &Hooks,
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> AnyResult<HookContext> {
+            Ok(ctx)
+        }
+
+        fn check_access(&self, input: &AccessCheckInput<'_>) -> AnyResult<AccessResult> {
+            self.record("access", input.ui_locale);
+
+            Ok(AccessResult::Allowed)
+        }
+
+        fn validate_fields(
+            &self,
+            _fields: &[FieldDefinition],
+            _data: &DocumentFields,
+            _ctx: &ValidationCtx,
+        ) -> std::result::Result<(), ValidationError> {
+            Ok(())
+        }
+    }
+
+    impl FieldReadStrip for UiLocaleSpy {
+        fn strip_read_access_map(
+            &self,
+            _fields: &[FieldDefinition],
+            _level: &mut Map<String, Value>,
+            _document: &DocumentFields,
+            _collection: &str,
+            _user: Option<&Document>,
+            _locale: Option<&str>,
+        ) {
+        }
+    }
+
+    /// The context's UI locale is the one every stage of a create and an
+    /// update sees — the write input carries none of its own that could
+    /// disagree with it.
+    #[test]
+    fn every_write_stage_sees_the_context_ui_locale() {
+        let (_tmp, db_pool, def) = migrated_posts();
+        let conn = db_pool.get().unwrap();
+        let hooks = UiLocaleSpy::default();
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .write_hooks(&hooks)
+            .ui_locale(Some("de".to_string()))
+            .build();
+
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hallo"));
+
+        let ((created, _), _) =
+            create_document_gated(&ctx, WriteInput::builder(data).build()).unwrap();
+
+        let mut patch = DocumentFields::new();
+        patch.insert("title".to_string(), json!("Neu"));
+        update_document_gated(&ctx, &created.id, WriteInput::builder(patch).build()).unwrap();
+
+        let seen = hooks.seen.borrow();
+        let stages: Vec<&str> = seen.iter().map(|(stage, _)| *stage).collect();
+
+        for stage in ["access", "before", "validate", "after"] {
+            assert!(stages.contains(&stage), "{stage} never ran: {seen:?}");
+        }
+        assert!(
+            seen.iter()
+                .all(|(_, locale)| locale.as_deref() == Some("de")),
+            "{seen:?}"
+        );
     }
 
     /// A migrated `posts` collection whose `owner` is API-hidden — stripped

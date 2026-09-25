@@ -62,7 +62,6 @@ crap.collections.define("inquiries", {
       name = "metadata",
       admin = {
         description = "Tracking data (UTM params, referrer, etc.)",
-        language = "json",
       },
     }),
   },

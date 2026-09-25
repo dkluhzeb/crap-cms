@@ -84,16 +84,19 @@ local job_id = crap.email.queue({
 
 Register a custom email provider. Only used when `[email] provider = "custom"` in `crap.toml`. **Init-only** — call it from `init.lua` (or a file it requires); calling it from a hook or job at runtime raises an error. The handler table is strict: `send` is the only accepted key.
 
-The `handler.send(opts)` function receives `opts.to`, `opts.subject`, `opts.html`, and (when present) `opts.text`. It should send the message and return normally on success, or **raise an error** on failure — the queued-email job is then retried with backoff. `send` runs in a pooled Lua VM (`init.lua` runs once per VM), so keep it stateless: do the work over `crap.http` and read secrets from `crap.env`.
+The `handler.send(opts)` function receives `opts.to`, `opts.subject`, `opts.html`, and (when present) `opts.text`. It should send the message and return normally on success, or **raise an error** on failure — the queued-email job is then retried with backoff. `send` runs in a pooled Lua VM (`init.lua` runs once per VM), so keep it stateless: do the work over `crap.http` and read secrets from `crap.env`. A queued email's `send` runs under the email queue's `timeout` (`[jobs.queues.email]`): a call still running at the deadline — a slow request included — is stopped with an error and the job retried, so a hung provider cannot hold the queue.
 
 ```lua
 crap.email.register({
     send = function(opts)
-        crap.http.request({
+        -- crap.env only serves CRAP_* / LUA_* names.
+        local key = assert(crap.env.get("CRAP_SENDGRID_KEY"), "CRAP_SENDGRID_KEY is not set")
+
+        local resp = crap.http.request({
             method = "POST",
             url = "https://api.sendgrid.com/v3/mail/send",
             headers = {
-                Authorization = "Bearer " .. crap.env.get("SENDGRID_KEY"),
+                Authorization = "Bearer " .. key,
                 ["Content-Type"] = "application/json",
             },
             body = crap.json.encode({
@@ -103,6 +106,12 @@ crap.email.register({
                 content = {{ type = "text/html", value = opts.html }},
             }),
         })
+
+        -- crap.http returns non-2xx responses normally: raise, so the queued
+        -- job is retried instead of recorded as sent.
+        if resp.status >= 300 then
+            error("SendGrid rejected the email: " .. resp.status .. " " .. resp.body)
+        end
     end,
 })
 ```
@@ -112,7 +121,7 @@ crap.email.register({
 | Provider | Config | Description |
 |----------|--------|-------------|
 | `smtp` | `smtp_host`, `smtp_port`, etc. | Default. Standard SMTP via `lettre`. |
-| `webhook` | `webhook_url`, `webhook_headers` | HTTP POST with JSON body. Works with SendGrid, Mailgun, Resend. |
+| `webhook` | `webhook_url`, `webhook_headers` | HTTP POST with JSON body. Works with SendGrid, Mailgun, Resend. Any non-2xx answer — a redirect included, redirects are not followed — fails the send. |
 | `log` | (none) | Logs emails to tracing. For development/testing. |
 | `custom` | (none) | Delegates to Lua via `crap.email.register()`. |
 

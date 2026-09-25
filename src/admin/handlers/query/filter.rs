@@ -116,8 +116,6 @@ pub(super) fn parse_or_key(key: &str) -> Option<(usize, usize, String, String)> 
 /// field, system column, unknown operator — is a hard error so the list page
 /// can return 400 instead of silently rendering wrong/unfiltered results.
 fn parse_one_entry(part: &str, valid_cols: &HashSet<String>) -> Result<Option<ParsedRow>, String> {
-    let known_cols = ["id", "created_at", "updated_at"];
-
     let Some((key, value)) = part.split_once('=') else {
         let key = url_decode(part);
         if key.starts_with("where[") {
@@ -160,8 +158,9 @@ fn parse_one_entry(part: &str, valid_cols: &HashSet<String>) -> Result<Option<Pa
     // group sub-field column (`seo__title`) exactly like the sort path and the
     // service layer do — instead of a flat top-level-only scan that rejected
     // nested fields (and accepted array/blocks columns the service then rejected).
-    let field_valid = known_cols.contains(&field.as_str()) || valid_cols.contains(&field);
-    if !field_valid {
+    // The set already holds `id` and — only on a collection with timestamps —
+    // `created_at`/`updated_at`.
+    if !valid_cols.contains(&field) {
         return Err(format!("Unknown filter field '{field}'"));
     }
 
@@ -527,6 +526,36 @@ mod tests {
         let result =
             parse_where_params("where[created_at][greater_than]=2024-01-01", &def).unwrap();
         assert_eq!(result.len(), 1);
+
+        let by_id = parse_where_params("where[id][equals]=d1", &def).unwrap();
+        assert_eq!(by_id.len(), 1);
+    }
+
+    /// Regression: a collection defined with `timestamps = false` has no
+    /// timestamp columns. Filtering on one passed the admin parser and failed
+    /// the query instead of answering as an unknown field.
+    #[test]
+    fn parse_where_timestamps_need_timestamps() {
+        let mut def = test_def();
+        def.timestamps = false;
+
+        for key in ["created_at", "updated_at"] {
+            let err = parse_where_params(&format!("where[{key}][exists]="), &def)
+                .unwrap_err()
+                .to_string();
+
+            assert!(
+                err.contains(&format!("Unknown filter field '{key}'")),
+                "{key}: {err}"
+            );
+        }
+
+        assert_eq!(
+            parse_where_params("where[id][equals]=d1", &def)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]

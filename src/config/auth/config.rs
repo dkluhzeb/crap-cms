@@ -6,6 +6,10 @@ use crate::{config::parsing::serde_duration, core::JwtSecret};
 
 use super::password_policy::PasswordPolicy;
 
+/// The built-in session token lifetime (2 hours) — `[auth] token_expiry`
+/// when unset.
+pub const DEFAULT_TOKEN_EXPIRY: u64 = 7200;
+
 /// Controls the `SameSite` attribute of the `crap_session` admin cookie.
 ///
 /// - `Lax` (default) -- cookie sent on top-level cross-site navigations (e.g. following a
@@ -142,7 +146,7 @@ impl Default for AuthConfig {
     fn default() -> Self {
         Self {
             secret: JwtSecret::new(""),
-            token_expiry: 7200,
+            token_expiry: DEFAULT_TOKEN_EXPIRY,
             max_login_attempts: 5,
             max_ip_login_attempts: 20,
             login_lockout_seconds: 300,

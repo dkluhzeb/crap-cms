@@ -41,6 +41,24 @@ a starting template.
 Add to `<config_dir>/init.lua`:
 
 ```lua
+-- Every attr value is author input: escape it before it goes into HTML.
+local function html_escape(s)
+  return (tostring(s or ""):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+    :gsub('"', "&quot;"):gsub("'", "&#39;"))
+end
+
+-- Only relative links and http(s)/mailto/tel URLs; anything else (javascript:,
+-- data:, …) becomes "#". Browsers ignore whitespace/control characters in a
+-- scheme, so drop them before reading it.
+local function safe_url(url)
+  url = tostring(url or ""):gsub("[%c%s]", "")
+  local scheme = url:match("^([%a][%w+.-]*):")
+  if scheme and not ({ http = true, https = true, mailto = true, tel = true })[scheme:lower()] then
+    return "#"
+  end
+  return url
+end
+
 -- Block-level: Call to Action button
 crap.richtext.register_node("cta", {
   label = "Call to Action",
@@ -81,14 +99,14 @@ crap.richtext.register_node("cta", {
   render = function(attrs)
     local style = ""
     if attrs.padding and attrs.padding ~= "" then
-      style = string.format(' style="padding: %spx 0"', tostring(attrs.padding))
+      style = string.format(' style="padding: %spx 0"', html_escape(attrs.padding))
     end
     return string.format(
       '<a href="%s" class="btn btn--%s"%s>%s</a>',
-      attrs.url or "#",
-      attrs.style or "primary",
+      html_escape(safe_url(attrs.url)),
+      html_escape(attrs.style or "primary"),
       style,
-      attrs.text or ""
+      html_escape(attrs.text)
     )
   end,
 })
@@ -206,7 +224,21 @@ visual picker, drag-and-drop sub-editor, etc.), you'd need to fork
 `<crap-richtext>` itself. For most "extra typed data on a
 content node" cases, the auto-form is exactly what you want.
 
-## Step 2 — restart
+## Step 2 — enable it on a field
+
+A node appears only in fields that list it in `admin.nodes`:
+
+```lua
+crap.fields.richtext({
+  name = "body",
+  admin = { format = "json", nodes = { "cta" } },
+})
+```
+
+Every name in `admin.nodes` must be registered — an unregistered name (a typo,
+or a registration file `init.lua` never loads) fails to boot.
+
+## Step 2b — restart
 
 Lua loads at startup. Restart crap-cms.
 
@@ -219,9 +251,10 @@ blockquote, etc.). Insert one; the admin renders an editable form
 for `text`, `url`, `style`, `padding` based on the `attrs` you
 declared.
 
-When the document is rendered (server-side, via the richtext field's
-`{{render}}` helper), your `render` function fires for every CTA
-node and returns the HTML you specified.
+When the document is rendered server-side — a hook calling
+`crap.richtext.render(value)` on the field's value (the document table of a
+`format = "json"` field, or the stored string) — your `render` function fires
+for every CTA node and returns the HTML you specified.
 
 ## Inline nodes
 
@@ -238,7 +271,7 @@ crap.richtext.register_node("mention", {
   },
   searchable_attrs = { "name" },
   render = function(attrs)
-    return string.format('<span class="mention">@%s</span>', attrs.name or "?")
+    return string.format('<span class="mention">@%s</span>', html_escape(attrs.name or "?"))
   end,
 })
 ```

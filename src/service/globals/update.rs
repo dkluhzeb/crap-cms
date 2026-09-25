@@ -7,13 +7,13 @@ use crate::{
         Document, DocumentFields, collection::GlobalDefinition, event::EventOperation,
         reject_nul_characters,
     },
-    db::{AccessResult, DbConnection, LocaleContext, query, query::helpers::global_table},
+    db::{DbConnection, LocaleContext, query, query::helpers::global_table},
     hooks::{
         AccessCheckInput, HookContext, ValidationCtx, lifecycle::access::has_any_field_access,
     },
     service::{
         AfterChangeInput, Gated, ServiceContext, ServiceError, WriteHooks, WriteInput, WriteResult,
-        admit_global_update_input, helpers as svc_helpers,
+        admit_global_update_input, global_access_allowed, helpers as svc_helpers,
         persist::{DraftDocumentArgs, draft_document},
         run_after_change_hooks, run_pool_write,
         versions::{self, VersionSnapshotCtx},
@@ -38,16 +38,15 @@ struct GlobalPersist<'a> {
     pending_draft: Option<&'a Map<String, Value>>,
 }
 
-/// What the before-write hook chain needs beyond the definition: the request,
-/// the table it lands in, whether it is a draft save, the admin UI locale, and
-/// the pending-draft snapshot a publish writes back afterwards. Every field is
+/// What the before-write hook chain needs beyond the definition and the
+/// context: the request, the table it lands in, whether it is a draft save,
+/// and the pending-draft snapshot a publish writes back afterwards. Every field is
 /// required and it is built at the one call site, so a plain literal stands in
 /// for a builder.
 struct GlobalBeforeWrite<'a> {
     input: &'a WriteInput<'a>,
     gtable: &'a str,
     is_draft: bool,
-    ui_locale: Option<&'a str>,
     locale_overlay: Option<&'a Map<String, Value>>,
 }
 
@@ -157,11 +156,10 @@ fn update_global_gated(
         def,
         Some(&input.data),
         input.locale_ctx.map(LocaleContext::access_locale),
-        input.ui_locale.as_deref(),
     )?;
 
     let is_draft = input.draft && def.has_drafts();
-    let ui_locale = input.ui_locale.as_deref();
+    let ui_locale = ctx.ui_locale.as_deref();
 
     // Data-aware write strip (each `access.update` rule sees `ctx.data` = its
     // level and `ctx.document` = the stored global, never the patch).
@@ -189,7 +187,6 @@ fn update_global_gated(
             input: &input,
             gtable: &gtable,
             is_draft,
-            ui_locale,
             locale_overlay: publishing_draft.as_ref().and_then(Value::as_object),
         },
     )?;
@@ -248,7 +245,6 @@ pub(crate) fn check_global_update_access(
     def: &GlobalDefinition,
     data: Option<&DocumentFields>,
     locale: Option<&str>,
-    ui_locale: Option<&str>,
 ) -> Result<()> {
     let access = write_hooks.check_access(
         &AccessCheckInput::builder("update", ctx.slug)
@@ -257,18 +253,14 @@ pub(crate) fn check_global_update_access(
             .id(Some("default"))
             .data(data)
             .locale(locale)
-            .ui_locale(ui_locale)
+            .ui_locale(ctx.ui_locale.as_deref())
             .build(),
     )?;
-    if matches!(access, AccessResult::Denied) {
+
+    if !global_access_allowed(&access, ctx.slug)? {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
     }
-    if matches!(access, AccessResult::Constrained(_)) {
-        return Err(ServiceError::HookError(format!(
-            "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
-            ctx.slug
-        )));
-    }
+
     Ok(())
 }
 
@@ -284,13 +276,12 @@ fn run_global_before_write_hooks(
     let input = call.input;
 
     let hook_data = input.data.clone();
-    let hook_ctx = HookContext::builder(ctx.slug, "update")
+    let hook_ctx = ctx
+        .hook_context("update")
         .data(hook_data)
         .document_id("default")
         .locale(input.locale_ctx.map(LocaleContext::access_locale))
         .draft(call.is_draft)
-        .user(ctx.user)
-        .ui_locale(call.ui_locale)
         .build();
 
     // A publish writes the draft's other locales back over the row after this
@@ -302,8 +293,9 @@ fn run_global_before_write_hooks(
         .draft(call.is_draft)
         .locale_ctx(input.locale_ctx)
         .user(ctx.user)
-        .ui_locale(input.ui_locale.as_deref())
+        .ui_locale(ctx.ui_locale.as_deref())
         .locale_overlay(call.locale_overlay)
+        .versioned_drafts(def.has_drafts())
         .build();
 
     Ok(write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?)
@@ -392,7 +384,7 @@ fn persist_global_published_update(
     }
 
     let final_data = final_ctx.to_value_map();
-    let doc = query::update_global(conn, ctx.slug, def, &final_data, locale_ctx)?;
+    let mut doc = query::update_global(conn, ctx.slug, def, &final_data, locale_ctx)?;
 
     query::save_join_table_data(
         conn,
@@ -406,13 +398,11 @@ fn persist_global_published_update(
     query::ref_count::after_update(conn, gtable, "default", &def.fields, &locale_cfg, &old_refs)?;
 
     if def.has_versions() {
-        let snap_ctx = VersionSnapshotCtx::builder(gtable, "default")
-            .fields(&def.fields)
-            .versions(def.versions.as_ref())
-            .has_drafts(def.has_drafts())
-            .locale_config(locale_ctx.map(|lctx| &lctx.config))
-            .build();
-        versions::create_version_snapshot(conn, &snap_ctx, "published", &doc)?;
+        // Also stamps `doc` published: publishing an unpublished global read
+        // the row back while it still said `draft`.
+        let snap_ctx =
+            VersionSnapshotCtx::for_global(gtable, def, locale_ctx.map(|lctx| &lctx.config));
+        versions::create_version_snapshot(conn, &snap_ctx, "published", &mut doc)?;
     }
 
     Ok(doc)

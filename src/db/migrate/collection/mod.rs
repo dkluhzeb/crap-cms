@@ -3,13 +3,15 @@
 mod alter;
 mod create;
 mod indexes;
+mod rebuild;
+mod rebuild_dependents;
 mod soft_delete;
 mod sync;
 mod system_columns;
 
 pub(super) use create::append_default_value_for;
 pub(super) use indexes::{compound_index_columns, managed_index_names};
-pub(super) use soft_delete::soft_delete_transition_pending;
+pub(super) use rebuild::PendingConstraints;
 pub(super) use sync::sync_collection_table;
 
 #[cfg(test)]

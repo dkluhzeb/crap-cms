@@ -16,14 +16,12 @@ use crate::{
             },
             locale_change::{LocaleShape, column_plans},
         },
-        query::helpers::{locale_column, quote_ident},
+        query::helpers::locale_column,
     },
 };
 
-use super::create::append_default_value_for;
-use super::soft_delete::{
-    check_no_trashed_rows, drop_inline_unique_constraints, soft_delete_transition_pending,
-};
+use super::rebuild::PendingConstraints;
+use super::soft_delete::check_no_trashed_rows;
 use super::system_columns::{
     AUTH_COLUMNS, DRAFT_STATUS_COLUMN, MFA_COLUMNS, REF_COUNT_COLUMN, TOTP_COLUMNS,
     VERIFY_EMAIL_COLUMNS,
@@ -60,14 +58,8 @@ fn add_field_column(
         return Ok(false);
     }
 
-    let mut col_def = expected_type.to_string();
-
-    if !spec.companion_text {
-        append_default_value_for(&mut col_def, spec.field);
-    }
-
-    let full_def = format!("{} {col_def}", quote_ident(col_name));
-    add_column_if_missing(ctx.conn, ctx.slug, col_name, &full_def, ctx.existing)?;
+    let col_def = spec.column_def(ctx.conn, col_name);
+    add_column_if_missing(ctx.conn, ctx.slug, col_name, &col_def, ctx.existing)?;
 
     Ok(true)
 }
@@ -243,30 +235,6 @@ fn collect_expected_column_names(
     names
 }
 
-/// System columns that are always valid (not flagged as orphans).
-pub(super) const SYSTEM_COLUMNS: &[&str] = &[
-    "id",
-    "created_at",
-    "updated_at",
-    "_password_hash",
-    "_reset_token",
-    "_reset_token_exp",
-    "_verified",
-    "_verification_token",
-    "_verification_token_exp",
-    "_mfa_code",
-    "_mfa_code_exp",
-    "_totp_secret",
-    "_totp_confirmed",
-    "_totp_last_step",
-    "_locked",
-    "_status",
-    "_settings",
-    "_session_version",
-    "_deleted_at",
-    "_ref_count",
-];
-
 pub(super) fn alter_collection_table(
     conn: &dyn DbConnection,
     slug: &str,
@@ -278,7 +246,7 @@ pub(super) fn alter_collection_table(
 
     check_no_trashed_rows(conn, slug, def, &existing)?;
 
-    let transition = soft_delete_transition_pending(def, &existing, locale_config);
+    let pending = PendingConstraints::read(conn, slug, def, &existing, locale_config)?;
 
     let ctx = AlterCtx {
         conn,
@@ -298,11 +266,9 @@ pub(super) fn alter_collection_table(
         &collect_expected_column_names(def, locale_config),
     );
 
-    if transition {
-        drop_inline_unique_constraints(conn, slug, def, locale_config)?;
-    }
-
-    Ok(())
+    // After the columns are reconciled, so a rebuild copies into columns whose
+    // stored type was just checked against the definition.
+    pending.apply(conn, slug, def, locale_config)
 }
 
 #[cfg(test)]

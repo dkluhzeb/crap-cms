@@ -414,8 +414,17 @@ fn soft_delete_keeps_the_fts_entry_and_the_normal_view_hides_it() {
 
     // Sync FTS and index the document
     let conn = pool.get().unwrap();
-    query::fts::sync_fts_table(&conn, "articles", &def, &LocaleConfig::default()).unwrap();
-    query::fts::fts_upsert(&conn, "articles", &id, &def, &LocaleConfig::default()).unwrap();
+    query::fts::sync_fts_table(
+        &conn,
+        &query::fts::FtsIndex::builder("articles", &def, &LocaleConfig::default()).build(),
+    )
+    .unwrap();
+    query::fts::fts_upsert(
+        &conn,
+        &query::fts::FtsIndex::builder("articles", &def, &LocaleConfig::default()).build(),
+        &id,
+    )
+    .unwrap();
 
     let results = fts_match_ids(&conn, "articles", "Unicorn");
     assert_eq!(
@@ -466,8 +475,17 @@ fn hard_delete_drops_the_fts_entry() {
     );
 
     let conn = pool.get().unwrap();
-    query::fts::sync_fts_table(&conn, "articles", &def, &LocaleConfig::default()).unwrap();
-    query::fts::fts_upsert(&conn, "articles", &id, &def, &LocaleConfig::default()).unwrap();
+    query::fts::sync_fts_table(
+        &conn,
+        &query::fts::FtsIndex::builder("articles", &def, &LocaleConfig::default()).build(),
+    )
+    .unwrap();
+    query::fts::fts_upsert(
+        &conn,
+        &query::fts::FtsIndex::builder("articles", &def, &LocaleConfig::default()).build(),
+        &id,
+    )
+    .unwrap();
     assert_eq!(
         fts_match_ids(&conn, "articles", "Phoenix"),
         vec![id.clone()]

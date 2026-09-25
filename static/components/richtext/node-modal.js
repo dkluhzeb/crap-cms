@@ -10,6 +10,7 @@
  * @stability internal
  */
 
+import { applyFieldWidths } from '../_internal/field-width.js';
 import { h } from '../_internal/h.js';
 import { t } from '../_internal/i18n.js';
 
@@ -130,23 +131,6 @@ function buildNodeModal(nodeDef, attrs) {
       ),
     ),
   );
-}
-
-/**
- * Apply per-field widths programmatically. We can't use inline `style="…"`
- * (CSP `style-src 'self'` blocks it). The CSS already styles the standard
- * widths via `[data-field-width="50"]` etc.; this is the override path
- * for unknown values.
- *
- * @param {HTMLDialogElement} modal
- */
-function applyFieldWidths(modal) {
-  for (const field of /** @type {NodeListOf<HTMLElement>} */ (
-    modal.querySelectorAll('[data-field-width]')
-  )) {
-    const w = field.dataset.fieldWidth;
-    if (w) field.style.width = w;
-  }
 }
 
 /* ── Submit / validation flow ───────────────────────────────────── */

@@ -20,7 +20,7 @@ prove identity. See [Auth Methods](auth-methods.md) for the full method referenc
 crap.collections.define("users", {
     auth = {
         enabled = true,
-        token_expiry = 3600,       -- 1 hour (default: 7200 = 2 hours)
+        token_expiry = 3600,       -- 1 hour (default: the global [auth] token_expiry)
         methods = crap.auth.with_defaults({
             -- standard password_login + bearer + session_cookie, plus:
             {
@@ -41,7 +41,7 @@ crap.collections.define("users", {
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `enabled` | boolean | `true` | Whether auth is active for this collection. Set `false` to disable. |
-| `token_expiry` | integer | `7200` | JWT token lifetime in seconds. Overrides the global `[auth] token_expiry`. |
+| `token_expiry` | integer | global `[auth] token_expiry` (`7200`) | Session token lifetime in seconds, a positive whole number. Overrides the global `[auth] token_expiry`; when omitted, the global value applies. Any other value (`0`, a negative number, a fraction, a string such as `"2h"`) is a load error. |
 | `methods` | AuthMethod[] | default set | Ordered list of auth methods (`password_login`, `bearer`, `session_cookie`, `strategy`). When `enabled = true` and `methods` is empty, the default set is used. See [Auth Methods](auth-methods.md). |
 
 > The password-only knobs (`mfa`, `mfa_when`, `mfa_deliver`, `mfa_exempt_callbacks`, `verify_email`, `forgot_password`) now live on the

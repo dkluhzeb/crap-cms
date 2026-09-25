@@ -7,7 +7,7 @@ use mlua::{Function, Lua, Table};
 
 use crate::{
     db::{DbConnection, DbPool},
-    hooks::{HookRunner, LuaCrudInfra, init::chunk_name},
+    hooks::{HookRunner, LuaCrudInfra, load_source_file},
 };
 
 /// One Lua data migration to run: the file and the direction (`"up"` or
@@ -30,10 +30,8 @@ impl<'a> MigrationCall<'a> {
 fn call_migration(lua: &Lua, call: &MigrationCall<'_>, code: &str) -> Result<()> {
     let path = call.path;
 
-    let module: Table = lua
-        .load(code)
-        .set_name(chunk_name(path))
-        .eval()
+    let module: Table = load_source_file(lua, code, path)
+        .and_then(|chunk| chunk.call(()))
         .with_context(|| format!("Failed to load migration {}", path.display()))?;
 
     let func: Function = module.get(call.direction).with_context(|| {

@@ -97,7 +97,6 @@ struct WriteArgs<'a> {
     id: &'a str,
     def: &'a CollectionDefinition,
     storage: &'a SharedStorage,
-    ui_locale: Option<String>,
     max_file_size: u64,
     image_max_attempts: u32,
     input: UpdateInput,
@@ -134,7 +133,6 @@ fn run_write(
                 form: args.input.form,
                 locale_ctx: args.input.locale_ctx.as_ref(),
                 password: args.input.password,
-                ui_locale: args.ui_locale,
                 draft: args.input.draft,
                 upload_max_file_size: args.max_file_size,
                 image_max_attempts: args.image_max_attempts,
@@ -233,7 +231,7 @@ impl<'a> LockTarget<'a> {
         let conn = self
             .infra
             .pool
-            .get()
+            .write()
             .context("DB connection for lock update")?;
 
         perform_account_action(&self.context(&conn), self.id, action)
@@ -264,7 +262,7 @@ fn update_document_blocking(
     let ctx = ServiceContext::collection(&args.slug, &args.def)
         .infra(&args.infra)
         .user(args.user_doc.as_ref())
-        .ui_locale(args.ui_locale.clone())
+        .ui_locale(args.ui_locale)
         .build();
 
     let result = run_write(
@@ -273,7 +271,6 @@ fn update_document_blocking(
             id: &args.id,
             def: &args.def,
             storage: &args.infra.storage,
-            ui_locale: args.ui_locale.clone(),
             max_file_size: args.max_file_size,
             image_max_attempts: args.image_max_attempts,
             input: args.input,

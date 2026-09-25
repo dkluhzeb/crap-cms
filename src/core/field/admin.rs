@@ -79,11 +79,11 @@ impl<'de> Deserialize<'de> for FieldWidth {
 #[serde(default)]
 #[lua(class = "crap.FieldAdminLabels")]
 pub struct FieldAdminLabels {
-    /// Custom singular label for row items (e.g., "Slide" → "Add Slide" button).
+    /// Custom singular label for row items (e.g., "Slide" → "Add Slide" button, untitled rows "Slide 1").
     #[serde(skip_serializing_if = "Option::is_none")]
     #[lua(ty = "crap.LocalizedString", optional)]
     pub singular: Option<LocalizedString>,
-    /// Custom plural label for the field header.
+    /// Custom plural label: the field header when `admin.label` is not set.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[lua(ty = "crap.LocalizedString", optional)]
     pub plural: Option<LocalizedString>,
@@ -123,8 +123,9 @@ pub struct FieldAdmin {
     #[serde(default)]
     #[lua(optional)]
     pub readonly: bool,
-    /// Field width: `"full"`, `"half"`, `"third"`, or an arbitrary CSS
-    /// value (e.g. `"50%"`, `"200px"`).
+    /// Field width in the edit form: `"full"`, `"half"`, `"third"`, or an
+    /// arbitrary CSS value (e.g. `"40%"`, `"20rem"`). Narrower fields share a
+    /// row; they stack in a narrow container and in the sidebar.
     #[serde(default)]
     #[lua(ty = "crap.FieldWidth", optional)]
     pub width: Option<FieldWidth>,
@@ -140,11 +141,12 @@ pub struct FieldAdmin {
     #[serde(default)]
     #[lua(optional)]
     pub row_label: Option<String>,
-    /// Custom singular/plural labels for row items (e.g., `{ singular = "Slide", plural = "Slides" }` → "Add Slide" button).
+    /// Custom singular/plural labels (arrays/blocks): `singular` names one row ("Add Slide", untitled rows "Slide 1"); `plural` is the field header when `label` is not set.
     #[serde(default, skip_serializing_if = "FieldAdminLabels::is_empty")]
     #[lua(optional)]
     pub labels: FieldAdminLabels,
-    /// "main" or "sidebar".
+    /// "main" or "sidebar" — top-level fields only; a load error on a nested
+    /// field.
     #[serde(default)]
     #[lua(optional)]
     pub position: Option<String>,
@@ -165,7 +167,8 @@ pub struct FieldAdmin {
     #[serde(default)]
     #[lua(optional)]
     pub step: Option<String>,
-    /// Number of rows for textarea fields (default: 8).
+    /// Visible rows: textarea (default 8) and JSON (default 12) fields; the
+    /// editor height in lines for code fields.
     #[serde(default)]
     #[lua(optional)]
     pub rows: Option<u32>,

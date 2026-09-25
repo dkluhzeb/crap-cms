@@ -6,7 +6,10 @@ callbacks) are reachable without a session; every other `/admin/`
 route sits behind the auth middleware **when at least one auth
 collection exists or `admin.require_auth` is set** (without either,
 the admin runs unauthenticated). All state-changing routes are
-CSRF-protected. `/static/` and `/uploads/` are public.
+CSRF-protected except the auth callbacks, which an identity provider's
+`form_post` answer reaches cross-site (their login-CSRF defense is the
+OAuth `state` the callback hook verifies). `/static/` and `/uploads/` are
+public.
 
 ## HTML routes
 

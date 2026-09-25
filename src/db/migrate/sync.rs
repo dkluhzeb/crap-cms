@@ -13,8 +13,12 @@ use crate::{
         },
     },
     db::{
-        BoxedConnection, DbConnection, DbPool,
-        query::{helpers::global_table, jobs as job_query},
+        BoxedConnection, BoxedTransaction, DbConnection, DbPool,
+        query::{
+            fts::{FtsIndex, sync_fts_table},
+            helpers::global_table,
+            jobs as job_query,
+        },
     },
 };
 
@@ -23,6 +27,8 @@ use super::{
     helpers::{get_table_columns, table_exists},
     identifier_check, legacy_timestamps, locale_change, meta, nested_values,
     orphan_tables::warn_orphan_tables,
+    reference_cardinality,
+    tracking::drop_all_tables,
 };
 
 /// Sync all collection tables with their Lua definitions.
@@ -39,9 +45,10 @@ use super::{
 pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig) -> Result<()> {
     let mut conn = pool.write().context("Failed to get DB connection")?;
 
-    // A collection turning on `soft_delete` rebuilds its table on SQLite, and a
-    // rebuild only keeps the children's rows and their foreign keys with
-    // enforcement off (see `collection::alter`). `PRAGMA foreign_keys` is
+    // A constraint change (turning on `soft_delete`, relaxing an old NOT NULL)
+    // rebuilds the table on SQLite, and a rebuild only keeps the children's
+    // rows and their foreign keys with enforcement off (see
+    // `collection::rebuild`). `PRAGMA foreign_keys` is
     // ignored inside a transaction, so the window has to be opened here, and
     // only when a rebuild is actually pending — an ordinary boot syncs with
     // enforcement on, as always.
@@ -75,9 +82,10 @@ pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig
     }
 }
 
-/// The collections whose table still has a pending `soft_delete` transition
-/// that a rebuild has to carry out. `SQLite` only: Postgres drops the
-/// constraints in place and never rebuilds, so it needs no window.
+/// The collections whose table still has a constraint change pending that a
+/// rebuild has to carry out — the `soft_delete` transition or the one-time
+/// `NOT NULL` relax. `SQLite` only: Postgres changes the constraints in place
+/// and never rebuilds, so it needs no window.
 fn pending_rebuilds(
     conn: &dyn DbConnection,
     registry: &Registry,
@@ -96,7 +104,9 @@ fn pending_rebuilds(
 
         let existing = get_table_columns(conn, slug)?;
 
-        if collection::soft_delete_transition_pending(def, &existing, locale_config) {
+        if collection::PendingConstraints::read(conn, slug, def, &existing, locale_config)?
+            .needs_rebuild()
+        {
             rebuilt.push(slug.to_string());
         }
     }
@@ -150,75 +160,167 @@ fn run_sync(
     locale_config: &LocaleConfig,
     rebuilt: &[String],
 ) -> Result<()> {
-    let tx = conn
-        .transaction_immediate()
-        .context("Failed to start migration transaction")?;
+    let tx = open_schema_transaction(conn)?;
 
-    // Nodes booting together would otherwise race the same DDL on Postgres
-    // (duplicate CREATE TABLE / ALTER TABLE ADD COLUMN) and crash all but one.
-    // Released at commit; a no-op on SQLite, whose IMMEDIATE transaction
-    // already serializes writers.
-    tx.advisory_xact_lock(SCHEMA_SYNC_LOCK_KEY)
-        .context("Failed to acquire the schema-sync lock")?;
-
-    create_system_tables(&tx)?;
-
-    // Portability guard: reject any generated identifier that would overflow
-    // Postgres's 63-byte limit (and silently truncate/collide) BEFORE creating
-    // any table — on every backend, so it surfaces in SQLite development.
-    for (slug, def) in &registry.collections {
-        identifier_check::check_identifiers(slug, &def.fields, locale_config)?;
-        identifier_check::check_index_names(slug, def, locale_config)?;
-    }
-    identifier_check::check_index_name_collisions(registry, locale_config)?;
-    for (slug, def) in &registry.globals {
-        let table = global_table(slug);
-        identifier_check::check_identifiers(&table, &def.fields, locale_config)?;
-    }
-
-    // Before the per-collection sync, which refuses to serve a column whose
-    // type no longer matches its field: a Postgres database created by an
-    // older release still has its checkbox columns as BIGINT, and this is the
-    // pass that brings them to the type the definitions ask for.
-    checkbox_columns::migrate_if_needed(&tx, registry)?;
-
-    for (slug, def) in &registry.collections {
-        collection::sync_collection_table(&tx, slug, def, locale_config)?;
-    }
-
-    for (slug, def) in &registry.globals {
-        global::sync_global_table(&tx, slug, def, locale_config)?;
-    }
-
-    delete_retired_meta_keys(&tx)?;
-
-    // Reported, never removed: a table that fell out of the registry may hold
-    // the only copy of its data, so the drop is an explicit operator decision.
-    warn_orphan_tables(&tx, registry)?;
-
-    // The one-time conversions run in this order on purpose: nested values
-    // are typed before text is canonicalized, since both rewrite the same
-    // JSON-stored rows and the canonical form applies to the typed value.
-    backfill_ref_counts::backfill_if_needed(&tx, registry, locale_config)?;
-    legacy_timestamps::normalize_if_needed(&tx, registry)?;
-
-    // Filters expand every stored has-many list, so a value a definition change
-    // left behind is stored as a list before anything reads it. It runs before
-    // the nested values are typed: typing a nested value that isn't a list yet
-    // would drop what doesn't fit the field's type instead of refusing it.
-    has_many_lists::normalize_if_needed(&tx, registry, locale_config)?;
-    nested_values::convert_if_needed(&tx, registry)?;
-    canonical_text::canonicalize_if_needed(&tx, registry, locale_config)?;
-    locale_change::warn_on_default_locale_change(&tx, registry, locale_config)?;
-
-    if !rebuilt.is_empty() {
-        assert_no_dangling_references(&tx, rebuilt)?;
-    }
+    sync_in_transaction(&tx, registry, locale_config, rebuilt)?;
 
     tx.commit()
         .context("Failed to commit migration transaction")?;
 
     Ok(())
+}
+
+/// Open the transaction a schema change runs in, holding the schema-sync lock.
+///
+/// Nodes booting together would otherwise race the same DDL on Postgres
+/// (duplicate CREATE TABLE / ALTER TABLE ADD COLUMN) and crash all but one.
+/// Released at commit; a no-op on `SQLite`, whose IMMEDIATE transaction
+/// already serializes writers.
+fn open_schema_transaction(conn: &mut BoxedConnection) -> Result<BoxedTransaction<'_>> {
+    let tx = conn
+        .transaction_immediate()
+        .context("Failed to start migration transaction")?;
+
+    tx.advisory_xact_lock(SCHEMA_SYNC_LOCK_KEY)
+        .context("Failed to acquire the schema-sync lock")?;
+
+    Ok(tx)
+}
+
+/// Drop every table and recreate the schema from the definitions — `migrate
+/// fresh` — in one transaction under the schema-sync lock.
+///
+/// Both backends run DDL transactionally, so a failure anywhere leaves the
+/// database exactly as it was rather than half-dropped, and a node syncing
+/// its schema at the same time waits for the lock instead of interleaving
+/// with the drop. Other nodes' running servers are not stopped by anything
+/// here: they see the old schema until the commit and an empty one after.
+///
+/// # Errors
+///
+/// Returns an error if the connection, the drop or the schema sync fails;
+/// nothing is committed then.
+pub fn recreate_all(
+    pool: &DbPool,
+    registry: &Registry,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    let mut conn = pool.write().context("Failed to get DB connection")?;
+    let tx = open_schema_transaction(&mut conn)?;
+
+    drop_all_tables(&tx)?;
+    sync_in_transaction(&tx, registry, locale_config, &[])?;
+
+    tx.commit()
+        .context("Failed to commit the recreated schema")?;
+
+    Ok(())
+}
+
+/// Every step of the schema sync, on `tx`.
+fn sync_in_transaction(
+    tx: &dyn DbConnection,
+    registry: &Registry,
+    locale_config: &LocaleConfig,
+    rebuilt: &[String],
+) -> Result<()> {
+    create_system_tables(tx)?;
+    check_all_identifiers(registry, locale_config)?;
+    sync_tables(tx, registry, locale_config)?;
+
+    delete_retired_meta_keys(tx)?;
+
+    // Reported, never removed: a table that fell out of the registry may hold
+    // the only copy of its data, so the drop is an explicit operator decision.
+    warn_orphan_tables(tx, registry)?;
+
+    run_conversions(tx, registry, locale_config)?;
+
+    if !rebuilt.is_empty() {
+        assert_no_dangling_references(tx, rebuilt)?;
+    }
+
+    Ok(())
+}
+
+/// Portability guard: reject any generated identifier that would overflow
+/// Postgres's 63-byte limit (and silently truncate/collide) BEFORE creating
+/// any table — on every backend, so it surfaces in `SQLite` development.
+fn check_all_identifiers(registry: &Registry, locale_config: &LocaleConfig) -> Result<()> {
+    for (slug, def) in &registry.collections {
+        identifier_check::check_identifiers(slug, &def.fields, locale_config)?;
+        identifier_check::check_index_names(slug, def, locale_config)?;
+    }
+
+    identifier_check::check_index_name_collisions(registry, locale_config)?;
+
+    for (slug, def) in &registry.globals {
+        let table = global_table(slug);
+        identifier_check::check_identifiers(&table, &def.fields, locale_config)?;
+    }
+
+    Ok(())
+}
+
+/// Create or alter every collection's and global's tables.
+fn sync_tables(
+    tx: &dyn DbConnection,
+    registry: &Registry,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    // Before the per-collection sync, which refuses to serve a column whose
+    // type no longer matches its field: a Postgres database created by an
+    // older release still has its checkbox columns as BIGINT, and this is the
+    // pass that brings them to the type the definitions ask for.
+    checkbox_columns::migrate_if_needed(tx, registry)?;
+
+    for (slug, def) in &registry.collections {
+        collection::sync_collection_table(tx, slug, def, locale_config)?;
+
+        // Rebuilt with the registry, so rich text custom nodes contribute
+        // their `searchable_attrs` exactly as the per-write upsert indexes them.
+        if tx.supports_fts() {
+            let index = FtsIndex::builder(slug, def, locale_config)
+                .registry(Some(registry))
+                .build();
+            sync_fts_table(tx, &index)?;
+        }
+    }
+
+    for (slug, def) in &registry.globals {
+        global::sync_global_table(tx, slug, def, locale_config)?;
+    }
+
+    Ok(())
+}
+
+/// The one-time conversions and the stored-shape passes, after the tables
+/// match the definitions.
+fn run_conversions(
+    tx: &dyn DbConnection,
+    registry: &Registry,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    // Values of a reference whose `has_many` flipped move between its column
+    // and its junction first, so the recount below counts them where they are
+    // read from now.
+    reference_cardinality::carry_if_needed(tx, registry, locale_config)?;
+
+    // The one-time conversions run in this order on purpose: nested values
+    // are typed before text is canonicalized, since both rewrite the same
+    // JSON-stored rows and the canonical form applies to the typed value.
+    backfill_ref_counts::backfill_if_needed(tx, registry, locale_config)?;
+    legacy_timestamps::normalize_if_needed(tx, registry)?;
+
+    // Filters expand every stored has-many list, so a value a definition change
+    // left behind is stored as a list before anything reads it. It runs before
+    // the nested values are typed: typing a nested value that isn't a list yet
+    // would drop what doesn't fit the field's type instead of refusing it.
+    has_many_lists::normalize_if_needed(tx, registry, locale_config)?;
+    nested_values::convert_if_needed(tx, registry)?;
+    canonical_text::canonicalize_if_needed(tx, registry, locale_config)?;
+
+    locale_change::warn_on_default_locale_change(tx, registry, locale_config)
 }
 
 /// Advisory-lock key serializing schema sync across nodes: the ASCII bytes of
@@ -469,8 +571,11 @@ fn drain_legacy_image_queue(conn: &dyn DbConnection) -> Result<()> {
 #[allow(clippy::missing_panics_doc)]
 mod tests {
     use super::*;
-    use crate::config::CrapConfig;
-    use crate::db::{DbValue, InMemoryConn, pool};
+    use crate::{
+        config::CrapConfig,
+        core::CollectionDefinition,
+        db::{DbValue, InMemoryConn, pool},
+    };
 
     /// Only an orphan pointing at a rebuilt table is the sync's doing; one in
     /// an unrelated table predates the boot and must not block it.
@@ -569,6 +674,48 @@ mod tests {
         // The new indexes exist (idempotent re-run is a no-op).
         create_jobs_table(&conn, "TEXT DEFAULT (datetime('now'))", "TEXT")
             .expect("second create_jobs_table call must be idempotent");
+    }
+
+    /// `migrate fresh` drops and recreates in one transaction: a recreate that
+    /// fails (here on an identifier Postgres could not hold) leaves every table
+    /// and row as it was — no half-dropped schema.
+    #[test]
+    fn a_failing_recreate_leaves_the_database_intact() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = pool::create_pool(dir.path(), &CrapConfig::default()).unwrap();
+        let locale_config = LocaleConfig::default();
+
+        let mut registry = Registry::new();
+        registry.register_collection(CollectionDefinition::new("posts"));
+        sync_all(&p, &registry, &locale_config).expect("sync");
+
+        p.get()
+            .unwrap()
+            .execute("INSERT INTO posts (id) VALUES ('p1')", &[])
+            .unwrap();
+
+        let mut broken = Registry::new();
+        broken.register_collection(CollectionDefinition::new("x".repeat(70).as_str()));
+        recreate_all(&p, &broken, &locale_config).expect_err("the long slug fails the sync");
+
+        let conn = p.get().unwrap();
+        assert!(
+            conn.query_one("SELECT id FROM posts WHERE id = 'p1'", &[])
+                .unwrap()
+                .is_some(),
+            "the failed recreate must not have dropped anything"
+        );
+
+        drop(conn);
+        recreate_all(&p, &registry, &locale_config).expect("recreate");
+
+        let conn = p.get().unwrap();
+        assert!(
+            conn.query_one("SELECT id FROM posts WHERE id = 'p1'", &[])
+                .unwrap()
+                .is_none(),
+            "a recreate empties the tables"
+        );
     }
 
     /// Regression: the whole-database `ref_count_backfilled` flag was replaced

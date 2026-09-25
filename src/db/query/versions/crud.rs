@@ -450,30 +450,57 @@ pub fn prune_versions(
     Ok(())
 }
 
-/// Set the `_status` column on a document in the main table.
+/// The main table a `_status` write lands on, and whether that table keeps
+/// timestamps.
+///
+/// A collection defined with `timestamps = false` has no `updated_at`
+/// column, so the status write may only touch it when the table has one.
+/// Globals always carry timestamps.
+#[derive(Debug, Clone, Copy)]
+pub struct StatusTable<'a> {
+    pub name: &'a str,
+    pub timestamps: bool,
+}
+
+impl<'a> StatusTable<'a> {
+    #[must_use]
+    pub fn new(name: &'a str, timestamps: bool) -> Self {
+        Self { name, timestamps }
+    }
+}
+
+/// Set the `_status` column on a document in the main table, bumping
+/// `updated_at` when the table keeps timestamps.
 ///
 /// # Errors
 ///
 /// Returns a backend error if the UPDATE fails.
 pub fn set_document_status(
     conn: &dyn DbConnection,
-    slug: &str,
+    table: StatusTable<'_>,
     id: &str,
     status: &str,
 ) -> Result<()> {
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+
+    let touch = if table.timestamps {
+        format!(", updated_at = {}", conn.now_expr())
+    } else {
+        String::new()
+    };
+
     conn.execute(
         &format!(
-            "UPDATE \"{}\" SET _status = {p1}, updated_at = {} WHERE id = {p2}",
-            slug,
-            conn.now_expr()
+            "UPDATE \"{}\" SET _status = {p1}{touch} WHERE id = {p2}",
+            table.name
         ),
         &[
             DbValue::Text(status.to_string()),
             DbValue::Text(id.to_string()),
         ],
     )
-    .with_context(|| format!("Failed to set _status on {slug}.{id}"))?;
+    .with_context(|| format!("Failed to set _status on {}.{id}", table.name))?;
+
     Ok(())
 }
 
@@ -786,9 +813,29 @@ mod tests {
         let status = get_document_status(&conn, "posts", "p1").unwrap();
         assert_eq!(status, Some("published".to_string()));
 
-        set_document_status(&conn, "posts", "p1", "draft").unwrap();
+        set_document_status(&conn, StatusTable::new("posts", true), "p1", "draft").unwrap();
         let status = get_document_status(&conn, "posts", "p1").unwrap();
         assert_eq!(status, Some("draft".to_string()));
+    }
+
+    /// A `timestamps = false` table has no `updated_at` column: the status
+    /// write must not name it, or every drafts write on such a collection
+    /// fails with a raw backend error.
+    #[test]
+    fn set_document_status_without_timestamps_skips_updated_at() {
+        let (_dir, conn) = setup_versions_db();
+        conn.execute_batch(
+            "CREATE TABLE logs (id TEXT PRIMARY KEY, _status TEXT DEFAULT 'published');
+             INSERT INTO logs (id) VALUES ('l1');",
+        )
+        .unwrap();
+
+        set_document_status(&conn, StatusTable::new("logs", false), "l1", "draft").unwrap();
+
+        assert_eq!(
+            get_document_status(&conn, "logs", "l1").unwrap().as_deref(),
+            Some("draft")
+        );
     }
 
     #[test]

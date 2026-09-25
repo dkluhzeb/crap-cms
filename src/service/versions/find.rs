@@ -9,7 +9,8 @@ use crate::{
     service::{
         Def, ReadStripArgs, ServiceContext, ServiceError, helpers,
         hooks::ReadHooks,
-        versions::gate::{check_versions_gate, draft_snapshots_visible, reject_global_filter},
+        reject_global_filter,
+        versions::gate::{check_versions_gate, draft_snapshots_visible},
     },
 };
 

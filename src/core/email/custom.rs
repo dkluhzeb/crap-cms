@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use mlua::{Function, Lua, Table};
 
-use super::EmailProvider;
+use super::{EmailJobData, EmailProvider};
 use crate::core::lua_lease::LuaVmLease;
 
 /// Custom email provider that delegates to a Lua function.
@@ -40,24 +40,40 @@ fn send_fn(lua: &Lua) -> Result<Function> {
     })
 }
 
+/// Call the registered `send` function on `lua` with the email.
+fn deliver(lua: &Lua, email: &EmailJobData) -> Result<()> {
+    let func = send_fn(lua)?;
+
+    let opts = lua.create_table()?;
+    opts.set("to", email.to.as_str())?;
+    opts.set("subject", email.subject.as_str())?;
+    opts.set("html", email.html.as_str())?;
+    if let Some(plain) = &email.text {
+        opts.set("text", plain.as_str())?;
+    }
+
+    func.call::<()>(opts)
+        .map_err(|e| anyhow!("custom email send error: {e:#}"))
+}
+
 impl EmailProvider for CustomEmailProvider {
     fn send(&self, to: &str, subject: &str, html: &str, text: Option<&str>) -> Result<()> {
-        self.lease.with_vm(&mut |lua| {
-            let func = send_fn(lua)?;
+        let email = EmailJobData {
+            to: to.to_string(),
+            subject: subject.to_string(),
+            html: html.to_string(),
+            text: text.map(str::to_string),
+        };
 
-            let opts = lua.create_table()?;
-            opts.set("to", to.to_string())?;
-            opts.set("subject", subject.to_string())?;
-            opts.set("html", html.to_string())?;
-            if let Some(plain) = text {
-                opts.set("text", plain.to_string())?;
-            }
+        self.lease.with_vm(&mut |lua| deliver(lua, &email))
+    }
 
-            func.call::<()>(opts)
-                .map_err(|e| anyhow!("custom email send error: {e:#}"))?;
-
-            Ok(())
-        })
+    /// The queued delivery runs the user's `send` under the queue's timeout:
+    /// a hung or looping provider stops there instead of holding the email
+    /// queue (and the MFA, reset and verification mails behind it).
+    fn send_queued(&self, email: &EmailJobData, timeout_secs: u64) -> Result<()> {
+        self.lease
+            .with_vm_until(timeout_secs, &mut |lua| deliver(lua, email))
     }
 
     fn kind(&self) -> &'static str {
@@ -67,6 +83,8 @@ impl EmailProvider for CustomEmailProvider {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
     use crate::core::lua_lease::LocalLease;
 
@@ -123,6 +141,57 @@ mod tests {
 
         let result = provider.send("user@example.com", "Test", "<p>Hi</p>", None);
         assert!(result.is_err());
+    }
+
+    /// Records the timeout a queued delivery asked for, then runs on `lua`.
+    struct RecordingLease {
+        lua: Lua,
+        timeout: Mutex<Option<u64>>,
+    }
+
+    impl LuaVmLease for RecordingLease {
+        fn with_vm(&self, f: &mut dyn FnMut(&Lua) -> Result<()>) -> Result<()> {
+            f(&self.lua)
+        }
+
+        fn with_vm_until(
+            &self,
+            timeout_secs: u64,
+            f: &mut dyn FnMut(&Lua) -> Result<()>,
+        ) -> Result<()> {
+            *self.timeout.lock().unwrap() = Some(timeout_secs);
+            f(&self.lua)
+        }
+    }
+
+    /// Regression: a queued email through the custom provider ran the user's
+    /// `send` with no deadline. The queued path now leases its VM bounded by
+    /// the queue timeout; the direct `send` keeps the caller's bounds.
+    #[test]
+    fn queued_delivery_runs_under_the_queue_timeout() {
+        let (lua, _) = lease_with_send();
+        let lease = Arc::new(RecordingLease {
+            lua,
+            timeout: Mutex::new(None),
+        });
+        let provider = CustomEmailProvider::new(lease.clone());
+        let email = EmailJobData {
+            to: "user@example.com".into(),
+            subject: "Code".into(),
+            html: "<p>1234</p>".into(),
+            text: None,
+        };
+
+        provider
+            .send("user@example.com", "S", "<p>x</p>", None)
+            .unwrap();
+        assert_eq!(*lease.timeout.lock().unwrap(), None);
+
+        provider.send_queued(&email, 42).unwrap();
+        assert_eq!(*lease.timeout.lock().unwrap(), Some(42));
+
+        let sent: i64 = lease.lua.load("return #crap._sent").eval().unwrap();
+        assert_eq!(sent, 2, "both deliveries reached the Lua provider");
     }
 
     #[test]

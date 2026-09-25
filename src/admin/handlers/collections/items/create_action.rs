@@ -65,7 +65,6 @@ struct CreateBlockingInput {
 /// required and it is built in exactly one place.
 struct WriteArgs<'a> {
     storage: &'a SharedStorage,
-    ui_locale: Option<String>,
     max_file_size: u64,
     image_max_attempts: u32,
     input: CreateInput,
@@ -89,7 +88,6 @@ fn run_write(
                 form: args.input.form,
                 locale_ctx: args.input.locale_ctx.as_ref(),
                 password: args.input.password,
-                ui_locale: args.ui_locale,
                 draft: args.input.draft,
                 upload_max_file_size: args.max_file_size,
                 image_max_attempts: args.image_max_attempts,
@@ -116,14 +114,13 @@ fn create_document_blocking(
     let ctx = ServiceContext::collection(&args.slug, &args.def)
         .infra(&args.infra)
         .user(args.user_doc.as_ref())
-        .ui_locale(args.ui_locale.clone())
+        .ui_locale(args.ui_locale)
         .build();
 
     run_write(
         &ctx,
         WriteArgs {
             storage: &args.infra.storage,
-            ui_locale: args.ui_locale.clone(),
             max_file_size: args.max_file_size,
             image_max_attempts: args.image_max_attempts,
             input: args.input,

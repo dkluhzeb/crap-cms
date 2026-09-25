@@ -56,9 +56,14 @@ Each collection can control what data events carry:
 queued in one sweep and collapses it **latest-wins per document** before
 processing — a burst of ten updates to one document costs one gate +
 `after_read` pass and delivers one event carrying the newest state (with
-that event's own sequence/operation). A subscriber that keeps up sees every
-event unchanged; coalescing only ever touches events that were already
-queued behind it. Delivery granularity under load is deliberately
+that event's own sequence/operation). Collapsing never hides a move between
+content views (see *Leaving a view* below): the surviving event remembers
+where the document was before the burst, so a subscriber that could see it
+there but not where it ended up still receives its removal — an unpublish
+followed by a draft save arrives as one event that a published-only
+subscriber receives as a `delete`. A
+subscriber that keeps up sees every event unchanged; coalescing only ever
+touches events that were already queued behind it. Delivery granularity under load is deliberately
 non-contractual (see the frozen-contracts internals doc): you always
 receive the latest state, but intermediate events may collapse. This also
 makes lag force-drops rare — a subscriber is disconnected only when even
@@ -130,7 +135,9 @@ independent `read` (published) / `draft` / `trash` keys that gate normal reads:
 - A **published** document's create/update event needs `read`.
 - A **draft** document's create/update event needs `draft` (default: falls back
   to `update`). A `read`-only subscriber never sees draft events.
-- A **soft-delete** event needs `trash`; a hard-delete is gated by the view the
+- A **soft-delete** event needs `trash` (a subscriber that saw the document
+  in its status view but may not see the trash is sent a removal — see
+  *Leaving a view*); a hard-delete is gated by the view the
   document was last in — `trash` for a document that was in the trash (a purge
   of the trash, or a forced permanent delete of a trashed document), its
   `read`/`draft` view otherwise.
@@ -139,6 +146,38 @@ The event carries this view metadata independent of `mode`, so gating holds even
 in `metadata` mode and for delete events, where the payload is empty. The views
 are independent: a draft-only reviewer (granted `draft`, denied `read`) receives
 draft events but not published ones.
+
+**Leaving a view.** A write can move a document from one content view to
+another: publishing a draft (draft → published), unpublishing it or restoring
+a draft version over it (published → draft), restoring a published version
+over a draft, soft-deleting it (its status view → trash) and undeleting it
+(trash → its status view). The event is gated by the view the document moved
+into, so a subscriber that can see that view receives the event itself. A
+subscriber that could see the document where it was (that view, row
+constraint included, admits the row) but cannot see where it is now is told
+it is gone instead:
+
+- a **collection document** arrives as a **`delete`** (no data, in either
+  mode) — it left the subscriber's view exactly as a deleted one does;
+- a **global** that leaves the published view (an unpublish, or a draft
+  version restored over it) arrives as an **`update`** carrying the empty
+  global a non-draft read now returns (in `full` mode: no field content,
+  `_status = "draft"`). A global is always there to read in its draft view,
+  so publishing one announces no removal; globals have no trash.
+
+So a published-only subscriber is told when a document is unpublished or
+trashed; a draft-view subscriber without `trash` access when a draft is
+trashed or published; a trash-only subscriber when a document is undeleted.
+A subscriber that could not see the document where it was learns nothing — a
+draft that is trashed or unpublished again never reaches a published-only
+subscriber, so it never learns the draft exists. On the gRPC stream, a
+subscription scoped to `operations` receives the removal only when it asked
+for `delete` (collections) or `update` (globals).
+
+In a multi-server deployment, nodes that predate this announce only a move
+out of the published view (to published-only subscribers); an event such a
+node publishes is read the same way by an upgraded one. Once every node runs
+the current version, every move is announced.
 
 Row-level constraints use in-memory evaluation of the same filters that `Find` uses as SQL WHERE conditions. For example, if a user's access returns `{ owner = ctx.user.id }`, only events where `owner` matches are delivered.
 

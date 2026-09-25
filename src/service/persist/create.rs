@@ -5,7 +5,7 @@ use anyhow::Result;
 use crate::{
     core::{Document, DocumentFields, reject_nul_characters},
     db::query,
-    service::{PersistOptions, ServiceContext, versions},
+    service::{PersistOptions, ServiceContext, persist::sync_search_index, versions},
 };
 
 /// Persist the DB write phase of a create operation.
@@ -42,7 +42,7 @@ pub fn persist_create(
     // `build_snapshot` re-hydrate relies on this flat shape; the service layer
     // hydrates `doc` to nested afterwards for hooks/return. (The FTS sync reads
     // the row itself and is independent of this shape.)
-    let doc = query::create(conn, slug, def, data, opts.locale_ctx)?;
+    let mut doc = query::create(conn, slug, def, data, opts.locale_ctx)?;
     query::save_join_table_data(conn, slug, &def.fields, &doc.id, data, opts.locale_ctx)?;
 
     if let Some(pw) = opts.password
@@ -52,18 +52,15 @@ pub fn persist_create(
     }
 
     if def.has_versions() {
-        let ctx = versions::VersionSnapshotCtx::builder(slug, &doc.id)
-            .fields(&def.fields)
-            .versions(def.versions.as_ref())
-            .has_drafts(def.has_drafts())
-            .locale_config(ctx.locale_config)
-            .build();
-        versions::create_version_snapshot(conn, &ctx, status, &doc)?;
+        // Also stamps `doc` with the status the row ends with: `query::create`
+        // read the row back while it still carried the column default.
+        let id = doc.id.clone();
+        let snap_ctx =
+            versions::VersionSnapshotCtx::for_collection(slug, &id, def, ctx.locale_config);
+        versions::create_version_snapshot(conn, &snap_ctx, status, &mut doc)?;
     }
 
-    if conn.supports_fts() {
-        query::fts::fts_upsert(conn, slug, &doc.id, def, &locale_cfg)?;
-    }
+    sync_search_index(ctx, conn, &doc.id, &locale_cfg)?;
 
     // Ref count UPDATE is last: it acquires a row-level lock on the target
     // (e.g. the referenced author), and that lock is held until COMMIT.

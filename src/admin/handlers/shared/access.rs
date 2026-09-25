@@ -13,14 +13,15 @@ use tracing::{error, warn};
 use crate::{
     admin::AdminState,
     core::{
-        AuthUser, Document, DocumentFields, FieldChildren, FieldDefinition, FieldDenial, HookRef,
-        field_children,
+        AuthUser, CollectionDefinition, Document, DocumentFields, FieldChildren, FieldDefinition,
+        FieldDenial, HookRef, field_children,
     },
     db::{AccessResult, DbConnection},
     hooks::{
         AccessCheckInput, ConditionContext, DisplayConditionResult, HookRunner,
         lifecycle::access::has_any_field_access,
     },
+    service::{self, ServiceContext},
 };
 
 use super::response::{forbidden, server_error};
@@ -80,6 +81,29 @@ pub fn check_access_or_forbid(
         .map_err(|_| Box::new(forbidden(state, "Database error").into_response()))?;
 
     Ok(result)
+}
+
+/// Whether the viewer's `access` outcome admits row `id` of collection `slug`
+/// — a filter table judged against the row, exactly as the write it guards
+/// judges it — so a confirmation page never offers a write the row's access
+/// refuses. Fails closed: a failed check admits nothing.
+pub fn access_admits_row(
+    state: &AdminState,
+    def: &CollectionDefinition,
+    id: &str,
+    access: &AccessResult,
+) -> bool {
+    let Ok(conn) = state.infra.pool.get() else {
+        return false;
+    };
+
+    let ctx = ServiceContext::collection(&def.slug, def)
+        .conn(&conn)
+        .build();
+
+    service::access_admits_row(&ctx, id, access, false)
+        .inspect_err(|e| error!("Row access check for '{}/{id}': {e}", def.slug))
+        .unwrap_or(false)
 }
 
 /// Returns the read-denied field paths for `document` (data-aware: each

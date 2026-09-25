@@ -156,8 +156,11 @@ For each collection (e.g., `posts`), a set of CRUD tools is generated:
 | `delete_many_posts` | Bulk delete documents matching a filter |
 
 Collections with `soft_delete` also get `undelete_posts`; versioned collections
-add `unpublish_posts`, `list_versions_posts` (args: `id`, optional `limit` /
-`offset`), and `restore_version_posts` (args: `id`, `version_id`).
+add `list_versions_posts` (args: `id`, optional `limit` / `offset`) and
+`restore_version_posts` (args: `id`, `version_id`), and those with
+`versions = { drafts = true }` also `unpublish_posts`. Globals get
+`global_read_*`, `global_update_*` and `global_validate_*` only — no unpublish or
+version tools (see [Globals › Versions by surface](../globals/overview.md#versions-by-surface)).
 
 > **Reserved slug prefixes.** Because tool names are built as `{op}_{slug}` and
 > `{op}` includes the compound forms `create_many_` / `update_many_` /

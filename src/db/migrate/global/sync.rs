@@ -6,11 +6,10 @@ use tracing::info;
 
 use crate::{
     config::LocaleConfig,
-    core::{FieldDefinition, collection::GlobalDefinition},
+    core::collection::GlobalDefinition,
     db::{
         DbConnection,
         migrate::{
-            collection::append_default_value_for,
             global::defaults::apply_default_row_values,
             helpers::{
                 ColumnSpec, add_column_if_missing, check_type_mismatch, collect_column_specs,
@@ -21,7 +20,7 @@ use crate::{
         },
         query::{
             get_expected_global_column_names,
-            helpers::{global_table, locale_column, quote_ident},
+            helpers::{global_table, quote_ident},
         },
     },
 };
@@ -50,22 +49,6 @@ pub(in crate::db::migrate) fn sync_global_table(
     Ok(())
 }
 
-/// Build a column definition with optional default value.
-fn build_col_def(
-    col_name: &str,
-    col_type: &str,
-    companion_text: bool,
-    field: &FieldDefinition,
-) -> String {
-    let mut col = format!("{} {col_type}", quote_ident(col_name));
-
-    if !companion_text {
-        append_default_value_for(&mut col, field);
-    }
-
-    col
-}
-
 /// Create a new global table with all field columns and a default row.
 fn create_global_table(
     conn: &dyn DbConnection,
@@ -75,29 +58,11 @@ fn create_global_table(
 ) -> Result<()> {
     let mut columns = vec!["id TEXT PRIMARY KEY".to_string()];
 
+    // Every column goes through the shared `ColumnSpec::column_def`, so a
+    // global's column has exactly the type and default a collection's does.
     for spec in &collect_column_specs(&def.fields, locale_config) {
-        // Route through the shared `ddl_type` so a scalar `has_many` field (stored
-        // as a JSON array in TEXT) isn't given a numeric column — the same rule
-        // collection tables use. Skipping it here mistyped globals on Postgres.
-        let col_type = spec.ddl_type(conn);
-
-        if spec.is_localized {
-            for locale in &locale_config.locales {
-                let col_name = locale_column(&spec.col_name, locale)?;
-                columns.push(build_col_def(
-                    &col_name,
-                    col_type,
-                    spec.companion_text,
-                    spec.field,
-                ));
-            }
-        } else {
-            columns.push(build_col_def(
-                &spec.col_name,
-                col_type,
-                spec.companion_text,
-                spec.field,
-            ));
+        for plan in column_plans(&spec.col_name, spec.is_localized, locale_config)? {
+            columns.push(spec.column_def(conn, &plan.name));
         }
     }
 
@@ -234,12 +199,7 @@ fn add_field_column_if_missing(
         return Ok(false);
     }
 
-    let col_def = build_col_def(
-        col_name,
-        spec.ddl_type(conn),
-        spec.companion_text,
-        spec.field,
-    );
+    let col_def = spec.column_def(conn, col_name);
     add_column_if_missing(conn, table_name, col_name, &col_def, existing)?;
 
     Ok(true)

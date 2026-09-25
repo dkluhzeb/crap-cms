@@ -8,6 +8,9 @@
  *
  * Requires `window.CodeMirror` (loaded via `codemirror.js` IIFE bundle).
  *
+ * `data-rows` (the field's `admin.rows`) sizes the editor to that many
+ * lines; the textarea's `placeholder` shows while the document is empty.
+ *
  * @example
  * <crap-code data-language="json">
  *   <textarea name="content" hidden>...</textarea>
@@ -38,8 +41,8 @@ const sheet = css`
     box-shadow: 0 0 0 2px var(--color-primary-bg, rgba(22, 119, 255, 0.06));
   }
   .code-editor .cm-editor {
-    min-height: 12.5rem;
-    max-height: 37.5rem;
+    min-height: var(--code-editor-min-height, 12.5rem);
+    max-height: max(37.5rem, var(--code-editor-min-height, 0px));
     overflow: auto;
   }
   .code-editor .cm-editor.cm-focused { outline: none; }
@@ -157,6 +160,14 @@ const THEME_SPEC = {
   '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': {
     backgroundColor: 'var(--color-primary-bg, rgba(22,119,255,0.12))',
   },
+  '.cm-content[data-placeholder]::before': {
+    content: 'attr(data-placeholder)',
+    color: 'var(--text-tertiary, rgba(0,0,0,0.45))',
+    float: 'left',
+    height: '0',
+    marginLeft: '6px',
+    pointerEvents: 'none',
+  },
   '.cm-activeLine': {
     backgroundColor: 'var(--bg-hover, rgba(0,0,0,0.02))',
   },
@@ -266,6 +277,8 @@ function buildExtensions(CM, textarea, languageCompartment, language, readonly) 
 
   if (readonly) ext.push(CM.EditorState.readOnly.of(true));
 
+  if (textarea.placeholder) ext.push(placeholderExtension(CM, textarea.placeholder));
+
   ext.push(
     CM.EditorView.updateListener.of(
       /** @param {any} update */ (update) => {
@@ -275,6 +288,36 @@ function buildExtensions(CM, textarea, languageCompartment, language, readonly) 
     CM.EditorView.theme(THEME_SPEC),
   );
   return ext;
+}
+
+/**
+ * Show `text` while the document is empty — the field's
+ * `admin.placeholder`, which the hidden textarea carries. The bundle has
+ * no placeholder extension, so the editable root carries it as an
+ * attribute the theme renders.
+ *
+ * @param {any} CM
+ * @param {string} text
+ */
+function placeholderExtension(CM, text) {
+  return CM.EditorView.contentAttributes.of(
+    /** @param {any} view */ (view) =>
+      view.state.doc.length === 0
+        ? { 'data-placeholder': text, 'aria-placeholder': text }
+        : { 'aria-placeholder': text },
+  );
+}
+
+/**
+ * Size the editor to show `data-rows` lines (the field's `admin.rows`) —
+ * the default height otherwise.
+ *
+ * @param {HTMLElement} host
+ */
+function applyRows(host) {
+  const rows = Number(host.getAttribute('data-rows'));
+  if (!Number.isInteger(rows) || rows <= 0) return;
+  host.style.setProperty('--code-editor-min-height', `calc(${rows} * 1.5em + 1rem)`);
 }
 
 /**
@@ -331,6 +374,7 @@ class CrapCode extends HTMLElement {
 
     const root = /** @type {ShadowRoot} */ (this.shadowRoot);
     root.adoptedStyleSheets = [sheet];
+    applyRows(this);
 
     const languages = parseLanguagesAttr(this);
     if (languages.length > 0) {

@@ -8,8 +8,7 @@ use crate::core::{
     validate::ValidationError,
 };
 
-use super::ValidationCtx;
-use super::recursive::ValidationWalker;
+use super::{ValidationCtx, recursive::ValidationWalker, stored::StoredDocument};
 
 /// Validate a write's field data — the one entry point every write path uses
 /// (`HookRunner::validate_fields` and the in-VM Lua CRUD write hooks).
@@ -58,8 +57,11 @@ pub(in crate::hooks::lifecycle::validation) fn validate_fields_inner(
         return Err(ValidationError::new(nul_errors));
     }
 
+    // What the edited document already holds — read only if a check asks.
+    let stored = StoredDocument::new(ctx, fields);
+
     let mut errors = Vec::new();
-    ValidationWalker::new(lua, &flat, data, ctx).walk(fields, "", false, &mut errors);
+    ValidationWalker::new(lua, &flat, data, &stored).walk(fields, "", false, &mut errors);
 
     // Document-level: localized required fields must be complete across their
     // `required_locales` (reads the existing row for non-write locales).

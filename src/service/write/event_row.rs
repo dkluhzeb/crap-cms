@@ -51,6 +51,27 @@ impl ServiceContext<'_> {
         Ok(Some(EventRow::new(&row)))
     }
 
+    /// The stored `_status` of collection row `id` before this write changes
+    /// it, for the write's live event to announce a move between the status
+    /// views (see [`EventRow::status_moved_from`]) — a publish moves a draft
+    /// out of the draft view. `None` when there is nothing to announce: this
+    /// operation publishes no event, the collection has no drafts, or the
+    /// write saves a draft version (`draft`), which leaves the stored row
+    /// where it is. Read under the write's row lock, before it persists.
+    pub(crate) fn status_before_write(&self, id: &str, draft: bool) -> Result<Option<String>> {
+        let Def::Collection(def) = &self.def else {
+            return Ok(None);
+        };
+
+        if draft || !def.has_drafts() || !self.publishes_events() {
+            return Ok(None);
+        }
+
+        let conn = self.resolve_conn()?;
+
+        Ok(query::get_document_status(conn.as_ref(), self.slug, id)?)
+    }
+
     /// The target's stored row in `locale_ctx` as a published write reports
     /// it: a collection document with its join fields hydrated, or the global.
     fn stored_row(&self, id: &str, locale_ctx: Option<&LocaleContext>) -> Result<Document> {
@@ -104,7 +125,7 @@ mod tests {
     use crate::{
         config::LocaleConfig,
         core::{
-            CollectionDefinition, FieldDefinition, FieldType, SharedEventTransport,
+            CollectionDefinition, FieldDefinition, FieldType, SharedEventTransport, VersionsConfig,
             event::InProcessEventBus,
         },
         db::{DbConnection, InMemoryConn, LocaleMode},
@@ -205,6 +226,52 @@ mod tests {
         let row = ctx.write_event_row(&written, Some(&en), false).unwrap();
 
         assert_eq!(event_title(row), json!("Hello"));
+    }
+
+    fn drafted_posts() -> CollectionDefinition {
+        let mut def = posts();
+        def.versions = Some(VersionsConfig::new(true, 0));
+        def
+    }
+
+    /// A write that may publish a draft reads the status the row has going
+    /// in; a draft save, a collection without drafts, or a write that
+    /// publishes no event reads nothing.
+    #[test]
+    fn status_before_write_reads_only_what_an_event_can_announce() {
+        let conn = seeded();
+        conn.execute("UPDATE posts SET _status = 'draft' WHERE id = 'p1'", &[])
+            .unwrap();
+
+        let drafted = drafted_posts();
+        let publishing = ServiceContext::collection("posts", &drafted)
+            .conn(&conn)
+            .event_transport(Some(transport()))
+            .build();
+
+        assert_eq!(
+            publishing
+                .status_before_write("p1", false)
+                .unwrap()
+                .as_deref(),
+            Some("draft")
+        );
+        assert_eq!(publishing.status_before_write("p1", true).unwrap(), None);
+
+        let plain = posts();
+        let without_drafts = ServiceContext::collection("posts", &plain)
+            .conn(&conn)
+            .event_transport(Some(transport()))
+            .build();
+        assert_eq!(
+            without_drafts.status_before_write("p1", false).unwrap(),
+            None
+        );
+
+        let silent = ServiceContext::collection("posts", &drafted)
+            .conn(&conn)
+            .build();
+        assert_eq!(silent.status_before_write("p1", false).unwrap(), None);
     }
 
     /// Nothing is read for a write that publishes no event.

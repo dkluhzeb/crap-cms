@@ -101,7 +101,8 @@ pub fn count_with_search(
 /// filter clauses, soft-delete exclusion) but selects `MAX(updated_at)`, so an
 /// access-scoped caller (e.g. the dashboard) gets a "last activity" timestamp
 /// that never reflects rows the viewer cannot see. Returns `None` when no row
-/// matches.
+/// matches, and for a collection defined with `timestamps = false`, whose table
+/// has no `updated_at` column.
 ///
 /// # Errors
 ///
@@ -114,6 +115,10 @@ pub fn max_updated_at(
     locale_ctx: Option<&LocaleContext>,
     include_deleted: bool,
 ) -> Result<Option<String>> {
+    if !def.timestamps {
+        return Ok(None);
+    }
+
     let (exact, prefixes) = get_valid_filter_paths(def, locale_ctx);
     for clause in filters {
         validate_clause_fields(clause, &exact, &prefixes)?;
@@ -280,6 +285,30 @@ mod tests {
 
         let c = count(&conn, "posts", &def, &[], None).unwrap();
         assert_eq!(c, 0);
+    }
+
+    /// A `timestamps = false` collection has no `updated_at` column: the
+    /// "last updated" read the dashboard card makes must answer `None`, not
+    /// fail the query.
+    #[test]
+    fn max_updated_at_without_timestamps_is_none() {
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
+        conn.execute_batch("CREATE TABLE logs (id TEXT PRIMARY KEY, title TEXT)")
+            .unwrap();
+
+        let mut def = CollectionDefinition::new("logs");
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+        def.timestamps = false;
+
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("entry"));
+        create(&conn, "logs", &def, &data, None).unwrap();
+
+        assert_eq!(
+            max_updated_at(&conn, "logs", &def, &[], None, false).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -529,7 +558,11 @@ mod tests {
         create(&conn, "posts", &def, &d2, None).unwrap();
 
         // Set up FTS
-        fts::sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+        fts::sync_fts_table(
+            &conn,
+            &fts::FtsIndex::builder("posts", &def, &LocaleConfig::default()).build(),
+        )
+        .unwrap();
 
         // count_with_search with no other filters (exercises the WHERE-less FTS code path)
         let c = count_with_search(&conn, "posts", &def, &[], None, Some("Rust"), false).unwrap();

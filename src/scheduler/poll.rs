@@ -340,10 +340,14 @@ fn stamp_failed_run(pool: &DbPool, job_run: &JobRun, reason: &str, should_retry:
     }
 }
 
-/// Whether a job's run stops itself at its `timeout`: a Lua handler (the
-/// VM's cooperative deadline) and `_system_bulk` (its in-batch deadline) do.
-/// Email delivery and image conversion are bounded by their own I/O — the
-/// SMTP timeout, a finite encode — instead.
+/// Whether a job's run stops itself at its `timeout` and may then still
+/// need the self-limiting grace (a rollback, a terminal status write): a Lua
+/// handler (the VM's cooperative deadline) and `_system_bulk` (its in-batch
+/// deadline) do. Email delivery and image conversion get no grace: email is
+/// bounded by its provider — the SMTP and webhook transport timeouts, or,
+/// for a custom Lua provider, the queue timeout installed as the leased VM's
+/// deadline, which ends the send with nothing left to roll back — and image
+/// conversion by a finite encode.
 fn enforces_own_deadline(slug: &str) -> bool {
     slug != SYSTEM_EMAIL_JOB && slug != SYSTEM_IMAGE_CONVERT_JOB
 }

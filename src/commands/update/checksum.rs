@@ -63,15 +63,15 @@ pub fn verify(downloaded: &Path, expected_hex: &str) -> Result<()> {
     Ok(())
 }
 
-/// Given a manifest + asset name, verify the file.
-pub(super) fn verify_against_manifest(
-    downloaded: &Path,
-    manifest: &str,
-    asset_name: &str,
-) -> Result<()> {
-    let expected = expected_hex_for(manifest, asset_name)
-        .ok_or_else(|| anyhow!("no SHA256 entry for {asset_name} in SHA256SUMS manifest"))?;
-    verify(downloaded, &expected)
+/// The manifest's hash for `asset_name`, or an error when it has none.
+///
+/// `SHA256SUMS` is published in the same GitHub release as the binary, so a
+/// match proves the download is intact (no truncation or corruption in
+/// transit), not that it was built by the project: whoever can publish a
+/// release asset can publish a matching manifest.
+pub(super) fn expected_hex_required(manifest: &str, asset_name: &str) -> Result<String> {
+    expected_hex_for(manifest, asset_name)
+        .ok_or_else(|| anyhow!("no SHA256 entry for {asset_name} in SHA256SUMS manifest"))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -134,7 +134,7 @@ dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd  example.tar.gz
     }
 
     #[test]
-    fn verify_against_manifest_end_to_end() {
+    fn expected_hex_required_then_verify_end_to_end() {
         // Build a manifest whose hash matches the file we write.
         let mut tmp = NamedTempFile::new().unwrap();
         tmp.write_all(b"crap").unwrap();
@@ -148,13 +148,13 @@ dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd  example.tar.gz
             .to_string();
         let manifest = format!("{hex}  {name}\n");
 
-        verify_against_manifest(tmp.path(), &manifest, &name).unwrap();
+        let expected = expected_hex_required(&manifest, &name).unwrap();
+        verify(tmp.path(), &expected).unwrap();
     }
 
     #[test]
-    fn verify_against_manifest_errors_when_asset_absent() {
-        let err = verify_against_manifest(Path::new("/dev/null"), SAMPLE_MANIFEST, "absent.bin")
-            .unwrap_err();
+    fn expected_hex_required_errors_when_asset_absent() {
+        let err = expected_hex_required(SAMPLE_MANIFEST, "absent.bin").unwrap_err();
         assert!(format!("{err:#}").contains("no SHA256 entry"));
     }
 }

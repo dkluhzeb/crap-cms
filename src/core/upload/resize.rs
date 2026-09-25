@@ -2,89 +2,80 @@ use std::{collections::HashMap, io::Cursor};
 #[cfg(test)]
 use std::{fs, path::Path};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 use image::{
-    DynamicImage, ExtendedColorType, ImageEncoder, ImageFormat, codecs::avif::AvifEncoder, imageops,
+    DynamicImage, ExtendedColorType, ImageEncoder, ImageFormat, codecs::avif::AvifEncoder,
 };
 use tracing::warn;
 
 use crate::core::upload::{
-    FormatQuality, FormatResult, ImageFit, ImageSize, QueuedConversion, SharedStorage, SizeResult,
-    served_url,
+    FormatQuality, FormatResult, ImageSize, QueuedConversion, SharedStorage, SizeResult, served_url,
 };
 
 use super::{CleanupGuard, StorageBackend, process::Destination};
 
+mod plan;
+
 /// Resize an image according to the given size definition and fit mode.
+///
+/// The passes are planned from the dimensions first (see [`plan`]), so the
+/// buffers any size allocates stay within the larger of the source and the
+/// target whatever the source's aspect ratio.
 ///
 /// Returns `None` if the source image has zero width or height (malformed image).
 pub(super) fn resize_image(img: &DynamicImage, size: &ImageSize) -> Option<DynamicImage> {
-    if img.width() == 0 || img.height() == 0 {
-        return None;
-    }
+    let steps = plan::plan(img.width(), img.height(), size)?;
 
-    let filter = imageops::FilterType::CatmullRom;
-    Some(match size.fit {
-        ImageFit::Cover => {
-            // Resize to fill, then center crop. Compare aspect ratios via
-            // u64 cross-multiplication and compute the new dimension via
-            // integer math; u32 image dimensions fit in u32 even after
-            // multiplying by another u32 in u64.
-            let src_wide = u64::from(img.width()) * u64::from(size.height)
-                > u64::from(img.height()) * u64::from(size.width);
-
-            // A computed dimension that exceeds u32 means the source image
-            // dimensions are pathological; bail rather than asking the image
-            // crate to allocate a ~4-billion-pixel canvas.
-            let (resize_w, resize_h) = if src_wide {
-                // Source is wider — fit height, crop width
-                let h = size.height;
-                let w_u64 = u64::from(img.width()) * u64::from(size.height)
-                    / u64::from(img.height().max(1));
-                (u32::try_from(w_u64).ok()?.max(1), h)
-            } else {
-                // Source is taller — fit width, crop height
-                let w = size.width;
-                let h_u64 =
-                    u64::from(img.height()) * u64::from(size.width) / u64::from(img.width().max(1));
-                (w, u32::try_from(h_u64).ok()?.max(1))
-            };
-
-            let resized = img.resize_exact(resize_w, resize_h, filter);
-            let x = (resized.width().saturating_sub(size.width)) / 2;
-            let y = (resized.height().saturating_sub(size.height)) / 2;
-
-            resized.crop_imm(
-                x,
-                y,
-                size.width.min(resized.width()),
-                size.height.min(resized.height()),
-            )
-        }
-        ImageFit::Contain | ImageFit::Inside => {
-            // Resize to fit within bounds, preserving aspect ratio
-            img.resize(size.width, size.height, filter)
-        }
-        ImageFit::Fill => {
-            // Stretch to exact dimensions
-            img.resize_exact(size.width, size.height, filter)
-        }
-    })
+    Some(plan::run(img, &steps))
 }
 
-/// Encode image as lossy WebP with given quality (via libwebp), returning raw bytes.
-pub(super) fn webp_to_bytes(img: &DynamicImage, quality: u8) -> Vec<u8> {
+/// The largest width or height libwebp encodes.
+const WEBP_MAX_DIMENSION: u32 = 16383;
+
+/// The largest width or height the AV1 encoder accepts.
+const AVIF_MAX_DIMENSION: u32 = 65535;
+
+/// Refuse an image the `format` encoder cannot take, before converting a
+/// single pixel for it.
+fn check_encodable(img: &DynamicImage, format: &str, max: u32) -> Result<()> {
+    if img.width() > max || img.height() > max {
+        bail!(
+            "{format} cannot encode a {}x{} image (at most {max} pixels per side)",
+            img.width(),
+            img.height()
+        );
+    }
+
+    Ok(())
+}
+
+/// The dimension limit of the `format` variant's encoder.
+fn encoder_max_dimension(format: &str) -> Result<u32> {
+    match format {
+        "webp" => Ok(WEBP_MAX_DIMENSION),
+        "avif" => Ok(AVIF_MAX_DIMENSION),
+        _ => bail!("Unknown format: {format}"),
+    }
+}
+
+/// Encode image as lossy WebP with given quality (via libwebp), returning raw
+/// bytes. An image over libwebp's dimension limit is an error, never a panic.
+pub(super) fn webp_to_bytes(img: &DynamicImage, quality: u8) -> Result<Vec<u8>> {
+    check_encodable(img, "WebP", WEBP_MAX_DIMENSION)?;
+
     let rgba = img.to_rgba8();
     let encoder = webp::Encoder::from_rgba(&rgba, img.width(), img.height());
-    let mem = encoder.encode(f32::from(quality));
+    let mem = encoder
+        .encode_simple(false, f32::from(quality))
+        .map_err(|e| anyhow!("Failed to encode WebP: {e:?}"))?;
 
-    mem.to_vec()
+    Ok(mem.to_vec())
 }
 
 /// Save image as lossy WebP with given quality (via libwebp).
 #[cfg(test)]
 pub(super) fn save_webp(img: &DynamicImage, path: &Path, quality: u8) -> Result<()> {
-    let data = webp_to_bytes(img, quality);
+    let data = webp_to_bytes(img, quality)?;
 
     fs::write(path, &data).with_context(|| format!("Failed to write WebP: {}", path.display()))?;
 
@@ -93,6 +84,8 @@ pub(super) fn save_webp(img: &DynamicImage, path: &Path, quality: u8) -> Result<
 
 /// Encode image as AVIF with given quality, returning raw bytes.
 pub(super) fn avif_to_bytes(img: &DynamicImage, quality: u8) -> Result<Vec<u8>> {
+    check_encodable(img, "AVIF", AVIF_MAX_DIMENSION)?;
+
     let rgba = img.to_rgba8();
     let mut buf = Cursor::new(Vec::new());
     let encoder = AvifEncoder::new_with_speed_quality(&mut buf, 8, quality);
@@ -143,7 +136,7 @@ pub fn process_image_entry_with_storage(
         .with_context(|| format!("Failed to decode image: {source_key}"))?;
 
     let target_data = match format {
-        "webp" => webp_to_bytes(&img, quality),
+        "webp" => webp_to_bytes(&img, quality)?,
         "avif" => avif_to_bytes(&img, quality)?,
         _ => bail!("Unsupported format: {format}"),
     };
@@ -236,6 +229,20 @@ pub(super) fn process_format_variant(
         ctx.opts.quality,
     );
 
+    // A size the encoder cannot take (over its dimension limit) loses only
+    // this variant — converted now or queued, since a queued conversion of it
+    // could only fail. The size itself and every other variant are stored.
+    let max = encoder_max_dimension(ctx.format_name)?;
+
+    if let Err(e) = check_encodable(ctx.resized, ctx.format_name, max) {
+        warn!(
+            "Skipping the {} variant of size '{}': {e:#}",
+            ctx.format_name, ctx.size_name
+        );
+
+        return Ok(());
+    }
+
     if ctx.opts.queue {
         // Enqueue storage KEYS, not absolute filesystem paths. The scheduler
         // dequeues and calls `storage.get(source_key)` / `storage.put(target_key)`,
@@ -250,7 +257,7 @@ pub(super) fn process_format_variant(
     }
 
     let data = match ctx.format_name {
-        "webp" => webp_to_bytes(ctx.resized, ctx.opts.quality),
+        "webp" => webp_to_bytes(ctx.resized, ctx.opts.quality)?,
         "avif" => avif_to_bytes(ctx.resized, ctx.opts.quality)?,
         _ => bail!("Unknown format: {}", ctx.format_name),
     };
@@ -446,8 +453,84 @@ mod tests {
     use image::{ImageBuffer, ImageEncoder, Rgba};
     use std::fs;
 
+    use std::sync::Arc;
+
     use super::*;
-    use crate::core::upload::ImageSizeBuilder;
+    use crate::core::upload::{FormatQuality, ImageFit, ImageSizeBuilder, storage::LocalStorage};
+
+    /// Regression: `webp::Encoder::encode` unwraps libwebp's result, so an
+    /// image over its 16383-pixel limit panicked. It is now an error naming
+    /// the limit, and AVIF's limit is checked the same way.
+    #[test]
+    fn encoding_over_the_dimension_limit_is_an_error() {
+        let webp_wide = DynamicImage::new_rgb8(WEBP_MAX_DIMENSION + 1, 1);
+        let err = webp_to_bytes(&webp_wide, 80).unwrap_err().to_string();
+        assert!(err.contains("16383"), "{err}");
+
+        let avif_tall = DynamicImage::new_rgb8(1, AVIF_MAX_DIMENSION + 1);
+        let err = avif_to_bytes(&avif_tall, 80).unwrap_err().to_string();
+        assert!(err.contains("65535"), "{err}");
+    }
+
+    /// A size the WebP encoder cannot take loses only its WebP variant: the
+    /// upload goes on, nothing is stored or recorded for the variant.
+    #[test]
+    fn an_unencodable_variant_is_skipped() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage: SharedStorage = Arc::new(LocalStorage::new(tmp.path().join("uploads")));
+        let resized = DynamicImage::new_rgb8(WEBP_MAX_DIMENSION + 1, 1);
+        let opts = FormatQuality::new(80, false);
+
+        let ctx = FormatVariantCtx {
+            resized: &resized,
+            format_name: "webp",
+            opts: &opts,
+            size_name: "wide",
+            size_key: "media/photo_wide.png",
+            storage: &storage,
+        };
+
+        let mut guard = CleanupGuard::new(storage.clone());
+        let mut formats = HashMap::new();
+        let mut queued = Vec::new();
+
+        process_format_variant(&ctx, &mut guard, &mut formats, &mut queued)
+            .expect("the upload must not fail on one variant");
+
+        assert!(formats.is_empty(), "no variant recorded");
+        assert!(queued.is_empty(), "nothing queued");
+    }
+
+    /// Regression: a queued variant skipped the dimension check, so a size
+    /// over the encoder's limit queued a conversion that could only fail —
+    /// retried to its last attempt, then left failed. It is skipped up front,
+    /// exactly like a variant converted during the upload.
+    #[test]
+    fn an_unencodable_variant_is_not_queued() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage: SharedStorage = Arc::new(LocalStorage::new(tmp.path().join("uploads")));
+        let resized = DynamicImage::new_rgb8(1, WEBP_MAX_DIMENSION + 1);
+        let opts = FormatQuality::new(80, true);
+
+        let ctx = FormatVariantCtx {
+            resized: &resized,
+            format_name: "webp",
+            opts: &opts,
+            size_name: "tall",
+            size_key: "media/photo_tall.png",
+            storage: &storage,
+        };
+
+        let mut guard = CleanupGuard::new(storage.clone());
+        let mut formats = HashMap::new();
+        let mut queued = Vec::new();
+
+        process_format_variant(&ctx, &mut guard, &mut formats, &mut queued)
+            .expect("the upload must not fail on one variant");
+
+        assert!(queued.is_empty(), "a doomed conversion must not be queued");
+        assert!(formats.is_empty());
+    }
 
     /// Create a small test PNG image in memory.
     fn create_test_png(width: u32, height: u32) -> Vec<u8> {
@@ -563,10 +646,8 @@ mod tests {
 
     #[test]
     fn resize_image_cover_extreme_aspect_ratio_no_overflow() {
-        // Wide source with tall target — the intermediate width calculation
-        // could overflow u32 without the .min(u32::MAX) guard.
-        // Use small dimensions (10x1 → 1x10) to exercise the ratio math
-        // without allocating a huge intermediate image.
+        // Wide source with tall target: the crop keeps the target's aspect
+        // ratio, so the ratio math must hold at the extreme (10x1 → 1x10).
         let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(10, 1, |_, _| {
             image::Rgba([0, 0, 0, 255])
         }));

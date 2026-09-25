@@ -85,9 +85,10 @@ fn account_action_blocking(
 ) -> Result<(), Status> {
     let infra = &input.infra;
 
+    // The action writes (and bumps the session version) on this connection.
     let conn = infra
         .pool
-        .get()
+        .write()
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
 
     let auth_user = ContentService::resolve_auth_user(

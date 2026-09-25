@@ -54,6 +54,12 @@ impl HookRunner {
         self.has_template_data
     }
 
+    /// The registry snapshot this runner validates writes against.
+    #[must_use]
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
+
     /// A pooled [`LuaVmLease`] over this runner's VM pool — each
     /// `with_vm` call checks a VM out of the pool. Used to back custom
     /// Lua providers (email / storage) for callers that are NOT already

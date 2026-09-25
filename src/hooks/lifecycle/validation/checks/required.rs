@@ -1,6 +1,8 @@
 use serde_json::Value;
 
-use crate::core::{FieldDefinition, FieldType, reference_items, validate::FieldError};
+use crate::core::{
+    FieldDefinition, FieldType, reference_items, richtext::richtext_is_blank, validate::FieldError,
+};
 use crate::hooks::lifecycle::validation::runner::is_empty_value;
 
 /// Check required constraint. For Array and has-many Relationship, "required"
@@ -45,15 +47,22 @@ pub(crate) fn check_required(
 }
 
 /// Check if a field value is "present" for required validation purposes —
-/// the one predicate for `required` at the top level and inside array/blocks
-/// rows. Join-shaped and `has_many` fields accept both value encodings that
-/// reach validation: the typed `Value::Array` (Lua/gRPC) and the JSON-string
-/// encoding (admin form); an empty list in either encoding is absent.
+/// the one predicate for `required` at the top level, inside array/blocks
+/// rows, in custom node attrs and for `required_locales` completeness.
+/// Join-shaped and `has_many` fields accept both value encodings that reach
+/// validation: the typed `Value::Array` (Lua/gRPC) and the JSON-string
+/// encoding (admin form); an empty list in either encoding is absent. A rich
+/// text value is absent when it is blank — an emptied editor still submits
+/// markup (`<p></p>`, an empty paragraph).
 pub(crate) fn is_value_present(
     field: &FieldDefinition,
     value: Option<&Value>,
     is_empty: bool,
 ) -> bool {
+    if field.field_type == FieldType::Richtext {
+        return value.is_some_and(|v| !richtext_is_blank(field, v));
+    }
+
     if field.is_has_many_reference() {
         // The writer's own decoder: a typed list, a JSON-array string, or the
         // admin form's comma list — present when it names at least one id.
@@ -89,6 +98,7 @@ pub(crate) fn is_value_present(
 mod tests {
     use super::*;
     use crate::core::DocumentFields;
+    use crate::core::FieldAdmin;
     use crate::core::RelationshipConfig;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
@@ -359,5 +369,95 @@ mod tests {
             result.is_ok(),
             "Non-empty array for required array field should pass"
         );
+    }
+
+    /// The error keys of validating `data` against `fields` (non-draft create).
+    fn required_keys(fields: &[FieldDefinition], data: &DocumentFields) -> Vec<String> {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, body TEXT)")
+            .unwrap();
+
+        validate_fields_inner(
+            &lua,
+            fields,
+            data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        )
+        .err()
+        .map(|e| e.errors.iter().filter_map(|fe| fe.key.clone()).collect())
+        .unwrap_or_default()
+    }
+
+    fn required_richtext(format: &str) -> FieldDefinition {
+        FieldDefinition::builder("body", FieldType::Richtext)
+            .required(true)
+            .admin(FieldAdmin::builder().richtext_format(format).build())
+            .build()
+    }
+
+    /// Regression: an emptied editor submits `<p></p>` (HTML) or a document
+    /// holding one empty paragraph (JSON), and that satisfied `required`.
+    #[test]
+    fn required_richtext_rejects_a_blank_document() {
+        let blank = [
+            ("html", json!("<p></p>")),
+            ("html", json!("<p> &nbsp; </p>")),
+            (
+                "json",
+                json!(r#"{"type":"doc","content":[{"type":"paragraph"}]}"#),
+            ),
+            (
+                "json",
+                json!({ "type": "doc", "content": [{ "type": "paragraph" }] }),
+            ),
+        ];
+
+        for (format, value) in blank {
+            let data: DocumentFields = [("body".to_string(), value.clone())].into_iter().collect();
+
+            assert_eq!(
+                required_keys(&[required_richtext(format)], &data),
+                vec!["validation.required"],
+                "{format}: {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn required_richtext_accepts_text() {
+        let filled = [
+            ("html", json!("<p>Hi</p>")),
+            (
+                "json",
+                json!({ "type": "doc", "content": [
+                    { "type": "paragraph", "content": [{ "type": "text", "text": "Hi" }] }
+                ]}),
+            ),
+        ];
+
+        for (format, value) in filled {
+            let data: DocumentFields = [("body".to_string(), value.clone())].into_iter().collect();
+
+            assert!(
+                required_keys(&[required_richtext(format)], &data).is_empty(),
+                "{format}: {value}"
+            );
+        }
+    }
+
+    /// The same predicate judges a rich text sub-field inside an array row.
+    #[test]
+    fn required_richtext_in_an_array_row_rejects_a_blank_document() {
+        let fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![required_richtext("html")])
+                .build(),
+        ];
+        let data: DocumentFields = [("items".to_string(), json!([{ "body": "<p></p>" }]))]
+            .into_iter()
+            .collect();
+
+        assert_eq!(required_keys(&fields, &data), vec!["validation.required"]);
     }
 }

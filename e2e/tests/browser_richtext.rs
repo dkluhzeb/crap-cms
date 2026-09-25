@@ -11,13 +11,15 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
+use serde_json::json;
 use tokio::time::sleep;
 
 use crap_cms::{
     config::CrapConfig,
-    core::{collection::*, field::*},
+    core::{DocumentFields, collection::*, field::*},
+    db::{DbConnection, DbValue, query},
 };
 
 use crap_cms_e2e::{
@@ -355,6 +357,418 @@ async fn richtext_parses_stored_html_inertly() {
         .into_value()
         .unwrap();
     assert!(!pwned, "stored HTML must not run event handlers");
+
+    server_handle.abort();
+}
+
+// ── richtext_unloadable_json_is_kept_read_only ───────────────────────────
+
+/// Regression: a stored JSON document holding a node the field's editor does
+/// not have (a feature disabled after the content was written) loaded as an
+/// EMPTY editor, and the first edit overwrote the stored value. The editor now
+/// shows an error and keeps the textarea value untouched, read-only: the form
+/// resubmits it exactly as stored.
+#[tokio::test(flavor = "multi_thread")]
+async fn richtext_unloadable_json_is_kept_read_only() {
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        browser: _browser,
+        ..
+    } = setup_browser_test(
+        vec![make_richtext_def(), make_users_def()],
+        vec![],
+        "brt6@test.com",
+        "pass123",
+    )
+    .await;
+
+    page.goto(format!("{base_url}/admin/collections/articles/create"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    browser::wait_for_js(&page, "customElements.get('crap-richtext')").await;
+
+    // Only `bold` enabled: the stored heading cannot be loaded.
+    page.evaluate(
+        r#"() => {
+            const host = document.createElement('crap-richtext');
+            host.id = 'rt-unloadable';
+            host.setAttribute('data-format', 'json');
+            host.setAttribute('data-features', '["bold"]');
+            const ta = document.createElement('textarea');
+            ta.value = '{"type":"doc","content":[{"type":"heading","attrs":{"level":1},"content":[{"type":"text","text":"Keep me"}]}]}';
+            host.appendChild(ta);
+            document.body.appendChild(host);
+        }"#,
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('#rt-unloadable')?.shadowRoot?.querySelector('.richtext__load-error')"
+        )
+        .await,
+        "an unloadable document must show the load error"
+    );
+
+    let state: String = page
+        .evaluate(
+            "() => { const h = document.querySelector('#rt-unloadable'); \
+             const ta = h.querySelector('textarea'); \
+             return [String(!!h._view), String(ta.disabled), String(ta.readOnly), ta.value, \
+                     h.shadowRoot.querySelector('.richtext__load-error-source').textContent].join('|'); }",
+        )
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    let stored = r#"{"type":"doc","content":[{"type":"heading","attrs":{"level":1},"content":[{"type":"text","text":"Keep me"}]}]}"#;
+    assert_eq!(state, format!("false|false|true|{stored}|{stored}"));
+
+    server_handle.abort();
+}
+
+// ── richtext_drops_disallowed_link_schemes ───────────────────────────────
+
+/// Regression: the link protocol allowlist guarded only the link dialog; a
+/// pasted or stored `<a href="javascript:…">` became a link mark and was
+/// written back into the value.
+#[tokio::test(flavor = "multi_thread")]
+async fn richtext_drops_disallowed_link_schemes() {
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        browser: _browser,
+        ..
+    } = setup_browser_test(
+        vec![make_richtext_def(), make_users_def()],
+        vec![],
+        "brt7@test.com",
+        "pass123",
+    )
+    .await;
+
+    page.goto(format!("{base_url}/admin/collections/articles/create"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    browser::wait_for_js(&page, "customElements.get('crap-richtext')").await;
+
+    page.evaluate(
+        r#"() => {
+            const host = document.createElement('crap-richtext');
+            host.id = 'rt-links';
+            const ta = document.createElement('textarea');
+            ta.value = '<p><a href="java&#9;script:alert(1)">bad</a> <a href="https://example.com">good</a></p>';
+            host.appendChild(ta);
+            document.body.appendChild(host);
+        }"#,
+    )
+    .await
+    .unwrap();
+    browser::wait_for_js(&page, "document.querySelector('#rt-links')?._view").await;
+
+    // Any edit re-serializes the document into the textarea.
+    page.evaluate(
+        "() => { const v = document.querySelector('#rt-links')._view; \
+         v.dispatch(v.state.tr.insertText('!', v.state.doc.content.size - 1)); }",
+    )
+    .await
+    .unwrap();
+    browser::wait_for_js(
+        &page,
+        "(document.querySelector('#rt-links textarea')?.value ?? '').includes('!')",
+    )
+    .await;
+
+    let value: String = page
+        .evaluate("() => document.querySelector('#rt-links textarea').value")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert!(!value.contains("script:"), "disallowed link kept: {value}");
+    assert!(value.contains("bad"), "the link text stays: {value}");
+    assert!(value.contains(r#"href="https://example.com""#), "{value}");
+
+    server_handle.abort();
+}
+
+// ── richtext_shows_placeholder_while_empty ───────────────────────────────
+
+/// Regression: `admin.placeholder` was rendered only on the hidden textarea,
+/// so the editor never showed it. The editable root carries it while the
+/// document is empty and drops it once there is content.
+#[tokio::test(flavor = "multi_thread")]
+async fn richtext_shows_placeholder_while_empty() {
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        browser: _browser,
+        ..
+    } = setup_browser_test(
+        vec![make_richtext_def(), make_users_def()],
+        vec![],
+        "brt8@test.com",
+        "pass123",
+    )
+    .await;
+
+    page.goto(format!("{base_url}/admin/collections/articles/create"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    browser::wait_for_js(&page, "customElements.get('crap-richtext')").await;
+
+    page.evaluate(
+        r"() => {
+            const host = document.createElement('crap-richtext');
+            host.id = 'rt-placeholder';
+            const ta = document.createElement('textarea');
+            ta.placeholder = 'Write here';
+            host.appendChild(ta);
+            document.body.appendChild(host);
+        }",
+    )
+    .await
+    .unwrap();
+    browser::wait_for_js(&page, "document.querySelector('#rt-placeholder')?._view").await;
+
+    let empty: String = page
+        .evaluate(
+            "() => document.querySelector('#rt-placeholder')._view.dom.getAttribute('data-placeholder') ?? ''",
+        )
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert_eq!(empty, "Write here");
+
+    page.evaluate(
+        "() => { const v = document.querySelector('#rt-placeholder')._view; \
+         v.dispatch(v.state.tr.insertText('x', 1)); }",
+    )
+    .await
+    .unwrap();
+
+    let typed: bool = page
+        .evaluate(
+            "() => document.querySelector('#rt-placeholder')._view.dom.hasAttribute('data-placeholder')",
+        )
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert!(
+        !typed,
+        "the placeholder must go once the editor has content"
+    );
+
+    server_handle.abort();
+}
+
+// ── richtext_json_is_submitted_as_loaded ─────────────────────────────────
+
+/// Regression: the editor drops an attribute its schema does not declare when
+/// it loads a JSON document, but an unedited field submitted the stored text
+/// — which validation refuses, so the document could not be saved without
+/// touching the editor. The textarea now holds the document as loaded.
+#[tokio::test(flavor = "multi_thread")]
+async fn richtext_json_is_submitted_as_loaded() {
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        browser: _browser,
+        ..
+    } = setup_browser_test(
+        vec![make_richtext_def(), make_users_def()],
+        vec![],
+        "brt9@test.com",
+        "pass123",
+    )
+    .await;
+
+    page.goto(format!("{base_url}/admin/collections/articles/create"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    browser::wait_for_js(&page, "customElements.get('crap-richtext')").await;
+
+    page.evaluate(
+        r#"() => {
+            const host = document.createElement('crap-richtext');
+            host.id = 'rt-normalized';
+            host.setAttribute('data-format', 'json');
+            const ta = document.createElement('textarea');
+            ta.value = '{"type":"doc","content":[{"type":"paragraph","attrs":{"align":"left"},"content":[{"type":"text","text":"Kept"}]}]}';
+            host.appendChild(ta);
+            document.body.appendChild(host);
+        }"#,
+    )
+    .await
+    .unwrap();
+    browser::wait_for_js(&page, "document.querySelector('#rt-normalized')?._view").await;
+
+    let value: String = page
+        .evaluate("() => document.querySelector('#rt-normalized textarea').value")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert!(!value.contains("align"), "stale attr submitted: {value}");
+    assert!(value.contains("Kept"), "{value}");
+
+    server_handle.abort();
+}
+
+// ── richtext_nested_unloadable_value_survives_a_save ─────────────────────
+
+/// A JSON rich text field inside a group inside a block row, enabling only
+/// `bold` — so a stored heading cannot be loaded.
+fn make_nested_richtext_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("pages");
+    def.labels = Labels {
+        singular: Some(LocalizedString::Plain("Page".to_string())),
+        plural: Some(LocalizedString::Plain("Pages".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
+        FieldDefinition::builder("content", FieldType::Blocks)
+            .blocks(vec![BlockDefinition::new(
+                "section",
+                vec![
+                    FieldDefinition::builder("meta", FieldType::Group)
+                        .fields(vec![
+                            FieldDefinition::builder("body", FieldType::Richtext)
+                                .admin(
+                                    FieldAdmin::builder()
+                                        .richtext_format("json")
+                                        .features(vec!["bold".to_string()])
+                                        .build(),
+                                )
+                                .build(),
+                        ])
+                        .build(),
+                ],
+            )])
+            .build(),
+    ];
+    def
+}
+
+/// Store a page whose block row holds `body` directly, bypassing validation —
+/// the value was written before its feature was disabled.
+fn seed_page(app: &TestApp, body: &str) -> String {
+    let def = app.registry.get_collection("pages").unwrap().clone();
+
+    let mut conn = app.pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!("Before"))]).into();
+    let doc = query::create(&tx, "pages", &def, &data, None).unwrap();
+    let row = json!({ "_block_type": "section", "meta": { "body": body } });
+    query::set_block_rows(&tx, "pages", "content", &doc.id, &[row], None).unwrap();
+    tx.commit().unwrap();
+
+    doc.id.to_string()
+}
+
+/// Regression: an unloadable value nested in a group inside a block row was
+/// left out of the submission (its textarea was disabled), and a row stored as
+/// JSON keeps only the keys it is sent — so saving the page for an unrelated
+/// edit silently dropped the value. It is now resubmitted unchanged and the
+/// server accepts the value the page already holds.
+#[tokio::test(flavor = "multi_thread")]
+async fn richtext_nested_unloadable_value_survives_a_save() {
+    let BrowserTestCtx {
+        app,
+        base_url,
+        server_handle,
+        page,
+        browser: _browser,
+        ..
+    } = setup_browser_test(
+        vec![make_nested_richtext_def(), make_users_def()],
+        vec![],
+        "brt10@test.com",
+        "pass123",
+    )
+    .await;
+
+    let body = r#"{"type":"doc","content":[{"type":"heading","attrs":{"level":1},"content":[{"type":"text","text":"Keep me"}]}]}"#;
+    let id = seed_page(&app, body);
+
+    page.goto(format!("{base_url}/admin/collections/pages/{id}"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('crap-richtext')?.shadowRoot?.querySelector('.richtext__load-error')"
+        )
+        .await,
+        "the nested unloadable document must show the load error"
+    );
+
+    page.evaluate(
+        "() => { const input = document.querySelector('input[name=\"title\"]'); \
+         input.value = 'After'; input.dispatchEvent(new Event('input', {bubbles: true})); \
+         document.querySelector('#edit-form').requestSubmit(); }",
+    )
+    .await
+    .unwrap();
+
+    let conn = app.pool.get().unwrap();
+    let mut title = String::new();
+    for _ in 0..60 {
+        title = conn
+            .query_one(
+                "SELECT title FROM pages WHERE id = ?1",
+                &[DbValue::Text(id.clone())],
+            )
+            .unwrap()
+            .and_then(|row| row.get_string("title").ok())
+            .unwrap_or_default();
+        if title == "After" {
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(title, "After", "the save must land");
+
+    let data = conn
+        .query_one(
+            "SELECT data FROM pages_content WHERE parent_id = ?1",
+            &[DbValue::Text(id)],
+        )
+        .unwrap()
+        .and_then(|row| row.get_string("data").ok())
+        .unwrap_or_default();
+    assert!(
+        data.contains("Keep me") && data.contains("heading"),
+        "the nested value must survive the save: {data}"
+    );
 
     server_handle.abort();
 }

@@ -201,6 +201,8 @@ the constraints are dropped in place. On SQLite the table is rebuilt —
 built under a temporary name, filled, then swapped in — with foreign-key
 enforcement off for that one sync and `PRAGMA foreign_key_check` run before
 the commit; a dangling reference rolls the whole sync back. Junction rows,
-version snapshots and their foreign keys survive the transition. Back up the
+version snapshots and their foreign keys survive the transition, and so do the
+indexes and triggers your own migrations created on the table (the managed
+`idx_{slug}_…` indexes are rebuilt from the definition). Back up the
 database before the first boot after the change, as before any schema
 migration.

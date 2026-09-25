@@ -60,6 +60,7 @@ import './array-row.js';
 import './conditions.js';
 import './create-panel.js';
 import './dirty-form.js';
+import './_internal/field-width.js';
 import './_internal/groups.js';
 import './list-settings.js';
 import './list-settings/column-picker.js';

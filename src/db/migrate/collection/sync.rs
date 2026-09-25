@@ -2,17 +2,15 @@
 
 use anyhow::Result;
 
-use crate::{
-    config::LocaleConfig,
-    core::CollectionDefinition,
-    db::{DbConnection, query::fts},
-};
+use crate::{config::LocaleConfig, core::CollectionDefinition, db::DbConnection};
 
 use crate::db::migrate::helpers::{sync_join_tables, sync_versions_table, table_exists};
 
 use super::{alter, create, indexes};
 
-/// Sync a collection's schema: create or alter table, join tables, versions, FTS, and indexes.
+/// Sync a collection's schema: create or alter table, join tables, versions,
+/// and indexes. The search index is rebuilt by the caller, which holds the
+/// registry its rich text custom nodes are resolved against.
 pub(in crate::db::migrate) fn sync_collection_table(
     conn: &dyn DbConnection,
     slug: &str,
@@ -29,10 +27,6 @@ pub(in crate::db::migrate) fn sync_collection_table(
 
     if def.has_versions() {
         sync_versions_table(conn, slug)?;
-    }
-
-    if conn.supports_fts() {
-        fts::sync_fts_table(conn, slug, def, locale_config)?;
     }
 
     indexes::sync_indexes(conn, slug, def, locale_config)?;

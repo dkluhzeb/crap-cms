@@ -75,7 +75,15 @@ pub fn execute_job(p: ExecuteJobParams<'_>) -> Result<()> {
 
     // System email job: handle directly without Lua VM
     if job_run.slug == SYSTEM_EMAIL_JOB {
-        return execute_system_email(pool, job_run, email_provider, start);
+        return execute_system_email(
+            &SystemEmailRun {
+                pool,
+                job_run,
+                email_provider,
+                timeout_secs: job_def.timeout,
+            },
+            start,
+        );
     }
 
     // System image-convert job: encode + write URL column + complete.
@@ -145,19 +153,32 @@ pub fn execute_job(p: ExecuteJobParams<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Execute a `_system_email` job: parse data and send via email provider.
-fn execute_system_email(
-    pool: &DbPool,
-    job_run: &JobRun,
-    email_provider: Option<&dyn EmailProvider>,
-    start: Instant,
-) -> Result<()> {
+/// One `_system_email` run: the claimed row, the provider to deliver
+/// through, and the email queue's timeout the delivery must end within.
+#[derive(Clone, Copy)]
+struct SystemEmailRun<'a> {
+    pool: &'a DbPool,
+    job_run: &'a JobRun,
+    email_provider: Option<&'a dyn EmailProvider>,
+    timeout_secs: u64,
+}
+
+/// Execute a `_system_email` job: parse data and send via email provider,
+/// bounded by the email queue's timeout (see `EmailProvider::send_queued`).
+fn execute_system_email(run: &SystemEmailRun<'_>, start: Instant) -> Result<()> {
+    let SystemEmailRun {
+        pool,
+        job_run,
+        email_provider,
+        timeout_secs,
+    } = *run;
+
     let provider = email_provider
         .ok_or_else(|| anyhow!("System email job requires email provider but none configured"))?;
 
     let data: EmailJobData = from_str(&job_run.data).context("Invalid email job data")?;
 
-    let result = provider.send(&data.to, &data.subject, &data.html, data.text.as_deref());
+    let result = provider.send_queued(&data, timeout_secs);
 
     match result {
         Ok(()) => {

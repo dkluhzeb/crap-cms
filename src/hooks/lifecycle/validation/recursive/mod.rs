@@ -6,6 +6,8 @@
 //! recurse, scalar fields go through the `scalar` impl method.
 
 mod dispatch;
+mod richtext;
+mod rows;
 mod scalar;
 
 pub(super) use dispatch::ValidationWalker;

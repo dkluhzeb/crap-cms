@@ -6,7 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::core::ConditionExpr;
+use crate::core::{ConditionExpr, FieldWidth};
 
 /// Common keys present on every field context. Variants flatten this into
 /// themselves via `#[serde(flatten)]` so the rendered JSON has no nesting.
@@ -85,6 +85,11 @@ pub struct BaseFieldData {
     #[serde(flatten)]
     pub validation: ValidationAttrs,
 
+    /// Width attributes, flattened so `width` and `width_value` appear at
+    /// the field-context root.
+    #[serde(flatten)]
+    pub layout: WidthAttrs,
+
     /// Display-condition data, flattened so `condition_visible`,
     /// `condition_ref`, and `condition_json` appear at the field-context
     /// root.
@@ -116,6 +121,42 @@ pub struct ValidationAttrs {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_max: Option<bool>,
+}
+
+/// How a field's `admin.width` lays out its form wrapper.
+///
+/// A named width becomes a wrapper class (`form__field--half`,
+/// `form__field--third`); any other CSS width travels as `width_value` and is
+/// applied by the admin's field-width script. A full-width field carries
+/// neither.
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
+pub struct WidthAttrs {
+    /// `"half"` or `"third"` for a named width, `"custom"` for any other CSS
+    /// width. Absent for a full-width field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<String>,
+
+    /// The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width_value: Option<String>,
+}
+
+impl WidthAttrs {
+    /// The wrapper layout for a field's `admin.width`.
+    #[must_use]
+    pub fn from_width(width: Option<&FieldWidth>) -> Self {
+        let (width, width_value) = match width {
+            None | Some(FieldWidth::Full) => (None, None),
+            Some(FieldWidth::Half) => (Some("half"), None),
+            Some(FieldWidth::Third) => (Some("third"), None),
+            Some(FieldWidth::Custom(css)) => (Some("custom"), Some(css.clone())),
+        };
+
+        Self {
+            width: width.map(str::to_owned),
+            width_value,
+        }
+    }
 }
 
 /// Display-condition state injected by
@@ -230,5 +271,41 @@ mod tests {
         assert_eq!(v["has_min"], true);
         assert_eq!(v["condition_visible"], true);
         assert_eq!(v["condition_ref"], "conditions.is_admin");
+    }
+
+    /// `admin.width` reaches the wrapper: a named width as `width`, any other
+    /// CSS width as `custom` plus its value; a full-width field carries none.
+    #[test]
+    fn width_attrs_flatten_to_top_level() {
+        let cases = [
+            (None, None, None),
+            (Some(FieldWidth::Full), None, None),
+            (Some(FieldWidth::Half), Some("half"), None),
+            (Some(FieldWidth::Third), Some("third"), None),
+            (
+                Some(FieldWidth::Custom("40%".to_string())),
+                Some("custom"),
+                Some("40%"),
+            ),
+        ];
+
+        for (width, class, value) in cases {
+            let mut b = make_base("title");
+            b.layout = WidthAttrs::from_width(width.as_ref());
+
+            let f = TextField {
+                base: b,
+                has_many: None,
+                tags: None,
+            };
+            let v = serde_json::to_value(FieldContext::Text(f)).unwrap();
+
+            assert_eq!(v.get("width").and_then(Value::as_str), class, "{width:?}");
+            assert_eq!(
+                v.get("width_value").and_then(Value::as_str),
+                value,
+                "{width:?}"
+            );
+        }
     }
 }

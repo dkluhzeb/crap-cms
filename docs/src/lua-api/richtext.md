@@ -42,11 +42,22 @@ Supported attribute features:
   `min_date`/`max_date`, `picker_appearance`
 - **Lifecycle hooks:** `hooks.before_validate` (normalize values before validation)
 
-Features that have no effect on node attrs (`unique`, `index`, `localized`, `has_many`,
-`access`, `hooks.before_change/after_change/after_read`, `mcp`, `admin.condition`) produce
-a warning at registration time but do not error.
+Settings that have no effect on node attrs (`unique`, `index`, `localized`,
+`required_locales`, `has_many`, `required_when`, `access`,
+`hooks.before_change/after_change/after_read`, `mcp.description`, `admin.condition`) are a
+registration error naming the node, the attr and the settings. `hooks.before_validate`
+hooks get the field hook context and fail closed like field-level hooks (see
+[Rich Text — `before_validate` hooks](../fields/richtext.md#before_validate-hooks)).
+
+The init VM and every pool VM run the same checks on a registration, so a spec is either
+accepted everywhere or refused at load.
 
 ```lua
+local function escape_html(s)
+    return (tostring(s or ""):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+        :gsub('"', "&quot;"):gsub("'", "&#39;"))
+end
+
 crap.richtext.register_node("callout", {
     label = "Callout",
     attrs = {
@@ -54,30 +65,49 @@ crap.richtext.register_node("callout", {
             { label = "Info", value = "info" },
             { label = "Warning", value = "warning" },
         }}),
-        crap.fields.text({ name = "body", admin = { rows = 4 } }),
+        crap.fields.textarea({ name = "body", admin = { rows = 4 } }),
     },
     searchable_attrs = { "body" },
     render = function(attrs)
+        -- escape_html: see "Render output is NOT sanitized" below.
         return string.format(
             '<div class="callout callout-%s">%s</div>',
-            attrs.type or "info",
-            attrs.body or ""
+            escape_html(attrs.type or "info"),
+            escape_html(attrs.body)
         )
     end,
 })
 ```
 
-### `crap.richtext.render(content)`
+### `crap.richtext.render(content, opts)`
 
-Render a rich text JSON string to HTML, including any registered custom nodes.
+Render rich text to HTML, replacing registered custom nodes with the output of their
+`render` functions (nodes without one pass through as `<crap-node>` elements).
 
 **Parameters:**
-- `content` (string) — ProseMirror JSON content string.
+- `content` (string | table | nil) — a rich text field's value as read: the document
+  table of an `admin.format = "json"` field, or the string of either format (HTML, or
+  ProseMirror JSON text). `nil` renders as `""`.
+- `opts` (table, optional) — `format` (`"html"` or `"json"`): the string's storage
+  format, i.e. the field's `admin.format`. Unknown keys are rejected.
+
+A table is always a JSON document (`{ type = "doc", ... }`; any other table is an
+error). A string's format is `opts.format` when given; otherwise the string is JSON only
+when it holds a document object (`"type": "doc"`), and HTML otherwise — so HTML or plain
+text that starts with `{` renders as HTML instead of raising. With `format = "json"`, a
+string that is not valid JSON raises a render error.
+
+In a JSON document, a link whose URL is neither relative nor `http`/`https`/`mailto`/`tel`
+renders as `href="#"`. HTML content is not sanitized.
 
 **Returns:** string — Rendered HTML.
 
 ```lua
-local html = crap.richtext.render(doc.body)
+-- A JSON-format field reads as a document table:
+local html = crap.richtext.render(context.data.body)
+
+-- State the format when rendering a stored string:
+local html = crap.richtext.render(raw_value, { format = "html" })
 ```
 
 ## Notes

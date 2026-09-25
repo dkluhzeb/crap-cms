@@ -19,24 +19,20 @@ use crate::{
 /// `methods` is required (no implicit defaults). Use
 /// `crap.auth.default_methods()` from Lua for the common
 /// password+bearer+cookie set.
-#[derive(Debug, Clone, Serialize, Deserialize, LuaAnnotation)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, LuaAnnotation)]
 #[lua(class = "crap.Auth")]
 pub struct Auth {
     /// Enable auth for this collection. Required true when `methods` is non-empty.
     #[lua(optional)]
     pub enabled: bool,
-    /// JWT lifetime in seconds (default: 7200).
-    #[serde(default = "default_token_expiry")]
+    /// Session token lifetime in seconds. Unset, the global `[auth] token_expiry` applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[lua(optional)]
-    pub token_expiry: u64,
+    pub token_expiry: Option<u64>,
     /// Ordered list of auth methods. Use `crap.auth.default_methods()` for the standard set or `crap.auth.with_defaults({...})` to extend it.
     #[serde(default)]
     #[lua(optional, ty = "crap.AuthMethod[]")]
     pub methods: Vec<AuthMethod>,
-}
-
-fn default_token_expiry() -> u64 {
-    7200
 }
 
 impl Auth {
@@ -48,6 +44,14 @@ impl Auth {
             enabled,
             ..Default::default()
         }
+    }
+
+    /// The session token lifetime, in seconds: the collection's own
+    /// `token_expiry`, or `global` — the `[auth] token_expiry` default — when
+    /// the collection sets none.
+    #[must_use]
+    pub fn token_lifetime(&self, global: u64) -> u64 {
+        self.token_expiry.unwrap_or(global)
     }
 
     /// The standard default method set:
@@ -193,7 +197,7 @@ impl Auth {
     pub fn enabled() -> Self {
         Self {
             enabled: true,
-            token_expiry: default_token_expiry(),
+            token_expiry: None,
             methods: Self::default_methods(),
         }
     }
@@ -264,16 +268,6 @@ impl Auth {
     }
 }
 
-impl Default for Auth {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            token_expiry: default_token_expiry(),
-            methods: Vec::new(),
-        }
-    }
-}
-
 /// Borrowed view of a `password_login` method's config.
 #[derive(Debug, Clone, Copy)]
 pub struct PasswordLoginCfg {
@@ -301,8 +295,24 @@ mod tests {
     fn collection_auth_defaults_disabled_with_empty_methods() {
         let auth = Auth::default();
         assert!(!auth.enabled);
-        assert_eq!(auth.token_expiry, 7200);
+        assert_eq!(auth.token_expiry, None, "unset: the global default applies");
         assert!(auth.methods.is_empty());
+    }
+
+    /// Regression: a collection without its own `token_expiry` parsed as
+    /// 7200, so the global `[auth] token_expiry` it documents as the default
+    /// never applied. Unset, the global value is the lifetime; set, the
+    /// collection's own wins.
+    #[test]
+    fn token_lifetime_falls_back_to_the_global_default() {
+        let inherits = Auth::enabled();
+        assert_eq!(inherits.token_lifetime(86_400), 86_400);
+
+        let overrides = Auth {
+            token_expiry: Some(600),
+            ..Auth::enabled()
+        };
+        assert_eq!(overrides.token_lifetime(86_400), 600);
     }
 
     #[test]

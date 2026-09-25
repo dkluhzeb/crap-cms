@@ -19,7 +19,7 @@ crap.fields.json({
 
 ## Admin Rendering
 
-Renders as a `<textarea>` with monospace font for JSON editing.
+Renders as a `<textarea>` with monospace font for JSON editing. `admin.rows` sets its visible rows (default 12) and `admin.placeholder` its placeholder.
 
 ## Notes
 

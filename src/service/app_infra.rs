@@ -34,7 +34,7 @@ use std::{path::Path, sync::Arc};
 use anyhow::Result;
 
 use crate::{
-    config::{CrapConfig, LocaleConfig, PasswordPolicy},
+    config::{CrapConfig, DEFAULT_TOKEN_EXPIRY, LocaleConfig, PasswordPolicy},
     core::{
         Readiness, Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport,
         SharedStorage, SharedTokenProvider,
@@ -123,6 +123,7 @@ impl AppInfra {
                 .locale_config(p.config.locale.clone())
                 .password_policy(p.config.auth.password_policy.clone())
                 .image_max_attempts(p.config.jobs.system_image_max_attempts())
+                .token_expiry(p.config.auth.token_expiry)
                 .populate_singleflight(Arc::new(Singleflight::new()))
                 // Ready on construction: a standalone bundle belongs to a
                 // process whose startup work is finished by the time it is
@@ -154,6 +155,7 @@ pub struct AppInfraBuilder {
     populate_singleflight: Option<SharedPopulateSingleflight>,
     readiness: Option<Readiness>,
     image_max_attempts: Option<u32>,
+    token_expiry: Option<u64>,
 }
 
 impl AppInfraBuilder {
@@ -247,10 +249,20 @@ impl AppInfraBuilder {
         self
     }
 
+    /// The default session token lifetime (`[auth] token_expiry`), for auth
+    /// collections that set no `token_expiry` of their own. Defaults to
+    /// [`DEFAULT_TOKEN_EXPIRY`] for a bundle assembled without config.
+    #[must_use]
+    pub fn token_expiry(mut self, seconds: u64) -> Self {
+        self.token_expiry = Some(seconds);
+        self
+    }
+
     /// # Panics
     ///
     /// Panics if any required field (everything except `event_transport`,
-    /// `readiness` and `image_max_attempts`) was not set on the builder.
+    /// `readiness`, `image_max_attempts` and `token_expiry`) was not set on
+    /// the builder.
     #[must_use]
     pub fn build(self) -> AppInfra {
         AppInfra {
@@ -272,6 +284,7 @@ impl AppInfraBuilder {
                 .expect("populate_singleflight is required"),
             readiness: self.readiness.unwrap_or_default(),
             image_max_attempts: self.image_max_attempts.unwrap_or(FALLBACK_MAX_ATTEMPTS),
+            token_expiry: self.token_expiry.unwrap_or(DEFAULT_TOKEN_EXPIRY),
         }
     }
 }
@@ -316,4 +329,8 @@ pub struct AppInfra {
     /// own — publishing a draft's file — uses the configured retry budget
     /// instead of the fallback.
     pub image_max_attempts: u32,
+    /// The default session token lifetime in seconds (`[auth] token_expiry`).
+    /// An auth collection's own `token_expiry` overrides it; minting resolves
+    /// the two in one place (`service::auth::mint_session`).
+    pub token_expiry: u64,
 }

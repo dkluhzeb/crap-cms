@@ -5,8 +5,11 @@
 //!
 //! This file covers: health endpoints, static file serving.
 //! Auth tests → `admin_auth_{login,session,callback,verify_email,password}.rs`
-//! Collection tests → `admin_collections.rs`
-//! Global/upload/CSRF/CORS/access gate tests → `admin_globals.rs`
+//! Collection tests → `admin_collections{,_list,_not_found,_locale,_upload,_auth,_versioning}.rs`
+//! Global tests → `admin_globals{,_versions,_access}.rs`
+//! Dashboard tests → `admin_dashboard.rs`
+//! Upload serving → `admin_upload_serve.rs`; CSRF / CORS / access gate →
+//! `admin_request_security.rs`
 
 #![allow(
     clippy::cast_possible_truncation,

@@ -1,4 +1,10 @@
 //! `backup` subcommand: database snapshot + optional uploads archive.
+//!
+//! Everything a backup writes is owner-only (directory `0700`, files `0600`):
+//! the snapshot holds password and API-key hashes and sealed TOTP secrets.
+//! With `--include-uploads` the uploads tree is captured around the database
+//! snapshot so the archive holds every file the snapshot references, even
+//! while `serve` keeps writing — see [`super::uploads_snapshot`].
 
 use std::{
     fs, io,
@@ -13,13 +19,14 @@ use crate::{
     cli::{self, Spinner},
     commands::{
         db::{
-            helpers::classify_tar_status,
+            helpers::{classify_tar_status, create_private_dir, restrict_to_owner},
             manifest::{BACKUP_FORMAT_VERSION, BackupManifest},
             secret::backup_secret,
+            uploads_snapshot::{UPLOADS_DIR, UploadsSnapshot},
         },
         helpers::{hold_instance_lock, load_config_for_recovery},
     },
-    config::{CrapConfig, DatabaseBackend, UploadStorage},
+    config::{CrapConfig, DatabaseBackend, UploadStorage, write_new_owner_only},
     core::Builder,
     db::{DbConnection, pool},
 };
@@ -73,6 +80,14 @@ pub fn backup(config_dir: &Path, opts: BackupOpts) -> Result<()> {
     })?;
 
     let backup_dir = create_backup_dir(&config_dir, output)?;
+
+    // First capture pass BEFORE the database snapshot: pins every file the
+    // snapshot can reference.
+    let uploads = include_uploads
+        .then(|| capture_local_uploads(&cfg, &config_dir))
+        .transpose()?
+        .flatten();
+
     let db_size = backup_database(&config_dir, &cfg, &backup_dir)?;
 
     let includes_secret = backup_secret(&config_dir, &backup_dir)?;
@@ -82,8 +97,8 @@ pub fn backup(config_dir: &Path, opts: BackupOpts) -> Result<()> {
         );
     }
 
-    let uploads_size = include_uploads
-        .then(|| backup_local_uploads(&cfg, &config_dir, &backup_dir))
+    let uploads_size = uploads
+        .map(|snapshot| archive_uploads(&snapshot, &backup_dir))
         .transpose()?
         .flatten();
 
@@ -102,13 +117,10 @@ pub fn backup(config_dir: &Path, opts: BackupOpts) -> Result<()> {
     Ok(())
 }
 
-/// Archive the uploads when they live in this project. Uploads kept in another
-/// storage are backed up with that service, so they are skipped with a note.
-fn backup_local_uploads(
-    cfg: &CrapConfig,
-    config_dir: &Path,
-    backup_dir: &Path,
-) -> Result<Option<u64>> {
+/// Start capturing the uploads when they live in this project (first pass).
+/// Uploads kept in another storage are backed up with that service, so they
+/// are skipped with a note; so is a project without an uploads directory.
+fn capture_local_uploads(cfg: &CrapConfig, config_dir: &Path) -> Result<Option<UploadsSnapshot>> {
     let storage = cfg.upload.storage;
 
     if !matches!(storage, UploadStorage::Local) {
@@ -120,7 +132,15 @@ fn backup_local_uploads(
         return Ok(None);
     }
 
-    backup_uploads(config_dir, backup_dir)
+    let Some(snapshot) = UploadsSnapshot::create(config_dir).context(UPLOADS_FAILED)? else {
+        cli::info("No uploads directory found — skipping.");
+
+        return Ok(None);
+    };
+
+    snapshot.capture().context(UPLOADS_FAILED)?;
+
+    Ok(Some(snapshot))
 }
 
 /// `backup` copies the `SQLite` database file; a Postgres database is backed up
@@ -156,13 +176,12 @@ fn preflight_writable(base: &Path) -> Result<()> {
 }
 
 /// Create the timestamped backup directory.
-#[cfg(not(tarpaulin_include))]
 fn create_backup_dir(config_dir: &Path, output: Option<PathBuf>) -> Result<PathBuf> {
     let timestamp = Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
     let backup_base = output.unwrap_or_else(|| config_dir.join("backups"));
     let backup_dir = backup_base.join(format!("backup-{timestamp}"));
 
-    fs::create_dir_all(&backup_dir).with_context(|| {
+    create_private_dir(&backup_dir).with_context(|| {
         format!(
             "Failed to create backup directory: {}",
             backup_dir.display()
@@ -185,6 +204,7 @@ fn backup_database(config_dir: &Path, cfg: &CrapConfig, backup_dir: &Path) -> Re
 
     conn.vacuum_into(&backup_db_path)
         .context("VACUUM INTO failed")?;
+    restrict_to_owner(&backup_db_path, 0o600)?;
 
     let db_size = fs::metadata(&backup_db_path).map_or(0, |m| m.len());
 
@@ -202,20 +222,22 @@ fn backup_database(config_dir: &Path, cfg: &CrapConfig, backup_dir: &Path) -> Re
 /// are not in the backup.
 const UPLOADS_FAILED: &str = "Uploads backup failed — no uploads archive was written";
 
-/// Compress `<config_dir>/uploads` into `staged_path`.
+/// Compress the captured `uploads/` under `snapshot_root` into `staged_path`.
 ///
 /// The archive is staged under a temp name — an interrupted `tar` must never
 /// leave a truncated `uploads.tar.gz` that looks like a valid backup. The
-/// caller renames it into place once `tar` reports success.
+/// caller renames it into place once `tar` reports success. `tar` reads the
+/// private capture, never the live tree, so a concurrent upload cannot make
+/// it report a changed file.
 #[cfg(not(tarpaulin_include))]
-fn run_uploads_tar(config_dir: &Path, staged_path: &Path) -> io::Result<process::ExitStatus> {
+fn run_uploads_tar(snapshot_root: &Path, staged_path: &Path) -> io::Result<process::ExitStatus> {
     process::Command::new("tar")
         .args([
             "czf",
             &staged_path.to_string_lossy(),
             "-C",
-            &config_dir.to_string_lossy(),
-            "uploads",
+            &snapshot_root.to_string_lossy(),
+            UPLOADS_DIR,
         ])
         .status()
 }
@@ -242,8 +264,11 @@ fn finalize_uploads_archive(
     staged_path: &Path,
     archive_path: &Path,
 ) -> Result<Option<u64>> {
-    if let Err(e) = fs::rename(staged_path, archive_path) {
-        spin.finish_warning(&format!("Failed to finalize uploads archive: {e}"));
+    let published = restrict_to_owner(staged_path, 0o600)
+        .and_then(|()| fs::rename(staged_path, archive_path).map_err(Into::into));
+
+    if let Err(e) = published {
+        spin.finish_warning(&format!("Failed to finalize uploads archive: {e:#}"));
 
         return Err(e).context(UPLOADS_FAILED);
     }
@@ -267,19 +292,20 @@ fn finalize_uploads_archive(
     Ok(Some(size))
 }
 
-/// Compress the uploads directory into a tar.gz archive. `Ok(None)` means
-/// there was nothing to archive; a `tar` or rename failure is an error.
-fn backup_uploads(config_dir: &Path, backup_dir: &Path) -> Result<Option<u64>> {
-    if !config_dir.join("uploads").is_dir() {
-        cli::info("No uploads directory found — skipping.");
+/// Finish the uploads capture (second pass, after the database snapshot) and
+/// compress it into `uploads.tar.gz`. A capture, `tar` or rename failure is an
+/// error.
+fn archive_uploads(snapshot: &UploadsSnapshot, backup_dir: &Path) -> Result<Option<u64>> {
+    let spin = Spinner::new("Compressing uploads...");
 
-        return Ok(None);
+    if let Err(e) = snapshot.capture().context(UPLOADS_FAILED) {
+        spin.finish_warning(&format!("{e:#}"));
+
+        return Err(e);
     }
 
     let staged_path = backup_dir.join("uploads.tar.gz.tmp");
-    let spin = Spinner::new("Compressing uploads...");
-
-    let status = run_uploads_tar(config_dir, &staged_path);
+    let status = run_uploads_tar(snapshot.root(), &staged_path);
 
     if let Err(e) = finish_uploads_tar(status, &staged_path) {
         spin.finish_warning(&format!("{e:#}"));
@@ -318,9 +344,9 @@ fn write_backup_manifest(p: &WriteManifestParams<'_>) -> Result<()> {
         includes_secret: p.includes_secret,
     };
 
-    fs::write(
-        p.backup_dir.join("manifest.json"),
-        serde_json::to_string_pretty(&manifest)?,
+    write_new_owner_only(
+        &p.backup_dir.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest)?.as_bytes(),
     )
     .context("Failed to write manifest.json")
 }
@@ -337,7 +363,8 @@ mod tests {
     };
 
     use super::{
-        backup_local_uploads, ensure_file_database, finish_uploads_tar, preflight_writable,
+        capture_local_uploads, create_backup_dir, ensure_file_database, finish_uploads_tar,
+        preflight_writable,
     };
     use crate::config::{CrapConfig, DatabaseBackend, UploadStorage};
 
@@ -393,20 +420,52 @@ mod tests {
         let uploads = config_dir.path().join("uploads").join("media");
         fs::create_dir_all(&uploads).unwrap();
         fs::write(uploads.join("stale-local-copy.png"), b"x").unwrap();
-        let backup_dir = tempfile::tempdir().unwrap();
 
         let mut cfg = CrapConfig::default();
         cfg.upload.storage = UploadStorage::S3;
 
-        assert_eq!(
-            backup_local_uploads(&cfg, config_dir.path(), backup_dir.path()).unwrap(),
-            None
+        assert!(
+            capture_local_uploads(&cfg, config_dir.path())
+                .unwrap()
+                .is_none()
         );
-        assert_eq!(
-            fs::read_dir(backup_dir.path()).unwrap().count(),
-            0,
-            "nothing is archived for uploads in another storage"
+        assert!(
+            !config_dir.path().join("data").exists(),
+            "no capture directory is created for uploads in another storage"
         );
+    }
+
+    /// Local uploads are captured by the first pass, before the database
+    /// snapshot runs.
+    #[test]
+    fn local_uploads_are_captured_before_the_database_snapshot() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let uploads = config_dir.path().join("uploads").join("media");
+        fs::create_dir_all(&uploads).unwrap();
+        fs::write(uploads.join("a.png"), b"x").unwrap();
+
+        let snapshot = capture_local_uploads(&CrapConfig::default(), config_dir.path())
+            .unwrap()
+            .unwrap();
+        fs::remove_file(uploads.join("a.png")).unwrap();
+
+        assert!(snapshot.root().join("uploads/media/a.png").is_file());
+    }
+
+    /// Regression: the backup directory was created with the umask (typically
+    /// world-readable) although it holds password hashes and sealed secrets.
+    #[cfg(unix)]
+    #[test]
+    fn backup_dir_is_owner_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("shared-out");
+        fs::create_dir(&out).unwrap();
+        fs::set_permissions(&out, fs::Permissions::from_mode(0o777)).unwrap();
+
+        let dir = create_backup_dir(tmp.path(), Some(out)).unwrap();
+
+        let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
     }
 
     #[test]

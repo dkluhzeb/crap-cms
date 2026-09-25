@@ -18,33 +18,11 @@ use crate::{
     },
     db::{
         DbConnection, DbValue,
-        migrate::helpers::collect_column_specs,
-        query::helpers::{column_value, locale_column, quote_ident},
+        migrate::{helpers::collect_column_specs, locale_change::column_plans},
+        query::helpers::column_value,
         types::real_to_json_number,
     },
 };
-
-/// Build a column definition string with type, constraints, and default.
-///
-/// A `unique` field gets no inline `UNIQUE` here: uniqueness is a managed
-/// index that `sync_indexes` owns, so a field that gains `unique` later is
-/// enforced exactly like one that had it at creation.
-fn build_column_def(
-    col_name: &str,
-    col_type: &str,
-    required: bool,
-    field: &FieldDefinition,
-) -> String {
-    let mut col = format!("{} {col_type}", quote_ident(col_name));
-
-    if required {
-        col.push_str(" NOT NULL");
-    }
-
-    append_default_value_for(&mut col, field);
-
-    col
-}
 
 /// Create the table a collection's documents live in.
 ///
@@ -83,37 +61,8 @@ fn collect_field_columns(
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     for spec in &collect_column_specs(&def.fields, locale_config) {
-        let col_type = spec.ddl_type(conn);
-
-        if spec.is_localized {
-            for locale in &locale_config.locales {
-                let col_name = locale_column(&spec.col_name, locale)?;
-                let is_required = !spec.companion_text
-                    && spec.field.required
-                    && *locale == locale_config.default_locale
-                    && !def.has_drafts();
-
-                if spec.companion_text {
-                    columns.push(format!("{} TEXT", quote_ident(&col_name)));
-                } else {
-                    columns.push(build_column_def(
-                        &col_name,
-                        col_type,
-                        is_required,
-                        spec.field,
-                    ));
-                }
-            }
-        } else if spec.companion_text {
-            columns.push(format!("{} TEXT", quote_ident(&spec.col_name)));
-        } else {
-            let required = spec.field.required && !def.has_drafts();
-            columns.push(build_column_def(
-                &spec.col_name,
-                col_type,
-                required,
-                spec.field,
-            ));
+        for plan in column_plans(&spec.col_name, spec.is_localized, locale_config)? {
+            columns.push(spec.column_def(conn, &plan.name));
         }
     }
 

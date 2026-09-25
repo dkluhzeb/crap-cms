@@ -123,7 +123,6 @@ fn run_validate(
     let input = WriteInput::builder(data)
         .locale_ctx(locale_ctx.as_ref())
         .draft(draft)
-        .ui_locale(ctx.ui_locale.clone())
         .trusted_upload_metadata(trusted_upload_metadata)
         .build();
 
@@ -270,17 +269,16 @@ fn check_validate_access(
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<(), ServiceError> {
     let locale = locale_ctx.map(LocaleContext::access_locale);
-    let ui_locale = ctx.ui_locale.as_deref();
 
     if let Def::Global(def) = &ctx.def {
-        return check_global_update_access(ctx, wh, def, Some(data), locale, ui_locale);
+        return check_global_update_access(ctx, wh, def, Some(data), locale);
     }
 
     let def = ctx.collection_def()?;
 
     match vctx.exclude_id {
-        Some(id) => check_update_access(ctx, wh, def, id, data, locale, ui_locale),
-        None => check_create_access(ctx, wh, def, data, locale, ui_locale),
+        Some(id) => check_update_access(ctx, wh, def, id, data, locale),
+        None => check_create_access(ctx, wh, def, data, locale),
     }
 }
 
@@ -328,6 +326,7 @@ impl Operation for Validate {
             soft_delete: def.soft_delete,
             supports_drafts: def.has_drafts(),
             required_locales: def.required_locales.as_ref(),
+            ui_locale: ctx.ui_locale.as_deref(),
             // Loaded inside the body, on the dry-run's own connection.
             stored_document: None,
             // Set inside the body from the admitted pending draft.
@@ -365,6 +364,7 @@ impl Operation for ValidateGlobal {
             supports_drafts: def.has_drafts(),
             // Globals have no collection-level `required_locales` default.
             required_locales: None,
+            ui_locale: ctx.ui_locale.as_deref(),
             stored_document: None,
             locale_overlay: None,
         };

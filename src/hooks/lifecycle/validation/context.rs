@@ -39,6 +39,11 @@ pub struct ValidationCtx<'a> {
     /// stored, which is the write-back's own rule. `None` when the write lands
     /// nothing beyond its own data.
     pub locale_overlay: Option<&'a Map<String, Value>>,
+    /// Whether the edited document keeps its drafts as version snapshots
+    /// (drafts and versions both enabled). A value the pending draft already
+    /// holds then counts as held, like one the stored row holds — the edit
+    /// form shows the draft. `false` reads the stored row alone.
+    pub versioned_drafts: bool,
 }
 
 impl<'a> ValidationCtx<'a> {
@@ -61,6 +66,7 @@ pub struct ValidationCtxBuilder<'a> {
     user: Option<&'a Document>,
     ui_locale: Option<&'a str>,
     locale_overlay: Option<&'a Map<String, Value>>,
+    versioned_drafts: bool,
 }
 
 impl<'a> ValidationCtxBuilder<'a> {
@@ -77,7 +83,15 @@ impl<'a> ValidationCtxBuilder<'a> {
             user: None,
             ui_locale: None,
             locale_overlay: None,
+            versioned_drafts: false,
         }
+    }
+
+    /// Set whether the edited document keeps its drafts as version snapshots —
+    /// see [`ValidationCtx::versioned_drafts`].
+    pub fn versioned_drafts(mut self, versioned_drafts: bool) -> Self {
+        self.versioned_drafts = versioned_drafts;
+        self
     }
 
     /// Set the snapshot this write lands over the row after validation — see
@@ -141,6 +155,7 @@ impl<'a> ValidationCtxBuilder<'a> {
             user: self.user,
             ui_locale: self.ui_locale,
             locale_overlay: self.locale_overlay,
+            versioned_drafts: self.versioned_drafts,
         }
     }
 }
@@ -162,6 +177,7 @@ mod tests {
         assert!(ctx.locale_ctx.is_none());
         assert!(ctx.registry.is_none());
         assert!(ctx.locale_overlay.is_none());
+        assert!(!ctx.versioned_drafts);
     }
 
     /// The overlay is the snapshot a publish or a restore writes back after
@@ -195,9 +211,11 @@ mod tests {
             .draft(true)
             .soft_delete(false)
             .registry(&registry)
+            .versioned_drafts(true)
             .build();
 
         assert_eq!(ctx.exclude_id, Some("doc-7"));
+        assert!(ctx.versioned_drafts);
         assert!(ctx.is_draft);
         assert!(!ctx.soft_delete);
         assert!(ctx.registry.is_some());

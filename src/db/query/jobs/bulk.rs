@@ -1,4 +1,4 @@
-//! Bulk delete operations: cancel pending, purge old.
+//! Bulk operations: cancel pending, purge old, retry failed.
 
 use std::fmt::Write as _;
 
@@ -6,11 +6,6 @@ use anyhow::{Context as _, Result};
 
 use crate::db::{DbConnection, DbValue};
 
-/// Cancel pending jobs. Optionally filter by job slug.
-///
-/// # Errors
-///
-/// Returns a backend error if the DELETE fails.
 /// Cancel ONE pending run by id. Only a `pending` row can be cancelled —
 /// a claimed/running job cannot be stopped mid-flight. Returns whether a
 /// row was removed.
@@ -50,6 +45,44 @@ pub fn cancel_pending_jobs(conn: &dyn DbConnection, slug: Option<&str>) -> Resul
     };
 
     i64::try_from(affected).context("cancelled count exceeds i64::MAX")
+}
+
+/// Put failed runs of job `slug` back to pending at `priority`, fresh: no
+/// error, no attempts, no timestamps of the failed run. Only the run `id` when
+/// set, every failed run of the slug otherwise. Returns how many were reset.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
+pub fn retry_failed_jobs(
+    conn: &dyn DbConnection,
+    slug: &str,
+    id: Option<&str>,
+    priority: i32,
+) -> Result<usize> {
+    let mut params = vec![
+        DbValue::Integer(i64::from(priority)),
+        DbValue::Text(slug.to_string()),
+    ];
+
+    let id_sql = match id {
+        Some(id) => {
+            params.push(DbValue::Text(id.to_string()));
+
+            format!(" AND id = {}", conn.placeholder(3))
+        }
+        None => String::new(),
+    };
+
+    let sql = format!(
+        "UPDATE _crap_jobs SET status = 'pending', error = NULL, attempt = 0, \
+         completed_at = NULL, started_at = NULL, retry_after = NULL, priority = {} \
+         WHERE slug = {} AND status = 'failed'{id_sql}",
+        conn.placeholder(1),
+        conn.placeholder(2)
+    );
+
+    conn.execute(&sql, &params)
 }
 
 /// Delete completed/failed/stale job runs older than the given threshold.
@@ -173,6 +206,44 @@ mod tests {
         let remaining = list_job_runs(&conn, None, None, 100, 0).unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, "new1");
+    }
+
+    /// A retry resets only failed runs of the slug — one by id, or all — and
+    /// leaves every other run alone.
+    #[test]
+    fn retry_failed_jobs_resets_only_failed_runs_of_the_slug() {
+        let (_dir, conn) = setup_db();
+        conn.execute_batch(
+            "INSERT INTO _crap_jobs (id, slug, status, error, attempt) VALUES
+                ('f1', 'img', 'failed', 'boom', 3),
+                ('f2', 'img', 'failed', 'boom', 3),
+                ('ok', 'img', 'completed', NULL, 1),
+                ('other', 'mail', 'failed', 'boom', 3);",
+        )
+        .unwrap();
+
+        assert_eq!(retry_failed_jobs(&conn, "img", Some("f1"), 5).unwrap(), 1);
+        assert_eq!(retry_failed_jobs(&conn, "img", Some("ok"), 0).unwrap(), 0);
+        assert_eq!(retry_failed_jobs(&conn, "img", None, 0).unwrap(), 1);
+
+        let status = |id: &str| {
+            conn.query_one(
+                "SELECT status, error, attempt, priority FROM _crap_jobs WHERE id = ?1",
+                &[DbValue::Text(id.to_string())],
+            )
+            .unwrap()
+            .unwrap()
+        };
+
+        let f1 = status("f1");
+        assert_eq!(f1.get_string("status").unwrap(), "pending");
+        assert!(f1.get_opt_string("error").unwrap().is_none());
+        assert_eq!(f1.get_i64("attempt").unwrap(), 0);
+        assert_eq!(f1.get_i64("priority").unwrap(), 5);
+
+        assert_eq!(status("f2").get_string("status").unwrap(), "pending");
+        assert_eq!(status("ok").get_string("status").unwrap(), "completed");
+        assert_eq!(status("other").get_string("status").unwrap(), "failed");
     }
 
     /// Regression: `cancel_pending_jobs` used `name` instead of `slug` column.

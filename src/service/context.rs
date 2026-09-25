@@ -11,15 +11,15 @@ use crate::core::collection::Auth;
 use crate::{
     config::{LocaleConfig, PasswordPolicy},
     core::{
-        CollectionDefinition, Document, FieldDefinition, GlobalDefinition, HookRef, Registry,
-        SharedCache, SharedEventTransport, SharedInvalidationTransport, SharedStorage,
+        CollectionDefinition, Document, FieldDefinition, GlobalDefinition, HookRef, Hooks,
+        Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport, SharedStorage,
         upload::FALLBACK_MAX_ATTEMPTS,
     },
     db::{
         BoxedConnection, DbConnection, DbPool, SharedPopulateSingleflight,
         query::{LocaleContext, helpers::global_table},
     },
-    hooks::{HookRunner, LuaCrudInfra},
+    hooks::{HookContext, HookRunner, LuaCrudInfra, lifecycle::HookContextBuilder},
     service::{
         AppInfra, ServiceError, VerificationRecipient,
         hooks::{ReadHooks, WriteHooks},
@@ -56,8 +56,9 @@ pub struct ServiceContext<'a> {
     /// Authenticated user document.
     pub user: Option<&'a Document>,
     /// The acting user's UI-locale preference (admin editor locale / the
-    /// stored preference resolved by the auth evaluator). Write operations
-    /// thread it into `WriteInput.ui_locale`; hook contexts surface it as
+    /// stored preference resolved by the auth evaluator). The one source every
+    /// write reads it from — access checks, validation, and every hook context
+    /// (seeded by [`Self::hook_context`]), which surfaces it as
     /// `ctx.ui_locale`.
     pub ui_locale: Option<String>,
     /// Bypass all access checks (MCP, Lua `overrideAccess`).
@@ -208,6 +209,16 @@ impl<'a> ServiceContext<'a> {
             .ok_or_else(|| ServiceError::Internal(anyhow!("runner not set")))
     }
 
+    /// The registry a write resolves definitions beyond its own collection
+    /// against (the search index reads rich text custom nodes from it): the
+    /// attached one, else the write hooks' — Lua CRUD attaches no registry of
+    /// its own, but its write hooks validate against one.
+    #[must_use]
+    pub fn schema_registry(&self) -> Option<&'a Registry> {
+        self.registry
+            .or_else(|| self.write_hooks.and_then(WriteHooks::registry))
+    }
+
     /// Build a default `LocaleContext` from the attached locale config.
     /// Used by write paths that need to read raw rows (e.g. unpublish,
     /// version snapshot) on collections with localized fields.
@@ -287,6 +298,29 @@ impl<'a> ServiceContext<'a> {
         }
     }
 
+    /// The hook context every lifecycle hook of this operation starts from:
+    /// the slug, the acting user and the admin UI locale. Seeding them in one
+    /// place keeps a hand-built context from dropping one (a `before_change`
+    /// that localizes its error through `ctx.ui_locale` answered in the default
+    /// language on the paths that forgot it).
+    #[must_use]
+    pub fn hook_context(&self, operation: &str) -> HookContextBuilder {
+        HookContext::builder(self.slug, operation)
+            .user(self.user)
+            .ui_locale(self.ui_locale.as_deref())
+    }
+
+    /// Whether the target keeps drafts (collection or global) — i.e. has a
+    /// `_status` column. `Def::None` counts as draft-less.
+    #[must_use]
+    pub fn has_drafts(&self) -> bool {
+        match &self.def {
+            Def::Collection(d) => d.has_drafts(),
+            Def::Global(d) => d.has_drafts(),
+            Def::None => false,
+        }
+    }
+
     /// Get the read access hook ref from the definition.
     #[must_use]
     pub fn read_access_ref(&self) -> Option<&HookRef> {
@@ -334,6 +368,22 @@ impl<'a> ServiceContext<'a> {
             Def::Collection(d) => d.access.versions.as_ref(),
             Def::Global(d) => d.access.versions.as_ref(),
             Def::None => None,
+        }
+    }
+
+    /// Get the lifecycle hooks from either collection or global def. Errors
+    /// if the context was built with `Def::None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error when the context has no attached definition.
+    pub fn hooks(&self) -> Result<&Hooks, ServiceError> {
+        match &self.def {
+            Def::Collection(d) => Ok(&d.hooks),
+            Def::Global(d) => Ok(&d.hooks),
+            Def::None => Err(ServiceError::Internal(anyhow!(
+                "hooks() called on Def::None"
+            ))),
         }
     }
 

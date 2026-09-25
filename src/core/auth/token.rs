@@ -5,8 +5,7 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result, bail};
 use chrono::Utc;
 
-use crate::core::Claims;
-use crate::core::auth::claims::TokenUse;
+use crate::core::{Claims, auth::claims::TokenUse, collection::Surface};
 
 /// Thread-safe shared reference to a token provider.
 pub type SharedTokenProvider = Arc<dyn TokenProvider>;
@@ -48,13 +47,17 @@ pub trait TokenProvider: Send + Sync {
     ///
     /// The mirror of [`validate_token`](Self::validate_token) for the one
     /// endpoint that legitimately consumes a pending token: it accepts only
-    /// [`TokenUse::MfaPending`] and rejects a full session token.
+    /// [`TokenUse::MfaPending`] and rejects a full session token. The token
+    /// must have been minted by `surface` — the surface completing the MFA
+    /// step — so a challenge issued for one surface never yields a session
+    /// on another.
     ///
     /// # Errors
     ///
     /// Returns an error if the token is malformed, has an invalid signature,
-    /// is expired, is missing required claims, or is not an MFA-pending token.
-    fn validate_pending_token(&self, token: &str) -> Result<Claims>;
+    /// is expired, is missing required claims, is not an MFA-pending token,
+    /// or was minted by another surface (or before the surface was recorded).
+    fn validate_pending_token(&self, token: &str, surface: Surface) -> Result<Claims>;
 
     /// Backend identifier.
     fn kind(&self) -> &'static str;
@@ -95,11 +98,15 @@ impl TokenProvider for JwtTokenProvider {
         Ok(claims)
     }
 
-    fn validate_pending_token(&self, token: &str) -> Result<Claims> {
+    fn validate_pending_token(&self, token: &str, surface: Surface) -> Result<Claims> {
         let claims = self.decode(token)?;
 
         if claims.token_use != TokenUse::MfaPending {
             bail!("token is not an MFA-pending token");
+        }
+
+        if claims.surface != Some(surface) {
+            bail!("MFA-pending token was not issued by this surface");
         }
 
         Ok(claims)
@@ -277,6 +284,7 @@ mod tests {
             .email("a@b.com")
             .exp((Utc::now().timestamp() as u64) + 3600)
             .token_use(TokenUse::MfaPending)
+            .surface(Surface::Admin)
             .build()
             .unwrap()
     }
@@ -298,8 +306,36 @@ mod tests {
         let p = provider();
         let token = p.create_token(&pending_claims()).unwrap();
 
-        let claims = p.validate_pending_token(&token).unwrap();
+        let claims = p.validate_pending_token(&token, Surface::Admin).unwrap();
         assert_eq!(claims.token_use, TokenUse::MfaPending);
+    }
+
+    /// Regression: a pending token was not bound to the surface that issued
+    /// it, so a challenge from a gRPC-only login strategy could be completed
+    /// on the admin MFA page — yielding an admin session cookie the strategy
+    /// was never allowed to produce — and vice versa.
+    #[test]
+    fn validate_pending_token_rejects_another_surfaces_token() {
+        let p = provider();
+        let token = p.create_token(&pending_claims()).unwrap();
+
+        let err = p.validate_pending_token(&token, Surface::Grpc).unwrap_err();
+        assert!(
+            err.to_string().contains("not issued by this surface"),
+            "got: {err}"
+        );
+    }
+
+    /// A pending token without a surface stamp is consumed nowhere.
+    #[test]
+    fn validate_pending_token_rejects_an_unstamped_token() {
+        let p = provider();
+        let mut claims = pending_claims();
+        claims.surface = None;
+        let token = p.create_token(&claims).unwrap();
+
+        assert!(p.validate_pending_token(&token, Surface::Admin).is_err());
+        assert!(p.validate_pending_token(&token, Surface::Grpc).is_err());
     }
 
     #[test]
@@ -312,7 +348,9 @@ mod tests {
             .unwrap();
         let token = p.create_token(&session).unwrap();
 
-        let err = p.validate_pending_token(&token).unwrap_err();
+        let err = p
+            .validate_pending_token(&token, Surface::Admin)
+            .unwrap_err();
         assert!(
             err.to_string().contains("not an MFA-pending token"),
             "a full session token must not complete MFA, got: {err}",

@@ -45,7 +45,7 @@ mod scalars;
 #[cfg(test)]
 mod test_helpers;
 
-pub use base::{BaseFieldData, ConditionData, ValidationAttrs};
+pub use base::{BaseFieldData, ConditionData, ValidationAttrs, WidthAttrs};
 pub use composites::{
     ArrayField, ArrayRow, BlockDefinition, BlockRow, BlocksField, GroupField, RowField, TabPanel,
     TabsField,
@@ -53,7 +53,7 @@ pub use composites::{
 pub use context::{FieldContext, NonRepeatingChildren};
 pub use refs::{JoinField, JoinItem, RelationshipField, RelationshipSelectedItem, UploadField};
 pub use scalars::{
-    CheckboxField, ChoiceField, CodeField, DateField, NumberField, RichtextField,
+    CheckboxField, ChoiceField, CodeField, DateField, JsonField, NumberField, RichtextField,
     RichtextNodeAttrCtx, RichtextNodeAttrOption, RichtextNodeDefCtx, SelectOption, TextField,
     TextareaField, TimezoneOption,
 };

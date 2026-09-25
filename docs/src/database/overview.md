@@ -44,14 +44,23 @@ Each collection gets a table named after its slug:
 ```sql
 CREATE TABLE posts (
     id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    slug TEXT NOT NULL UNIQUE,
+    title TEXT,
+    slug TEXT,
     status TEXT DEFAULT 'draft',
     content TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+    _ref_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 ```
+
+A user-field column carries its type and `default_value`, never a
+constraint: `required` is enforced by validation on every write surface
+(which also knows when it does not apply — a draft save, a non-default
+locale), and `unique` is a managed unique index. A database created by an
+earlier release, whose required columns were `NOT NULL`, has that constraint
+dropped once on the first boot of this release (in place on PostgreSQL; by a
+table rebuild on SQLite).
 
 Column types are determined by field types:
 
@@ -178,12 +187,13 @@ table that already holds rows:
 | Change | On the next boot |
 |--------|------------------|
 | Field added | Column added; existing rows read the field's `default_value` (applied at write time for new documents) or `null` |
-| Field removed / renamed | Old column kept and reported as orphan (`db cleanup` drops it); a renamed field is a new, empty column |
+| Field removed / renamed | Old column kept and reported as orphan (`db cleanup` drops it); a renamed field is a new, empty column. The orphan never blocks a write: user-field columns accept `NULL` |
 | Field moved into a group | New `group__field` column; the old column is orphaned |
 | Field `type` changed | **Boot refused** — migrate the column by hand (copy to a new field, or `ALTER` it yourself), then restart |
 | `unique` added | A managed unique index is created; duplicates already present make the index creation fail — deduplicate first |
-| `required` added | Validation only; no `NOT NULL` is retrofitted |
+| `required` added or removed | Validation only — a user-field column is never `NOT NULL`, so removing `required` (or enabling drafts, whose saves skip it) takes effect with no schema change |
 | `has_many` turned on (or a has-many list retyped) | Stored values are rewritten as lists once: a single value becomes a one-element list, a list's elements take the field's type, blank text becomes NULL. Text that isn't a JSON array is one value in a document's own column (`'Hello, world'` → `["Hello, world"]`) and comma-separated values inside an array or blocks row, where earlier releases stored a row's list that way (`'a,b'` → `["a","b"]`). A value holding nothing of the field's type (text in a `number` list) **refuses the boot**, naming the collection, column and document — fix or clear it, then restart. The same applies to a relationship or upload inside an array or blocks row turned `has_many` |
+| `has_many` toggled on a relationship or upload in the document itself (top level or in a group) | Values move between the field's column and its junction table: turned on, each document's value becomes a one-element list; turned off, each document's single value moves back into the column. Turning it off while a document holds more than one value (per locale) **refuses the boot**, naming the documents — remove the extra values or keep `has_many`. The side the values left stays behind (an orphan column, or a leftover junction table) until `db cleanup` drops it. Changing `has_many` together with `localized` or the number of target collections is refused — change one per start |
 | `default_value` changed | Takes effect immediately — defaults are applied by the application |
 | `localized` toggled | Values carried into the default locale's column and back (see the locale docs) |
 | `soft_delete` enabled | Inline `UNIQUE` replaced by partial indexes (see soft deletes) |

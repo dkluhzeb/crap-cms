@@ -94,19 +94,77 @@ input[type="radio"] {
   display: flex;
   flex-direction: column;
   gap: var(--space-xs2);
-  grid-column: span 12;
-}
-
-.form__field--half {
-  grid-column: span 6;
-}
-
-.form__field--third {
-  grid-column: span 4;
 }
 
 .form__field--hidden {
   display: none;
+}
+
+/* ── Field layout ─────────────────────────────────────────────────
+   Every container of form fields wraps its children in rows. A child
+   takes the whole row unless its field sets `admin.width`, which narrows
+   the wrapper (`form__field--sized`) to `--field-basis`: set here for
+   `half` / `third`, by the field-width script for any other CSS width.
+   Narrowed fields share a row; in a container narrower than 40rem (a
+   phone, the create drawer, a narrow group) they stack again. */
+.edit-layout__content,
+.form__group-body,
+.form__collapsible-body,
+.form__tabs-panel,
+.form__array-row-fields,
+.form__row {
+  --field-gap: var(--space-lg);
+  container: fields / inline-size;
+  display: flex;
+  flex-flow: row wrap;
+  gap: var(--field-gap);
+}
+
+:is(
+    .edit-layout__content,
+    .form__group-body,
+    .form__collapsible-body,
+    .form__tabs-panel,
+    .form__array-row-fields,
+    .form__row
+  )
+  > * {
+  flex: 0 0 100%;
+  min-width: 0;
+}
+
+:is(
+    .edit-layout__content,
+    .form__group-body,
+    .form__collapsible-body,
+    .form__tabs-panel,
+    .form__array-row-fields,
+    .form__row
+  )
+  > .form__field--sized {
+  flex: 0 1 var(--field-basis, 100%);
+}
+
+.form__field--half {
+  --field-basis: calc((100% - var(--field-gap)) / 2);
+}
+
+.form__field--third {
+  --field-basis: calc((100% - 2 * var(--field-gap)) / 3);
+}
+
+@container fields (max-width: 40rem) {
+  :is(
+      .edit-layout__content,
+      .form__group-body,
+      .form__collapsible-body,
+      .form__tabs-panel,
+      .form__array-row-fields,
+      .form__row
+    )
+    > .form__field--sized {
+    flex-basis: 100%;
+  }
 }
 
 .form__actions {
@@ -114,7 +172,6 @@ input[type="radio"] {
   align-items: center;
   gap: var(--space-md);
   margin-top: var(--space-sm);
-  grid-column: span 12;
 }
 
 .form__checkbox {
@@ -231,15 +288,15 @@ input[type="checkbox"]:disabled {
   cursor: not-allowed;
 }
 
-/* Row fields (horizontal layout) */
+/* Row fields (horizontal layout): side by side, each at least
+   `--base * 50` wide, wrapping when the row is narrower. A field that sets
+   `admin.width` keeps that width instead (see Field layout). */
 .form__row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(calc(var(--base) * 50), 1fr));
-  gap: var(--spacing-md, var(--space-md));
+  --field-gap: var(--spacing-md, var(--space-md));
 }
 
-.form__row > .form__field--row-item {
-  grid-column: auto;
+.form__row > .form__field--row-item:not(.form__field--sized) {
+  flex: 1 1 calc(var(--base) * 50);
 }
 
 /* ── Collapsible ──────────────────────────────────────────────── */
@@ -271,9 +328,6 @@ input[type="checkbox"]:disabled {
 }
 
 .form__collapsible-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-lg);
   padding: var(--space-md) var(--space-md) var(--space-md);
 }
 
@@ -335,9 +389,6 @@ input[type="checkbox"]:disabled {
 
 .form__tabs-panel {
   padding-top: var(--space-md);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-lg);
 }
 
 .form__tabs-panel--hidden {
@@ -397,9 +448,6 @@ input[type="checkbox"]:disabled {
 }
 
 .form__group-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-lg);
   margin-top: var(--space-md);
   margin-bottom: var(--space-xs);
 }
@@ -592,9 +640,6 @@ input[type="checkbox"]:disabled {
 }
 
 .form__array-row-fields {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-lg);
   padding: var(--space-md);
 }
 
@@ -983,15 +1028,6 @@ select[multiple] {
 }
 
 @media (max-width: 1024px) {
-  .form__field--half,
-  .form__field--third {
-    grid-column: span 12;
-  }
-
-  .form__row {
-    grid-template-columns: 1fr;
-  }
-
   .form__actions {
     flex-wrap: wrap;
   }

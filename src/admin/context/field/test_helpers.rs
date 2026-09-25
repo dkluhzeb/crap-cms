@@ -7,7 +7,7 @@
 
 use serde_json::{Map, Value};
 
-use super::{BaseFieldData, ConditionData, ValidationAttrs};
+use super::{BaseFieldData, ConditionData, ValidationAttrs, WidthAttrs};
 
 /// Build a [`BaseFieldData`] with sensible defaults. The variant
 /// discriminator is provided by the [`FieldContext`](super::FieldContext)
@@ -30,6 +30,7 @@ pub(super) fn make_base(name: &str) -> BaseFieldData {
         extra: Map::new(),
         error: None,
         validation: ValidationAttrs::default(),
+        layout: WidthAttrs::default(),
         condition: ConditionData::default(),
     }
 }

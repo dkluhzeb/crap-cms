@@ -1,6 +1,7 @@
 //! Blueprint management -- save, use, list, remove reusable config directory templates.
 
 mod apply;
+mod exclude;
 mod helpers;
 mod list;
 mod manifest;

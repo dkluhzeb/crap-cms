@@ -55,7 +55,7 @@ use crate::{
             FileCleanupQueue, LuaCrudInfra, LuaVmInfra, PoolContext, TxContext,
             check_execution_deadline, run_effects_on_vm,
         },
-        lua_api::crud::{TxSlot, ensure_writable},
+        lua_api::crud::{TxSlot, ensure_writable, open_lazy_tx},
     },
     service::{DeferredEffect, DeferredQueue, EffectOutcome, EventQueue, VerificationQueue},
 };
@@ -361,6 +361,7 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
     // the pass-through below would otherwise hand that read connection to a
     // block whose whole purpose is to write.
     ensure_writable(lua)?;
+    open_lazy_tx(lua)?;
 
     // Pass-through: already inside a shared tx (hook context, or a
     // surrounding `crap.transaction(fn)`). Call `fn` directly.

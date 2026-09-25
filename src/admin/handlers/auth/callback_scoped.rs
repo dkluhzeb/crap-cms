@@ -12,15 +12,16 @@
 use std::{collections::HashMap, net::SocketAddr};
 
 use axum::{
+    body::Bytes,
     extract::{ConnectInfo, Path, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, Method},
     response::{IntoResponse, Redirect, Response},
 };
 
 use crate::admin::{
     AdminState,
     handlers::{
-        auth::callback::{CallbackRequest, complete_auth_callback},
+        auth::callback::{CallbackRequest, complete_auth_callback, form_fields},
         shared::paths,
     },
 };
@@ -37,7 +38,9 @@ pub async fn auth_callback_scoped(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path((collection, name)): Path<(String, String)>,
     Query(params): Query<HashMap<String, String>>,
+    method: Method,
     headers: HeaderMap,
+    body: Bytes,
 ) -> Response {
     // The collection comes from the URL, so it must be a real auth collection.
     // (`admit_callback_user` re-checks the user is stored in it, but rejecting an
@@ -52,7 +55,10 @@ pub async fn auth_callback_scoped(
         return Redirect::to(paths::LOGIN).into_response();
     }
 
-    let request = CallbackRequest::builder(addr, &collection, &name, &params, &headers).build();
+    let form = form_fields(&headers, &body);
+    let request =
+        CallbackRequest::builder(addr, &collection, &name, &method, &params, &form, &headers)
+            .build();
 
     complete_auth_callback(&state, &request).await
 }

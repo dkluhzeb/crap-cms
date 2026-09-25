@@ -63,7 +63,6 @@ pub(super) fn admit_update(
         id,
         &input.data,
         input.locale_ctx.map(LocaleContext::access_locale),
-        input.ui_locale.as_deref(),
     )?;
 
     // Strip write-denied fields before hook processing (data-aware: each

@@ -55,8 +55,10 @@ pub(in crate::admin::handlers::collections) fn build_filter_fields(
         }));
     }
 
-    fields.push(json!({ "key": "created_at", "label": "created", "field_type": "date" }));
-    fields.push(json!({ "key": "updated_at", "label": "updated", "field_type": "date" }));
+    if def.timestamps {
+        fields.push(json!({ "key": "created_at", "label": "created", "field_type": "date" }));
+        fields.push(json!({ "key": "updated_at", "label": "updated", "field_type": "date" }));
+    }
 
     let filterable = def
         .fields
@@ -329,6 +331,21 @@ mod tests {
         assert!(keys.contains(&"status"));
         assert!(keys.contains(&"views"));
         assert!(!keys.contains(&"body")); // richtext ineligible
+    }
+
+    /// Regression: a collection defined with `timestamps = false` has no
+    /// timestamp columns to filter on.
+    #[test]
+    fn build_filter_fields_timestamps_need_timestamps() {
+        let mut def = test_collection();
+        def.timestamps = false;
+
+        let fields = build_filter_fields(&def, &ListFieldAccess::default());
+        let keys: Vec<&str> = fields.iter().filter_map(|f| f["key"].as_str()).collect();
+
+        assert!(!keys.contains(&"created_at"));
+        assert!(!keys.contains(&"updated_at"));
+        assert!(keys.contains(&"views"));
     }
 
     #[test]

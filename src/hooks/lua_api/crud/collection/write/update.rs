@@ -51,7 +51,7 @@ pub(crate) struct UpdateOptions {
     #[lua(optional)]
     pub(crate) hooks: bool,
     /// When `true`, sets `_status` to `"draft"` (unpublishes). Data is not
-    /// modified. Requires `versions` on the collection — errors otherwise.
+    /// modified. Requires `versions` with drafts on the collection — errors otherwise.
     #[lua(optional)]
     pub(crate) unpublish: bool,
     /// Emit a live-update event for the updated document (default: `true`).

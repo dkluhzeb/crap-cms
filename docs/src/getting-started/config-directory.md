@@ -63,13 +63,13 @@ my-project/
 
 ## Lua Package Path
 
-The config directory is prepended to Lua's `package.path`:
+Lua's `package.path` is exactly the config directory:
 
 ```
-<config_dir>/?.lua;<config_dir>/?/init.lua;...
+<config_dir>/?.lua;<config_dir>/?/init.lua
 ```
 
-This means `require("hooks.posts")` resolves to `<config_dir>/hooks/posts.lua`.
+This means `require("hooks.posts")` resolves to `<config_dir>/hooks/posts.lua`. Modules are never loaded from the working directory or system Lua paths, and only Lua source is accepted (no precompiled bytecode) — see [Sandbox](../hooks/overview.md#sandbox).
 
 ## LuaLS Support
 

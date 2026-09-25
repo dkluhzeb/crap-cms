@@ -15,7 +15,7 @@
 //!
 //! Synchronous callers pass [`OpDeadline::none`] and are unaffected.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::service::ServiceError;
 
@@ -56,6 +56,15 @@ impl OpDeadline {
         self.0.is_some_and(|d| Instant::now() >= d)
     }
 
+    /// Time left until the deadline: `None` without one, `Duration::ZERO`
+    /// once it has passed. Lets a blocking call inside the operation (an
+    /// outbound request) be bounded by what is left rather than by its own,
+    /// possibly longer, timeout.
+    #[must_use]
+    pub fn remaining(self) -> Option<Duration> {
+        self.0.map(|d| d.saturating_duration_since(Instant::now()))
+    }
+
     /// The check the batch loops call between documents. `processed` is the
     /// count completed so far, reported in the error so an operator can see
     /// how far the batch got before it was abandoned (all of it rolled back).
@@ -82,8 +91,6 @@ impl OpDeadline {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
 
     /// Regression: an overflowing duration must not silently become "no
@@ -92,6 +99,23 @@ mod tests {
     fn overflow_fails_closed() {
         assert!(OpDeadline::in_secs(u64::MAX).expired());
         assert!(OpDeadline::in_secs(u64::MAX).check(0).is_err());
+    }
+
+    /// `remaining` reports no bound without a deadline, the time left for a
+    /// future one, and zero (never a negative or wrapped value) once passed.
+    #[test]
+    fn remaining_reports_the_time_left() {
+        assert_eq!(OpDeadline::none().remaining(), None);
+
+        let left = OpDeadline::in_secs(60).remaining().expect("a deadline");
+        assert!(left <= Duration::from_mins(1), "{left:?}");
+        assert!(left > Duration::from_secs(50), "{left:?}");
+
+        assert_eq!(
+            OpDeadline::in_secs(u64::MAX).remaining(),
+            Some(Duration::ZERO),
+            "an overflowed deadline is already passed"
+        );
     }
 
     #[test]

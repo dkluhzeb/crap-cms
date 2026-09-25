@@ -14,7 +14,7 @@ use crate::{
     commands::helpers::{Project, open_project},
     config::parse_duration_string,
     core::{JobStatus, upload::SYSTEM_IMAGE_CONVERT_JOB},
-    db::{BoxedConnection, DbConnection, DbValue, query::jobs as job_query},
+    db::{BoxedConnection, DbPool, query::jobs as job_query},
 };
 
 /// Handle the `images` subcommand — dispatches to the appropriate action handler.
@@ -36,19 +36,32 @@ pub fn run(config_dir: &Path, action: ImagesAction) -> Result<()> {
         registry: _registry,
         pool,
     } = open_project(config_dir)?;
-    let conn = pool.get().context("Failed to get DB connection")?;
 
+    // Reads on the read pool; the writes (retry, purge) on the write pool,
+    // like every other write.
     match action {
-        ImagesAction::List { status, limit } => list_entries(&conn, status.as_deref(), limit),
-        ImagesAction::Stats => show_stats(&conn),
+        ImagesAction::List { status, limit } => {
+            list_entries(&read_conn(&pool)?, status.as_deref(), limit)
+        }
+        ImagesAction::Stats => show_stats(&read_conn(&pool)?),
         ImagesAction::Retry {
             id,
             all,
             confirm,
             priority,
-        } => retry_entries(&conn, id, all, confirm, priority),
-        ImagesAction::Purge { older_than } => purge_entries(&conn, &older_than),
+        } => retry_entries(&write_conn(&pool)?, id, all, confirm, priority),
+        ImagesAction::Purge { older_than } => purge_entries(&write_conn(&pool)?, &older_than),
     }
+}
+
+/// A connection for the read-only actions.
+fn read_conn(pool: &DbPool) -> Result<BoxedConnection> {
+    pool.get().context("Failed to get DB connection")
+}
+
+/// A connection for the actions that write.
+fn write_conn(pool: &DbPool) -> Result<BoxedConnection> {
+    pool.write().context("Failed to get a write connection")
 }
 
 /// List image-convert job runs with optional status filter.
@@ -179,48 +192,25 @@ fn retry_entries(
             bail!("Use -y to confirm retrying all failed entries");
         }
 
-        let count = conn.execute(
-            &format!(
-                "UPDATE _crap_jobs SET status = 'pending', error = NULL, attempt = 0, \
-                                 completed_at = NULL, started_at = NULL, retry_after = NULL, \
-                                 priority = {} \
-                 WHERE slug = {} AND status = 'failed'",
-                conn.placeholder(1),
-                conn.placeholder(2)
-            ),
-            &[
-                DbValue::Integer(i64::from(priority)),
-                DbValue::Text(SYSTEM_IMAGE_CONVERT_JOB.to_string()),
-            ],
-        )?;
+        let count = job_query::retry_failed_jobs(conn, SYSTEM_IMAGE_CONVERT_JOB, None, priority)?;
 
         cli::success(&format!("Reset {count} failed entry/entries to pending"));
-    } else if let Some(entry_id) = id {
-        let count = conn.execute(
-            &format!(
-                "UPDATE _crap_jobs SET status = 'pending', error = NULL, attempt = 0, \
-                                 completed_at = NULL, started_at = NULL, retry_after = NULL, \
-                                 priority = {} \
-                 WHERE id = {} AND slug = {} AND status = 'failed'",
-                conn.placeholder(1),
-                conn.placeholder(2),
-                conn.placeholder(3)
-            ),
-            &[
-                DbValue::Integer(i64::from(priority)),
-                DbValue::Text(entry_id.clone()),
-                DbValue::Text(SYSTEM_IMAGE_CONVERT_JOB.to_string()),
-            ],
-        )?;
 
-        if count > 0 {
-            cli::success(&format!("Reset entry {entry_id} to pending"));
-        } else {
-            bail!("Entry '{entry_id}' not found or not in 'failed' status");
-        }
-    } else {
-        bail!("Specify --id <id> or --all -y");
+        return Ok(());
     }
+
+    let Some(entry_id) = id else {
+        bail!("Specify --id <id> or --all -y");
+    };
+
+    let count =
+        job_query::retry_failed_jobs(conn, SYSTEM_IMAGE_CONVERT_JOB, Some(&entry_id), priority)?;
+
+    if count == 0 {
+        bail!("Entry '{entry_id}' not found or not in 'failed' status");
+    }
+
+    cli::success(&format!("Reset entry {entry_id} to pending"));
 
     Ok(())
 }

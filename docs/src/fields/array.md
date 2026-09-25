@@ -210,7 +210,9 @@ crap.fields.array({
 
 ## Custom Labels (`labels`)
 
-Customize the "Add Row" button text and field header with singular/plural labels.
+Customize the row labels: `singular` names one row — the "Add Row" button text and the
+header of a row without a `label_field` / `row_label` title — and `plural` is the field
+header when `admin.label` is not set.
 
 ```lua
 crap.fields.array({
@@ -222,7 +224,8 @@ crap.fields.array({
 })
 ```
 
-With this config, the add button reads "Add Slide" instead of "Add Row".
+With this config, the field header reads "Slides", the add button "Add Slide" instead of
+"Add Row", and untitled rows "Slide 1", "Slide 2", …
 
 ## Admin Rendering
 

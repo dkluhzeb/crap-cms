@@ -5,6 +5,7 @@ use axum::{
     response::Response,
 };
 use serde_json::json;
+use tracing::error;
 
 use crate::{
     admin::{
@@ -24,8 +25,7 @@ use crate::{
         auth::{AuthUser, Claims},
         document::VersionSnapshot,
     },
-    db::query::AccessResult,
-    service::{self, RunnerReadHooks, VersionGaps},
+    service::{self, RunnerReadHooks, VersionGaps, global_access_allowed},
 };
 
 /// Load the global version being restored plus what it can no longer resolve.
@@ -61,6 +61,39 @@ fn load_restore_data(
     load_version_with_restore_gaps(&ctx, &state.infra.registry, version_id)
 }
 
+/// Gate the confirmation page on the global's `update` access, mapped as every
+/// global surface maps it: a filter table is a configuration error (the
+/// restore itself refuses it), never an allow.
+fn check_restore_access(
+    state: &AdminState,
+    def: &GlobalDefinition,
+    auth_user: Option<&Extension<AuthUser>>,
+    slug: &str,
+) -> Result<(), Box<Response>> {
+    let access = check_access_or_forbid(
+        state,
+        def.access.update.as_ref(),
+        auth_user,
+        None,
+        None,
+        "update",
+        slug,
+    )?;
+
+    match global_access_allowed(&access, slug) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(Box::new(forbidden(
+            state,
+            "You don't have permission to update this global",
+        ))),
+        Err(e) => {
+            error!("Global restore confirm for '{slug}': {e}");
+
+            Err(Box::new(server_error(state, "Access configuration error")))
+        }
+    }
+}
+
 /// GET /`admin/globals/{slug}/versions/{version_id}/restore` — confirmation page
 pub async fn restore_confirm(
     State(state): State<AdminState>,
@@ -79,20 +112,8 @@ pub async fn restore_confirm(
         return redirect_response(&paths::global(&slug));
     }
 
-    match check_access_or_forbid(
-        &state,
-        def.access.update.as_ref(),
-        auth_user.as_ref(),
-        None,
-        None,
-        "update",
-        &slug,
-    ) {
-        Ok(AccessResult::Denied) => {
-            return forbidden(&state, "You don't have permission to update this global");
-        }
-        Err(resp) => return *resp,
-        _ => {}
+    if let Err(resp) = check_restore_access(&state, &def, auth_user.as_ref(), &slug) {
+        return *resp;
     }
 
     let user_doc = auth_user.as_ref().map(|Extension(u)| &u.user_doc);

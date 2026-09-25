@@ -28,36 +28,52 @@ registered. The handler table is strict: unknown keys are load errors.
 
 ```lua
 -- init.lua
+local BASE = "https://kv.example.com/cache/"
+
+-- Credentials come from a CRAP_-prefixed variable (crap.env only serves
+-- CRAP_* and LUA_* names).
+local function auth()
+  return { Authorization = "Bearer " .. assert(crap.env.get("CRAP_KV_TOKEN"), "CRAP_KV_TOKEN is not set") }
+end
+
+-- Hash the key for the URL: cache keys are case-sensitive and may hold any
+-- character, so a lossy transform (slugify) would let two keys share an entry.
+local function url(key)
+  return BASE .. crap.crypto.sha256(key)
+end
+
+-- crap.http returns non-2xx responses normally — a failed call must raise.
+local function check(resp, what)
+  if resp.status >= 300 then
+    error(what .. " failed with status " .. resp.status)
+  end
+  return resp
+end
+
 crap.cache.register({
   get = function(key)
-    local resp = crap.http.request({
-      url = "https://kv.example.com/cache/" .. crap.util.slugify(key),
-      headers = { Authorization = "Bearer " .. crap.env.get("KV_TOKEN") },
-    })
+    local resp = crap.http.request({ url = url(key), headers = auth() })
     if resp.status == 404 then return nil end
-    return resp.body
+    return check(resp, "cache get").body
   end,
   set = function(key, value)
-    crap.http.request({
+    check(crap.http.request({
       method = "PUT",
-      url = "https://kv.example.com/cache/" .. crap.util.slugify(key),
-      headers = { Authorization = "Bearer " .. crap.env.get("KV_TOKEN") },
+      url = url(key),
+      headers = auth(),
       body = value,
-    })
+    }), "cache set")
   end,
   delete = function(key)
-    crap.http.request({
-      method = "DELETE",
-      url = "https://kv.example.com/cache/" .. crap.util.slugify(key),
-      headers = { Authorization = "Bearer " .. crap.env.get("KV_TOKEN") },
-    })
+    local resp = crap.http.request({ method = "DELETE", url = url(key), headers = auth() })
+    if resp.status ~= 404 then check(resp, "cache delete") end
   end,
   clear = function()
-    crap.http.request({
+    check(crap.http.request({
       method = "POST",
-      url = "https://kv.example.com/cache/flush",
-      headers = { Authorization = "Bearer " .. crap.env.get("KV_TOKEN") },
-    })
+      url = BASE .. "flush",
+      headers = auth(),
+    }), "cache clear")
   end,
 })
 ```

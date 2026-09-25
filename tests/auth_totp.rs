@@ -26,7 +26,10 @@ use crap_cms::core::auth::totp_code_at;
 use crap_cms::core::collection::{Auth, CollectionDefinition, MfaMode};
 use crap_cms::core::field::{FieldDefinition, FieldType};
 use crap_cms::core::{Document, DocumentFields, Registry};
-use crap_cms::db::{migrate, pool, query};
+use crap_cms::db::{
+    migrate, pool,
+    query::{self, MfaCode},
+};
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service::{self, AppInfra, ServiceContext, StandaloneInfra, auth};
 
@@ -37,6 +40,13 @@ fn now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64
+}
+
+/// Run the second-factor chokepoint on `code` for `uid` of `users`.
+fn verify(infra: &AppInfra, secret: &str, uid: &str, code: &str) -> bool {
+    let attempt = MfaCode::builder(uid, code, secret).build();
+
+    auth::verify_second_factor(infra, "users", &attempt).unwrap()
 }
 
 fn users_def(mode: MfaMode) -> CollectionDefinition {
@@ -131,11 +141,11 @@ fn enrollment_and_verification_flow() {
     assert_eq!(again.secret, prov.secret);
 
     // Wrong code fails; the right code confirms.
-    assert!(!auth::verify_second_factor(&infra, SECRET, "users", &uid, "000000").unwrap());
+    assert!(!verify(&infra, SECRET, &uid, "000000"));
 
     let t = now();
     let code = totp_code_at(&prov.secret, t).unwrap();
-    assert!(auth::verify_second_factor(&infra, SECRET, "users", &uid, &code).unwrap());
+    assert!(verify(&infra, SECRET, &uid, &code));
 
     // Confirmed: no more provisioning, and the same code never replays.
     assert!(
@@ -145,13 +155,13 @@ fn enrollment_and_verification_flow() {
         "confirmed enrollment must not re-provision"
     );
     assert!(
-        !auth::verify_second_factor(&infra, SECRET, "users", &uid, &code).unwrap(),
+        !verify(&infra, SECRET, &uid, &code),
         "a code must never verify twice"
     );
 
     // The next time step's code works (within the ±1 window).
     let next = totp_code_at(&prov.secret, t + 30).unwrap();
-    assert!(auth::verify_second_factor(&infra, SECRET, "users", &uid, &next).unwrap());
+    assert!(verify(&infra, SECRET, &uid, &next));
 }
 
 /// The chokepoint dispatches `email` mode to the stored-code path.
@@ -163,12 +173,13 @@ fn email_mode_dispatches_to_stored_code() {
     {
         let conn = infra.pool.get().unwrap();
         let ctx = ServiceContext::slug_only("users").conn(&conn).build();
-        service::auth::set_mfa_code(&ctx, &uid, "123456", now() + 300, SECRET).unwrap();
+        let code = MfaCode::builder(&uid, "123456", SECRET).build();
+        service::auth::set_mfa_code(&ctx, &code, now() + 300).unwrap();
     }
 
-    assert!(auth::verify_second_factor(&infra, SECRET, "users", &uid, "123456").unwrap());
+    assert!(verify(&infra, SECRET, &uid, "123456"));
     // Single-use: cleared after the first verify.
-    assert!(!auth::verify_second_factor(&infra, SECRET, "users", &uid, "123456").unwrap());
+    assert!(!verify(&infra, SECRET, &uid, "123456"));
 }
 
 /// A rotated `[auth] secret` makes the sealed secret unopenable:
@@ -182,11 +193,11 @@ fn rotated_secret_restarts_enrollment() {
         .unwrap()
         .unwrap();
     let code = totp_code_at(&prov.secret, now()).unwrap();
-    assert!(auth::verify_second_factor(&infra, SECRET, "users", &uid, &code).unwrap());
+    assert!(verify(&infra, SECRET, &uid, &code));
 
     // With a rotated secret nothing verifies…
     let next = totp_code_at(&prov.secret, now() + 30).unwrap();
-    assert!(!auth::verify_second_factor(&infra, "rotated", "users", &uid, &next).unwrap());
+    assert!(!verify(&infra, "rotated", &uid, &next));
 
     // …and the next challenge restarts enrollment with a fresh secret.
     let restarted = auth::totp_challenge(&infra, "rotated", "users", &user)

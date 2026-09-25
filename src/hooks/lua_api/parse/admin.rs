@@ -5,7 +5,11 @@ use mlua::{Error::RuntimeError, Result as LuaResult, Table, Value};
 use serde_json::Value as JsonValue;
 
 use crate::{
-    core::{FieldAdmin, FieldAdminBuilder, validate_template_name},
+    core::{
+        FieldAdmin, FieldAdminBuilder, FieldType,
+        richtext::{RICHTEXT_FEATURES, validate_node_name},
+        validate_template_name,
+    },
     hooks::lua_api::lua_to_json,
 };
 
@@ -43,6 +47,95 @@ const FIELD_ADMIN_KEYS: &[&str] = &[
     "template",
     "extra",
 ];
+
+/// The `admin` keys only some field types read, each with the types that read
+/// it — in the edit form, or in the rich text node-attribute modal for the
+/// scalar types a node attr may use. Every other key applies to every field
+/// type. On any type not listed a key would be silently inert, so it is
+/// refused there.
+const TYPE_SCOPED_ADMIN_KEYS: &[(&str, &[FieldType])] = &[
+    (
+        "placeholder",
+        &[
+            FieldType::Text,
+            FieldType::Email,
+            FieldType::Number,
+            FieldType::Textarea,
+            FieldType::Json,
+            FieldType::Code,
+            FieldType::Richtext,
+        ],
+    ),
+    (
+        "collapsed",
+        &[
+            FieldType::Group,
+            FieldType::Collapsible,
+            FieldType::Array,
+            FieldType::Blocks,
+        ],
+    ),
+    ("label_field", &[FieldType::Array, FieldType::Blocks]),
+    ("row_label", &[FieldType::Array, FieldType::Blocks]),
+    ("labels", &[FieldType::Array, FieldType::Blocks]),
+    ("step", &[FieldType::Number]),
+    (
+        "rows",
+        &[FieldType::Textarea, FieldType::Code, FieldType::Json],
+    ),
+    ("language", &[FieldType::Code]),
+    ("languages", &[FieldType::Code]),
+    (
+        "picker",
+        &[
+            FieldType::Relationship,
+            FieldType::Upload,
+            FieldType::Blocks,
+        ],
+    ),
+    ("resizable", &[FieldType::Textarea, FieldType::Richtext]),
+    ("format", &[FieldType::Richtext]),
+    ("features", &[FieldType::Richtext]),
+    ("nodes", &[FieldType::Richtext]),
+];
+
+/// The `admin.picker` values a field type reads; empty for a type without a
+/// picker.
+fn picker_values(field_type: &FieldType) -> &'static [&'static str] {
+    match field_type {
+        FieldType::Blocks => &["select", "card"],
+        FieldType::Upload | FieldType::Relationship => &["drawer", "none"],
+        _ => &[],
+    }
+}
+
+/// Refuse an `admin` key on a field type that does not read it (see
+/// [`TYPE_SCOPED_ADMIN_KEYS`]), and an `admin.picker` value the field's type
+/// does not offer.
+pub(super) fn deny_type_scoped_admin_keys(
+    admin_tbl: &Table,
+    field_type: &FieldType,
+) -> LuaResult<()> {
+    for (key, types) in TYPE_SCOPED_ADMIN_KEYS {
+        if types.contains(field_type) || !admin_tbl.contains_key(*key)? {
+            continue;
+        }
+
+        let names: Vec<&str> = types.iter().map(FieldType::as_str).collect();
+
+        return Err(RuntimeError(format!(
+            "field admin '{key}' has no effect on a {} field — it applies only to: {}",
+            field_type.as_str(),
+            names.join(", ")
+        )));
+    }
+
+    let Some(picker) = admin_tbl.get::<Option<String>>("picker").ok().flatten() else {
+        return Ok(());
+    };
+
+    check_admin_enum("picker", &picker, picker_values(field_type))
+}
 
 /// Parse the `admin` subtable of a field Lua definition into a `FieldAdmin`.
 ///
@@ -189,14 +282,28 @@ fn apply_rows(mut builder: FieldAdminBuilder, admin_tbl: &Table) -> LuaResult<Fi
 
 /// Apply the three sequence-typed lists (`languages`, `features`, `nodes`).
 /// Each is always set on the builder; absent → empty Vec, but a present
-/// non-table value or a non-string entry is a hard error.
+/// non-table value or a non-string entry is a hard error. Every `features`
+/// entry must be a known editor feature, and every `nodes` entry a valid
+/// custom node name (whether it is registered is checked once all
+/// definitions have loaded).
 fn apply_sequence_lists(
     mut builder: FieldAdminBuilder,
     admin_tbl: &Table,
 ) -> LuaResult<FieldAdminBuilder> {
+    let features = get_string_sequence(admin_tbl, "features", "field admin")?;
+    let nodes = get_string_sequence(admin_tbl, "nodes", "field admin")?;
+
+    for feature in &features {
+        check_admin_enum("features", feature, RICHTEXT_FEATURES)?;
+    }
+
+    for node in &nodes {
+        validate_node_name(node).map_err(|e| RuntimeError(format!("field admin 'nodes': {e}")))?;
+    }
+
     builder = builder.languages(get_string_sequence(admin_tbl, "languages", "field admin")?);
-    builder = builder.features(get_string_sequence(admin_tbl, "features", "field admin")?);
-    builder = builder.nodes(get_string_sequence(admin_tbl, "nodes", "field admin")?);
+    builder = builder.features(features);
+    builder = builder.nodes(nodes);
     Ok(builder)
 }
 
@@ -257,7 +364,7 @@ mod tests {
         features.set(2, "italic").unwrap();
         admin_tbl.set("features", features).unwrap();
         let nodes = lua.create_table().unwrap();
-        nodes.set(1, "paragraph").unwrap();
+        nodes.set(1, "cta").unwrap();
         admin_tbl.set("nodes", nodes).unwrap();
         admin_tbl.set("format", "json").unwrap();
         admin_tbl.set("language", "en").unwrap();
@@ -266,7 +373,7 @@ mod tests {
         assert!(admin.labels.singular.is_some());
         assert!(admin.labels.plural.is_some());
         assert_eq!(admin.features, vec!["bold", "italic"]);
-        assert_eq!(admin.nodes, vec!["paragraph"]);
+        assert_eq!(admin.nodes, vec!["cta"]);
         assert_eq!(admin.richtext_format.as_deref(), Some("json"));
         assert_eq!(admin.language.as_deref(), Some("en"));
         assert_eq!(admin.rows, Some(5));
@@ -491,6 +598,99 @@ mod tests {
         features.set(2, true).unwrap();
         admin_tbl.set("features", features).unwrap();
         assert_rejected(&admin_tbl, "'features' must be an array of strings");
+    }
+
+    /// Regression: `features` entries were never checked, so a typo
+    /// (`bulletlist`) or an unsupported name (`underline`) booted fine and the
+    /// toolbar silently lacked it.
+    #[test]
+    fn rejects_unknown_feature() {
+        let lua = Lua::new();
+        for bad in ["bulletlist", "underline"] {
+            let admin_tbl = lua.create_table().unwrap();
+            let features = lua.create_table().unwrap();
+            features.set(1, "bold").unwrap();
+            features.set(2, bad).unwrap();
+            admin_tbl.set("features", features).unwrap();
+            assert_rejected(&admin_tbl, bad);
+        }
+    }
+
+    /// Regression: `nodes` accepted any string — a built-in node name
+    /// (`paragraph`, enabled through `features`, never a custom node) or a
+    /// misspelt one (`CTA`) — and the node was silently dropped.
+    #[test]
+    fn rejects_invalid_node_names() {
+        let lua = Lua::new();
+        for bad in ["paragraph", "CTA", "my-node"] {
+            let admin_tbl = lua.create_table().unwrap();
+            let nodes = lua.create_table().unwrap();
+            nodes.set(1, bad).unwrap();
+            admin_tbl.set("nodes", nodes).unwrap();
+            assert_rejected(&admin_tbl, bad);
+        }
+    }
+
+    /// Regression: type-specific `admin` keys (`format`, `features`,
+    /// `nodes`, `picker`, `rows`, `step`, `language`, …) parsed on any field
+    /// type and were silently inert off the types that read them.
+    #[test]
+    fn type_scoped_admin_keys_are_refused_on_other_field_types() {
+        let lua = Lua::new();
+
+        for (key, types) in TYPE_SCOPED_ADMIN_KEYS {
+            let admin_tbl = lua.create_table().unwrap();
+            admin_tbl.set(*key, lua.create_table().unwrap()).unwrap();
+
+            let err = deny_type_scoped_admin_keys(&admin_tbl, &FieldType::Checkbox)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(key) && err.contains("checkbox"), "{err}");
+
+            for field_type in *types {
+                let scoped = lua.create_table().unwrap();
+                scoped.set(*key, true).unwrap();
+                if *key == "picker" {
+                    scoped.set(*key, picker_values(field_type)[0]).unwrap();
+                }
+                assert!(
+                    deny_type_scoped_admin_keys(&scoped, field_type).is_ok(),
+                    "{key} on {}",
+                    field_type.as_str()
+                );
+            }
+        }
+    }
+
+    /// Keys every field type reads are accepted everywhere.
+    #[test]
+    fn generic_admin_keys_are_accepted_on_every_type() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        admin_tbl.set("label", "L").unwrap();
+        admin_tbl.set("readonly", true).unwrap();
+        admin_tbl.set("hidden", true).unwrap();
+
+        assert!(deny_type_scoped_admin_keys(&admin_tbl, &FieldType::Checkbox).is_ok());
+    }
+
+    /// Each picker type offers its own values: `card` is a blocks picker, not
+    /// an upload one.
+    #[test]
+    fn picker_values_are_checked_per_type() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        admin_tbl.set("picker", "card").unwrap();
+
+        assert!(deny_type_scoped_admin_keys(&admin_tbl, &FieldType::Blocks).is_ok());
+
+        let err = deny_type_scoped_admin_keys(&admin_tbl, &FieldType::Upload)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("'card'") && err.contains("drawer, none"),
+            "{err}"
+        );
     }
 
     #[test]

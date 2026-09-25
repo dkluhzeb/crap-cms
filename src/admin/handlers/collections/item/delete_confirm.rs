@@ -15,12 +15,12 @@ use crate::{
             page::collections::CollectionDeleteConfirmPage,
         },
         handlers::shared::{
-            PageRequest, check_access_or_forbid, collection_base, extract_editor_locale, forbidden,
-            lookup_ref_count, not_found, render_page, require_collection,
+            PageRequest, access_admits_row, check_access_or_forbid, collection_base,
+            extract_editor_locale, forbidden, lookup_ref_count, not_found, render_page,
+            require_collection,
         },
     },
     core::{AuthUser, Claims, CollectionDefinition},
-    db::query::AccessResult,
     service::{FindByIdInput, RunnerReadHooks, ServiceContext, find_document_by_id},
 };
 
@@ -94,7 +94,7 @@ pub async fn delete_confirm(
         ("delete", "delete")
     };
 
-    match check_access_or_forbid(
+    let access = match check_access_or_forbid(
         &state,
         access_fn,
         auth_user.as_ref(),
@@ -103,14 +103,16 @@ pub async fn delete_confirm(
         op,
         &slug,
     ) {
-        Ok(AccessResult::Denied) => {
-            return forbidden(
-                &state,
-                &format!("You don't have permission to {verb} this item"),
-            );
-        }
+        Ok(access) => access,
         Err(resp) => return *resp,
-        _ => {}
+    };
+
+    // A filter-table rule is judged against the item, as the delete judges it.
+    if !access_admits_row(&state, &def, &id, &access) {
+        return forbidden(
+            &state,
+            &format!("You don't have permission to {verb} this item"),
+        );
     }
 
     let user_doc = auth_user.as_ref().map(|Extension(au)| &au.user_doc);

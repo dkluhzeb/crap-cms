@@ -7,9 +7,7 @@
 
 import { h } from '../_internal/h.js';
 import { t } from '../_internal/i18n.js';
-
-/** Allowed protocols for inserted links — blocks `javascript:` etc. */
-const ALLOWED_LINK_PROTOS = new Set(['http', 'https', 'mailto', 'tel', '']);
+import { isAllowedLinkHref } from './schema.js';
 
 /**
  * Open the link modal inside the richtext host's shadow root.
@@ -33,18 +31,6 @@ export function openLinkModal(host, schema, attrs) {
   const hrefInput = modal.querySelector('[data-field="href"]');
   hrefInput?.focus();
   wireLinkModal(host, modal, schema, attrs, savedSelection, isEdit);
-}
-
-/**
- * Whether `href` uses an allowlisted protocol. Schemeless URLs (no `:`)
- * are accepted.
- *
- * @param {string} href
- */
-function isAllowedLinkProto(href) {
-  if (!href.includes(':')) return true;
-  const proto = href.split(':')[0].toLowerCase().trim();
-  return ALLOWED_LINK_PROTOS.has(proto);
 }
 
 /**
@@ -212,7 +198,7 @@ function applyLink(host, modal, schema, attrs, savedSelection, isEdit, close) {
   /** @type {HTMLInputElement|null} */
   const hrefEl = modal.querySelector('[data-field="href"]');
   const href = hrefEl?.value.trim() || '';
-  if (!href || !isAllowedLinkProto(href)) return;
+  if (!isAllowedLinkHref(href)) return;
 
   /** @type {HTMLInputElement|null} */
   const titleEl = modal.querySelector('[data-field="title"]');

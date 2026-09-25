@@ -13,7 +13,10 @@ use anyhow::Result;
 use serde_json::{Map, Value};
 
 use crate::{
-    core::{Document, DocumentFields, FieldDefinition, Hooks, ValidationError, nest_group_fields},
+    core::{
+        Document, DocumentFields, FieldDefinition, Hooks, Registry, ValidationError,
+        nest_group_fields,
+    },
     db::{AccessResult, DbConnection},
     hooks::{
         HookContext, HookEvent, ValidationCtx,
@@ -109,6 +112,14 @@ pub trait WriteHooks: FieldReadStrip {
     /// runner, knowledge of globally-registered delete hooks).
     fn runs_delete_hooks(&self, hooks: &Hooks) -> bool {
         !hooks.before_delete.is_empty() || !hooks.after_delete.is_empty()
+    }
+
+    /// The registry this surface validates writes against, for the persist
+    /// steps that resolve definitions beyond the collection's own (the search
+    /// index reads rich text custom nodes' `searchable_attrs`). Default `None`
+    /// for lightweight test/override impls.
+    fn registry(&self) -> Option<&Registry> {
+        None
     }
 
     /// Collection-level access check. Returns the access result (Allowed/Denied/Constrained).

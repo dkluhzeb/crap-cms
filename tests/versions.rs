@@ -361,12 +361,24 @@ fn set_and_get_document_status() {
     assert_eq!(status.as_deref(), Some("published"));
 
     // Set to draft
-    query::set_document_status(&conn, "articles", &doc.id, "draft").unwrap();
+    query::set_document_status(
+        &conn,
+        query::StatusTable::new("articles", true),
+        &doc.id,
+        "draft",
+    )
+    .unwrap();
     let status = query::get_document_status(&conn, "articles", &doc.id).unwrap();
     assert_eq!(status.as_deref(), Some("draft"));
 
     // Set back to published
-    query::set_document_status(&conn, "articles", &doc.id, "published").unwrap();
+    query::set_document_status(
+        &conn,
+        query::StatusTable::new("articles", true),
+        &doc.id,
+        "published",
+    )
+    .unwrap();
     let status = query::get_document_status(&conn, "articles", &doc.id).unwrap();
     assert_eq!(status.as_deref(), Some("published"));
 }
@@ -1287,7 +1299,13 @@ fn global_draft_overlay_reports_the_rows_status_not_the_snapshots() {
         query::update_global(&tx, "site", &gdef, &data, None).unwrap();
 
         // …then the pre-alpha.10 shape: row stamped draft, snapshot stale.
-        query::set_document_status(&tx, "_global_site", "default", "draft").unwrap();
+        query::set_document_status(
+            &tx,
+            query::StatusTable::new("_global_site", true),
+            "default",
+            "draft",
+        )
+        .unwrap();
         query::create_version(
             &tx,
             "_global_site",

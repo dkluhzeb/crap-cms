@@ -12,7 +12,6 @@ use std::{
     time::Duration,
 };
 
-use serde_json::{Map, Value};
 use tokio::{select, sync::mpsc, task, time::timeout};
 use tokio_stream::{Stream, wrappers::ReceiverStream};
 use tokio_util::sync::CancellationToken;
@@ -35,7 +34,7 @@ use crate::{
     },
     db::DbPool,
     hooks::HookRunner,
-    service::{EventAccessInput, EventAccessMap, EventGate, event_op_str},
+    service::{EventAccessInput, EventAccessMap, EventDelivery, EventGate, delivered_operations},
 };
 
 /// Outbound channel capacity per subscriber. Small — we rely on `send_timeout`
@@ -96,14 +95,26 @@ struct SubscriberCtx {
     registry: Arc<Registry>,
 }
 
-/// Process a single event for a subscriber: requested-op filter, then the
-/// shared view gate + field strip, then proto conversion. Returns None if the
-/// event should be skipped. The gate is shared with the admin SSE stream so the
-/// security-critical pipeline can't drift between the two surfaces.
+/// Whether the subscriber asked for any operation `event` can reach it as —
+/// its own, or the removal a move between views becomes for a subscriber that
+/// could see the row only where it was. The pre-coalescing filter; the operation actually delivered is
+/// checked again in [`process_event`].
+fn wants(event: &MutationEvent, ctx: &SubscriberCtx) -> bool {
+    delivered_operations(event)
+        .iter()
+        .any(|op| ctx.requested_ops.contains(op.as_str()))
+}
+
+/// Process a single event for a subscriber: the shared view gate + field
+/// strip, then the requested-op filter on the operation it is delivered as,
+/// then proto conversion. Returns None if the event should be skipped. The
+/// gate is shared with the admin SSE stream so the security-critical pipeline
+/// can't drift between the two surfaces.
 fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::MutationEvent> {
-    // The requested-op filter runs in `drain_and_coalesce` (before coalescing),
-    // so events reaching here already match the subscriber's operations.
-    let visible = EventGate {
+    // `drain_and_coalesce` already dropped events the subscriber can receive
+    // under no requested operation; which one this subscriber gets (the
+    // event's own or a removal) is only known once the gate has run.
+    let delivery = EventGate {
         collection_views: &ctx.access.maps.collection_views,
         global_views: &ctx.access.maps.global_views,
         collection_modes: &ctx.access.maps.collection_modes,
@@ -114,22 +125,29 @@ fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::
     }
     .evaluate(event)?;
 
-    Some(to_proto_event(event, &visible))
+    if !ctx.requested_ops.contains(delivery.operation.as_str()) {
+        return None;
+    }
+
+    Some(to_proto_event(event, &delivery))
 }
 
 /// The proto message a subscriber receives: the event's public metadata and
-/// the already-gated `visible` data.
-fn to_proto_event(event: &MutationEvent, visible: &Map<String, Value>) -> content::MutationEvent {
+/// the already-gated delivery — the operation it is received as and the
+/// visible data.
+fn to_proto_event(event: &MutationEvent, delivery: &EventDelivery) -> content::MutationEvent {
     // Exhaustive on purpose: a field added to `MutationEvent` fails to compile
     // here until it is decided whether subscribers may see it. What stays
-    // server-side: the unstripped `data` (only `visible` is sent), the editor's
-    // identity, the view metadata, and the gating snapshot.
+    // server-side: the unstripped `data` (only the delivery's is sent), the
+    // editor's identity, the view metadata, and the gating snapshot. The
+    // operation is the delivery's: a published-only subscriber receives an
+    // unpublish as a removal.
     let MutationEvent {
         sequence,
         publisher,
         timestamp,
         target,
-        operation,
+        operation: _,
         collection,
         document_id,
         data: _,
@@ -138,7 +156,8 @@ fn to_proto_event(event: &MutationEvent, visible: &Map<String, Value>) -> conten
         gate: _,
     } = event;
 
-    let fields: HashMap<String, content::FieldValue> = visible
+    let fields: HashMap<String, content::FieldValue> = delivery
+        .data
         .iter()
         .map(|(k, v)| (k.clone(), json_to_field_value(v)))
         .collect();
@@ -148,7 +167,7 @@ fn to_proto_event(event: &MutationEvent, visible: &Map<String, Value>) -> conten
         publisher: publisher.clone(),
         timestamp: timestamp.clone(),
         target: enum_mapping::mutation_target(target).into(),
-        operation: enum_mapping::mutation_operation(operation).into(),
+        operation: enum_mapping::mutation_operation(&delivery.operation).into(),
         collection: collection.to_string(),
         document_id: document_id.to_string(),
         data: Some(content::DataMap { fields }),
@@ -206,9 +225,7 @@ async fn handle_event(
     // later op winning the latest-wins collapse must not shadow an earlier,
     // requested operation out of existence (e.g. a `create` followed by an
     // `update` for a subscriber scoped to `create`).
-    let outcome = drain_and_coalesce(event, event_rx, MAX_DRAIN, |e| {
-        ctx.requested_ops.contains(event_op_str(&e.operation))
-    });
+    let outcome = drain_and_coalesce(event, event_rx, MAX_DRAIN, |e| wants(e, ctx));
 
     // Per-event field-strip + `after_read` Lua (a VM acquire up to 5s)
     // runs for the whole batch in ONE blocking hop, off the async pump
@@ -809,7 +826,7 @@ mod tests {
                 maps,
                 user_doc: None,
             },
-            requested_ops: HashSet::new(),
+            requested_ops: requested_operations(Vec::new()).expect("every operation"),
             hook_runner,
             registry,
         }

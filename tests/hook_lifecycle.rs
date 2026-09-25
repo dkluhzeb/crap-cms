@@ -12,7 +12,6 @@
     clippy::unreadable_literal
 )]
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -23,14 +22,12 @@ use crap_cms::core::HookRef;
 use crap_cms::core::ReqContext;
 use crap_cms::core::collection::Hooks;
 use crap_cms::core::field::{FieldDefinition, FieldType};
-use crap_cms::db::DbConnection;
 use crap_cms::db::query::AccessResult;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::AccessCheckInput;
 use crap_cms::hooks::lifecycle::{
-    AfterReadCtx, AuthStrategyInput, EventAfterReadInput, FieldWriteCtx, HookContext, HookRunner,
-    ValidationCtx,
+    AfterReadCtx, EventAfterReadInput, FieldWriteCtx, HookContext, HookRunner, ValidationCtx,
 };
 use serde_json::json;
 
@@ -789,207 +786,6 @@ fn fire_before_read_executes() {
     assert!(
         result.is_ok(),
         "fire_before_read should not error even with no before_read hooks defined"
-    );
-}
-
-// ── 4A. Auth Strategies ──────────────────────────────────────────────────────
-
-fn api_key_strategy_input(headers: &HashMap<String, String>) -> AuthStrategyInput<'_> {
-    AuthStrategyInput {
-        collection: "articles",
-        headers,
-        email: None,
-        password: None,
-        remote_addr: None,
-    }
-}
-
-#[test]
-fn auth_strategy_returns_user_on_valid_key() {
-    let (_tmp, pool, registry, runner) = setup();
-
-    // Create an article (auth_strategy.lua looks up articles to return a user-like doc)
-    let mut data = DocumentFields::new();
-    data.insert("title".to_string(), json!("Strategy Test"));
-    let _doc = create_article(&pool, &registry, &data);
-
-    let mut headers = HashMap::new();
-    headers.insert("x-api-key".to_string(), "valid-key".to_string());
-
-    let conn = pool.get().expect("DB connection");
-    let result = runner.run_auth_strategy(
-        &HookRef::new("hooks.auth_strategy.api_key_auth"),
-        &api_key_strategy_input(&headers),
-        &conn,
-    );
-    assert!(result.is_ok(), "run_auth_strategy should not error");
-    let doc = result.unwrap();
-    assert!(doc.is_some(), "Valid key should return a document");
-}
-
-/// Regression: strategy side-effect writes used to persist on FAILED
-/// attempts (bare conn, no transaction) — attacker-controlled DB growth
-/// from the login endpoint. The strategy now runs in a transaction that
-/// commits only when it authenticates someone.
-#[test]
-fn auth_strategy_writes_roll_back_on_failed_attempt() {
-    let (_tmp, pool, _registry, runner) = setup();
-
-    let count = |conn: &crap_cms::db::BoxedConnection| -> i64 {
-        conn.query_one("SELECT COUNT(*) AS c FROM articles", &[])
-            .unwrap()
-            .unwrap()
-            .get_i64("c")
-            .unwrap()
-    };
-
-    let conn = pool.get().expect("DB connection");
-    let before = count(&conn);
-
-    // Failed attempt (no x-succeed header): the article write must vanish.
-    let headers = HashMap::new();
-    let result = runner
-        .run_auth_strategy(
-            &HookRef::new("hooks.auth_strategy.writing_auth"),
-            &api_key_strategy_input(&headers),
-            &conn,
-        )
-        .expect("should not error");
-    assert!(result.is_none());
-    assert_eq!(
-        count(&conn),
-        before,
-        "failed strategy attempt must roll back its writes"
-    );
-
-    // Successful attempt: the write commits.
-    let mut headers = HashMap::new();
-    headers.insert("x-succeed".to_string(), "yes".to_string());
-    let result = runner
-        .run_auth_strategy(
-            &HookRef::new("hooks.auth_strategy.writing_auth"),
-            &api_key_strategy_input(&headers),
-            &conn,
-        )
-        .expect("should not error");
-    assert!(result.is_some());
-    assert_eq!(
-        count(&conn),
-        before + 1,
-        "successful strategy attempt must commit its writes"
-    );
-}
-
-#[test]
-fn auth_strategy_returns_none_on_invalid_key() {
-    let (_tmp, pool, _registry, runner) = setup();
-
-    let mut headers = HashMap::new();
-    headers.insert("x-api-key".to_string(), "wrong-key".to_string());
-
-    let conn = pool.get().expect("DB connection");
-    let result = runner
-        .run_auth_strategy(
-            &HookRef::new("hooks.auth_strategy.api_key_auth"),
-            &api_key_strategy_input(&headers),
-            &conn,
-        )
-        .expect("should not error");
-    assert!(result.is_none(), "Invalid key should return None");
-}
-
-#[test]
-fn auth_strategy_returns_none_on_missing_header() {
-    let (_tmp, pool, _registry, runner) = setup();
-
-    let headers: HashMap<String, String> = HashMap::new(); // no x-api-key header
-
-    let conn = pool.get().expect("DB connection");
-    let result = runner
-        .run_auth_strategy(
-            &HookRef::new("hooks.auth_strategy.api_key_auth"),
-            &api_key_strategy_input(&headers),
-            &conn,
-        )
-        .expect("should not error");
-    assert!(result.is_none(), "Missing header should return None");
-}
-
-/// Regression: a custom auth strategy must receive the submitted credentials
-/// (`ctx.email` / `ctx.password`). The gRPC login passed an empty context and
-/// no credentials, so a "verify against LDAP / external API" strategy was
-/// impossible there.
-#[test]
-fn auth_strategy_receives_credentials() {
-    let (_tmp, pool, _registry, runner) = setup();
-    let headers = HashMap::new();
-    let conn = pool.get().expect("DB connection");
-
-    let good = AuthStrategyInput {
-        collection: "articles",
-        headers: &headers,
-        email: Some("admin@x.com"),
-        password: Some("secret"),
-        remote_addr: Some("1.2.3.4"),
-    };
-    let ok = runner
-        .run_auth_strategy(
-            &HookRef::new("hooks.auth_strategy.credential_auth"),
-            &good,
-            &conn,
-        )
-        .expect("should not error");
-    assert!(
-        ok.is_some(),
-        "strategy must authenticate when ctx.email + ctx.password match"
-    );
-
-    let bad = AuthStrategyInput {
-        collection: "articles",
-        headers: &headers,
-        email: Some("admin@x.com"),
-        password: Some("wrong"),
-        remote_addr: None,
-    };
-    let denied = runner
-        .run_auth_strategy(
-            &HookRef::new("hooks.auth_strategy.credential_auth"),
-            &bad,
-            &conn,
-        )
-        .expect("should not error");
-    assert!(
-        denied.is_none(),
-        "strategy must reject a wrong password (proves ctx.password reaches it)"
-    );
-}
-
-#[test]
-fn auth_strategy_has_crud_access() {
-    let (_tmp, pool, registry, runner) = setup();
-
-    // Create two articles for the strategy to find
-    let mut data = DocumentFields::new();
-    data.insert("title".to_string(), json!("First Article"));
-    let _doc = create_article(&pool, &registry, &data);
-    data.insert("title".to_string(), json!("Second Article"));
-    let _doc = create_article(&pool, &registry, &data);
-
-    // The strategy calls crap.collections.find — test that it works
-    let mut headers = HashMap::new();
-    headers.insert("x-api-key".to_string(), "valid-key".to_string());
-
-    let conn = pool.get().expect("DB connection");
-    let result = runner
-        .run_auth_strategy(
-            &HookRef::new("hooks.auth_strategy.api_key_auth"),
-            &api_key_strategy_input(&headers),
-            &conn,
-        )
-        .expect("should not error");
-    assert!(
-        result.is_some(),
-        "Strategy with CRUD access should find articles and return one"
     );
 }
 

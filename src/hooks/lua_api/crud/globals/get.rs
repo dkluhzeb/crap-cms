@@ -33,8 +33,8 @@ pub(crate) struct GlobalGetOptions {
     #[lua(optional)]
     pub(crate) override_access: bool,
     /// Include unpublished (draft) content (default: `false`). When the global
-    /// has drafts enabled and has been unpublished, a normal read serves the
-    /// last published snapshot; set this to `true` to read the draft instead.
+    /// has drafts enabled and has been unpublished, a normal read returns it
+    /// empty (no field content); set this to `true` to read the draft instead.
     #[lua(optional)]
     pub(crate) draft: bool,
 }

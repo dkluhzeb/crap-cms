@@ -33,7 +33,7 @@ use crap_cms::{
     config::CrapConfig,
     core::{
         DocumentFields, HookRef, auth,
-        collection::{Auth, CollectionDefinition, MfaMode},
+        collection::{Auth, CollectionDefinition, MfaMode, Surface},
         field::{FieldDefinition, FieldType},
     },
     db::query,
@@ -213,7 +213,8 @@ end
 }
 
 /// Helper for the scoped-callback tests: write the shared `test` callback hook
-/// (echoes the `uid` query param as the user id) into the config dir.
+/// (echoes the `uid` query param as the user id) into the config dir, and the
+/// `form` hook (echoes the `uid` field of a `form_post` body, POST only).
 fn write_uid_callback_hook(tmp_path: &std::path::Path) {
     let cb_dir = tmp_path.join("auth_callback");
     std::fs::create_dir_all(&cb_dir).unwrap();
@@ -228,6 +229,86 @@ end
 "#,
     )
     .unwrap();
+    std::fs::write(
+        cb_dir.join("form.lua"),
+        r#"
+return function(ctx)
+    if ctx.headers["_method"] ~= "POST" then return nil end
+    if ctx.headers["_form_state"] ~= "expected-state" then return nil end
+    local uid = ctx.headers["_form_uid"]
+    if not uid then return nil end
+    return { id = uid, email = "x@test.com" }
+end
+"#,
+    )
+    .unwrap();
+}
+
+/// Regression: `POST /admin/auth/callback/...` was routed and documented, but
+/// an identity provider's `response_mode=form_post` answer — a cross-site POST
+/// that never carries the `SameSite=Strict` CSRF cookie — was refused by the
+/// CSRF check, and even past it the body never reached the hook. The callback
+/// routes are exempt from the double-submit check (the OAuth `state` the hook
+/// verifies is their login-CSRF defense) and the form fields reach the hook.
+#[tokio::test]
+async fn a_form_post_callback_reaches_the_hook_without_a_csrf_token() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_uid_callback_hook(tmp.path());
+
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+
+    let app = setup_app_in_dir(vec![make_named_auth_def("acol")], vec![], config, tmp);
+
+    let user_id = {
+        let def = app.registry.get_collection("acol").unwrap().clone();
+        let mut conn = app.pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let data: DocumentFields =
+            HashMap::from([("email".to_string(), json!("x@test.com"))]).into();
+        let doc = query::create(&tx, "acol", &def, &data, None).unwrap();
+        tx.commit().unwrap();
+        doc.id.to_string()
+    };
+
+    let post = |uri: &str, body: String| {
+        Request::post(uri)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+            .body(Body::from(body))
+            .unwrap()
+    };
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post(
+            "/admin/auth/callback/acol/form",
+            format!("uid={user_id}&state=expected-state"),
+        ))
+        .await
+        .unwrap();
+
+    assert!(
+        issued_session(&resp),
+        "a form_post callback reaches its hook and mints the session"
+    );
+
+    // The exemption is the callbacks' alone: the same token-less cross-site
+    // POST to any other admin route is still refused.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post(
+            "/admin/login",
+            "email=x%40test.com&password=x".to_string(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
 fn issued_session(resp: &axum::response::Response) -> bool {
@@ -539,6 +620,97 @@ async fn an_mfa_exempt_auth_callback_mints_the_session_directly() {
         "an exempt callback skips the MFA step"
     );
     assert!(mfa_pending_token(&resp).is_none());
+
+    // The identity provider enforced the second factor, so the session
+    // counts as having passed it: the admin — whose MFA gate requires the
+    // second factor — accepts it.
+    let session = session_cookie(&resp).expect("the session cookie is set");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin")
+                .header("Cookie", format!("crap_session={session}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "the exempt session is accepted"
+    );
+}
+
+/// The `crap_session` cookie value a response set, if any.
+fn session_cookie(resp: &axum::response::Response) -> Option<String> {
+    resp.headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find_map(|c| c.strip_prefix("crap_session="))
+        .and_then(|rest| rest.split(';').next())
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+}
+
+/// Regression: the MFA-pending token was not bound to the surface that
+/// issued it. A gRPC-only login strategy's challenge could be completed on
+/// the admin MFA page, which then set an admin session cookie the strategy
+/// was never allowed to produce. The admin MFA page now refuses a pending
+/// token another surface issued — before any code is checked or counted.
+#[tokio::test]
+async fn the_admin_mfa_step_refuses_a_grpc_pending_token() {
+    let (app, user_id) = mfa_callback_app(&[]);
+
+    let claims = auth::Claims::builder(user_id.as_str(), "musers")
+        .email("mfa@test.com")
+        .token_use(auth::TokenUse::MfaPending)
+        .surface(Surface::Grpc)
+        .exp((chrono::Utc::now().timestamp() as u64) + 300)
+        .build()
+        .unwrap();
+    let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
+
+    // One attempt short of the per-user MFA budget: a counted attempt would
+    // tip it over.
+    for _ in 0..4 {
+        let _ = app.mfa_limiter.check_and_block(&user_id);
+    }
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/admin/mfa")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header(
+                    "Cookie",
+                    format!("{}; crap_mfa_pending={token}", csrf_cookie()),
+                )
+                .header("X-CSRF-Token", TEST_CSRF)
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from("code=000000"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        !issued_session(&resp),
+        "no admin session from a gRPC challenge"
+    );
+    assert_eq!(
+        resp.headers().get("location").and_then(|v| v.to_str().ok()),
+        Some("/admin/login"),
+        "the foreign pending token is sent back to the login"
+    );
+    assert!(
+        !app.mfa_limiter.is_blocked(&user_id),
+        "a refused pending token never reaches the code check"
+    );
 }
 
 // ── MFA Rate Limiting ─────────────────────────────────────────────────────
@@ -564,6 +736,7 @@ async fn mfa_verification_attempt_counts_against_limiters() {
     let claims = auth::Claims::builder(user_id, "users")
         .email("mfa@test.com")
         .token_use(auth::TokenUse::MfaPending)
+        .surface(Surface::Admin)
         .exp((chrono::Utc::now().timestamp() as u64) + 300)
         .build()
         .unwrap();

@@ -2,11 +2,40 @@
 
 use anyhow::Result;
 
+use serde_json::Value;
+
 use crate::{
-    config::LocaleConfig,
-    core::{Document, FieldDefinition, collection::VersionsConfig},
+    core::{Document, collection::VersionsConfig},
     db::{DbConnection, query, query::VersionWrite},
+    service::{Def, ServiceContext, ServiceError, versions::VersionSnapshotCtx},
 };
+
+/// Refuse an unpublish on a definition without drafts.
+///
+/// Unpublishing moves `_status` to `draft`; a definition without drafts has no
+/// such column, so the document would stay public while the operation reported
+/// it unpublished, recorded a spurious draft version and announced an
+/// `unpublish` event. Checked at the collection and global unpublish
+/// chokepoints, which every surface reaches.
+///
+/// # Errors
+///
+/// Returns [`ServiceError::HookError`] when the definition has no drafts.
+pub(crate) fn require_unpublish_capability(ctx: &ServiceContext) -> Result<(), ServiceError> {
+    if ctx.has_drafts() {
+        return Ok(());
+    }
+
+    let kind = match ctx.def {
+        Def::Global(_) => "Global",
+        _ => "Collection",
+    };
+
+    Err(ServiceError::HookError(format!(
+        "{kind} '{}' does not support unpublish: versioning with drafts is not enabled",
+        ctx.slug
+    )))
+}
 
 /// Whether a pending draft already stands for this document's unpublished
 /// content — the same "latest version is a draft" test the admin overlay, the
@@ -18,7 +47,7 @@ fn has_pending_draft(conn: &dyn DbConnection, table: &str, parent_id: &str) -> R
 
 /// Set a document's status to "draft" and record the unpublished content as a
 /// version — unless a pending draft already holds it.
-/// Used by both collection `persist_unpublish` and the globals unpublish handler.
+/// Used by both collection `persist_unpublish` and the globals unpublish core.
 ///
 /// A pending draft IS the document's unpublished content: the admin overlay,
 /// the draft read view and the next publish all resolve it as the latest
@@ -30,36 +59,37 @@ fn has_pending_draft(conn: &dyn DbConnection, table: &str, parent_id: &str) -> R
 /// snapshotted as the draft, which is what keeps the unpublished content
 /// restorable.
 ///
+/// `doc` is the stored row the caller read (under its row lock); it comes back
+/// stamped `_status = "draft"`, the status the row ends with.
+///
 /// # Errors
 ///
 /// Returns a backend error if the status update, the pending-draft lookup, the
 /// snapshot build or the version write fails.
 pub(crate) fn unpublish_with_snapshot(
     conn: &dyn DbConnection,
-    table: &str,
-    parent_id: &str,
-    fields: &[FieldDefinition],
-    versions: Option<&VersionsConfig>,
-    doc: &Document,
-    locale_config: Option<&LocaleConfig>,
+    ctx: &VersionSnapshotCtx<'_>,
+    doc: &mut Document,
 ) -> Result<()> {
-    // Same `_status` guard as the restore path: a `drafts = false` collection
-    // has no such column. (`unpublish` is meaningless without drafts, but the
-    // capability gate is `has_versions`, so guard rather than crash.)
-    if versions.is_some_and(|v| v.drafts) {
-        query::set_document_status(conn, table, parent_id, "draft")?;
+    // The service chokepoints refuse unpublish without drafts; a definition
+    // without drafts has no `_status` column to write.
+    if ctx.has_drafts {
+        query::set_document_status(conn, ctx.status_table(), ctx.parent_id, "draft")?;
+
+        doc.fields
+            .insert("_status".to_string(), Value::String("draft".to_string()));
     }
 
-    if has_pending_draft(conn, table, parent_id)? {
+    if has_pending_draft(conn, ctx.table, ctx.parent_id)? {
         return Ok(());
     }
 
-    let snapshot = query::build_snapshot(conn, table, fields, doc, locale_config)?;
+    let snapshot = query::build_snapshot(conn, ctx.table, ctx.fields, doc, ctx.locale_config)?;
 
     query::create_version_and_prune(
         conn,
-        &VersionWrite::builder(table, parent_id, "draft", &snapshot)
-            .max_versions(VersionsConfig::cap(versions))
+        &VersionWrite::builder(ctx.table, ctx.parent_id, "draft", &snapshot)
+            .max_versions(VersionsConfig::cap(ctx.versions))
             .build(),
     )?;
 
@@ -72,7 +102,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::core::{DocumentFields, FieldType};
+    use crate::core::{DocumentFields, FieldDefinition, FieldType};
 
     /// A published `posts` row with an empty version table, capped at one
     /// version so a superfluous snapshot would push the pending draft out.
@@ -115,6 +145,17 @@ mod tests {
         Document::builder("p1").fields(fields).build()
     }
 
+    fn snapshot_ctx<'a>(
+        fields: &'a [FieldDefinition],
+        versions: &'a VersionsConfig,
+    ) -> VersionSnapshotCtx<'a> {
+        VersionSnapshotCtx::builder("posts", "p1")
+            .fields(fields)
+            .versions(Some(versions))
+            .has_drafts(true)
+            .build()
+    }
+
     fn status(conn: &Connection) -> Option<String> {
         query::get_document_status(conn, "posts", "p1").unwrap()
     }
@@ -134,16 +175,7 @@ mod tests {
         )
         .unwrap();
 
-        unpublish_with_snapshot(
-            &conn,
-            "posts",
-            "p1",
-            &fields,
-            Some(&versions),
-            &live_row(),
-            None,
-        )
-        .unwrap();
+        unpublish_with_snapshot(&conn, &snapshot_ctx(&fields, &versions), &mut live_row()).unwrap();
 
         let latest = query::find_latest_version(&conn, "posts", "p1")
             .unwrap()
@@ -169,16 +201,7 @@ mod tests {
     fn unpublishing_without_a_pending_draft_snapshots_the_live_row() {
         let (conn, fields, versions) = published_post();
 
-        unpublish_with_snapshot(
-            &conn,
-            "posts",
-            "p1",
-            &fields,
-            Some(&versions),
-            &live_row(),
-            None,
-        )
-        .unwrap();
+        unpublish_with_snapshot(&conn, &snapshot_ctx(&fields, &versions), &mut live_row()).unwrap();
 
         let latest = query::find_latest_version(&conn, "posts", "p1")
             .unwrap()
@@ -203,16 +226,7 @@ mod tests {
         )
         .unwrap();
 
-        unpublish_with_snapshot(
-            &conn,
-            "posts",
-            "p1",
-            &fields,
-            Some(&versions),
-            &live_row(),
-            None,
-        )
-        .unwrap();
+        unpublish_with_snapshot(&conn, &snapshot_ctx(&fields, &versions), &mut live_row()).unwrap();
 
         assert_eq!(
             query::find_latest_version(&conn, "posts", "p1")

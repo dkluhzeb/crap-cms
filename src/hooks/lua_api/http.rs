@@ -1,25 +1,36 @@
 //! `crap.http` namespace — outbound HTTP via reqwest (blocking, safe in `spawn_blocking` context).
 
+mod body;
+mod ssrf;
+
 use std::{
-    io::Read as _,
-    net::{IpAddr, SocketAddr, ToSocketAddrs},
-    result::Result as StdResult,
+    collections::HashMap, io::Read as _, net::SocketAddr, result::Result as StdResult,
     time::Duration,
 };
 
-use std::collections::HashMap;
-
 use anyhow::Result;
-use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
-use reqwest::{Method, blocking::Client, redirect};
-use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+use mlua::{
+    Error as LuaError, Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table,
+    Value,
+};
+use reqwest::{
+    Error as ReqwestError, Method, StatusCode,
+    blocking::{Client, Response},
+    redirect,
+};
+use serde::Deserialize;
+use tracing::debug;
 use url::Url;
 
 use crate::{
-    hooks::{lifecycle::check_execution_deadline, lua_api::to_lua_value},
+    hooks::{
+        lifecycle::{check_execution_deadline, execution_time_left},
+        lua_api::to_lua_value,
+    },
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
+
+use self::{body::LuaBody, ssrf::validate_url};
 
 const MAX_REDIRECTS: u8 = 10;
 const ALLOWED_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"];
@@ -36,8 +47,9 @@ pub(crate) struct HttpRequest {
     /// Request headers.
     #[lua(ty = "table<string, string>", optional)]
     pub(crate) headers: Option<HashMap<String, String>>,
-    /// Request body.
-    pub(crate) body: Option<String>,
+    /// Request body — any Lua string, binary data included.
+    #[lua(ty = "string", optional)]
+    pub(crate) body: Option<LuaBody>,
     /// Request timeout in seconds; fractional values allowed
     /// (e.g. `0.5` = 500 ms). Default: `30`.
     pub(crate) timeout: Option<f64>,
@@ -49,11 +61,10 @@ impl FromLua for HttpRequest {
     }
 }
 
-/// Response returned by `crap.http.request(opts)`. Both `LuaAnnotation`
-/// (for `types/crap.lua`) and `Serialize` (for the runtime
-/// `to_lua_value` conversion); the same Rust struct is the
-/// single source of truth.
-#[derive(Serialize, LuaAnnotation)]
+/// Response returned by `crap.http.request(opts)`. The same Rust struct
+/// drives the `types/crap.lua` annotation and the runtime table
+/// ([`HttpResponse::into_lua`]).
+#[derive(LuaAnnotation)]
 #[lua(class = "crap.HttpResponse")]
 pub(crate) struct HttpResponse {
     /// HTTP status code.
@@ -61,8 +72,24 @@ pub(crate) struct HttpResponse {
     /// Response headers.
     #[lua(ty = "table<string, string>")]
     pub(crate) headers: HashMap<String, String>,
-    /// Response body.
-    pub(crate) body: String,
+    /// Response body — the bytes as received (a Lua string holds binary
+    /// data too).
+    #[lua(ty = "string")]
+    pub(crate) body: Vec<u8>,
+}
+
+impl HttpResponse {
+    /// The Lua table handed back to the caller. The body becomes a Lua string
+    /// of the raw bytes — not through JSON, which has no byte strings.
+    fn into_lua(self, lua: &Lua) -> LuaResult<Table> {
+        let tbl = lua.create_table()?;
+
+        tbl.set("status", self.status)?;
+        tbl.set("headers", to_lua_value(lua, &self.headers)?)?;
+        tbl.set("body", lua.create_string(&self.body)?)?;
+
+        Ok(tbl)
+    }
 }
 
 /// Closure state for the `crap.http.*` namespace — captured once at
@@ -83,79 +110,21 @@ fn http_request(
 ) -> LuaResult<Table> {
     let r = parse_request_opts(opts)?;
 
-    let original_host = host_of(&r.url);
-    let mut current_url = r.url;
-    let mut current_client =
-        resolve_and_build_client(&current_url, state.allow_private_networks, r.timeout)?;
-    let mut current_method = r.method.clone();
-    let mut current_body = r.body.clone();
+    let mut hop = Hop {
+        url: r.url.clone(),
+        method: r.method.clone(),
+        body: r.body.clone(),
+    };
     let mut redirects: u8 = 0;
 
     loop {
-        // A job past its timeout stops before its next request (or redirect
-        // hop) instead of carrying on while the scheduler records it as timed
-        // out.
-        check_execution_deadline(lua)?;
+        let resp = send_hop(state, lua, &r, &hop)?;
 
-        let mut req = current_client.request(current_method.clone(), &current_url);
-
-        // Sensitive headers (Authorization, Cookie, …) are only replayed to
-        // the ORIGINAL host — a redirect to another host must not receive
-        // the caller's credentials (matches reqwest's own redirect policy).
-        let same_host = host_of(&current_url) == original_host;
-        for (k, v) in &r.headers {
-            if !same_host && is_sensitive_header(k) {
-                continue;
-            }
-
-            req = req.header(k.as_str(), v.as_str());
+        if !is_followed_redirect(resp.status()) {
+            return into_lua_response(lua, resp, state.max_response_bytes);
         }
 
-        if let Some(ref b) = current_body {
-            req = req.body(b.clone());
-        }
-
-        let resp = req
-            .send()
-            .map_err(|e| RuntimeError(format!("HTTP transport error: {e}")))?;
-
-        if resp.status().is_redirection() {
-            let status = resp.status().as_u16();
-            let next = follow_redirect(
-                &current_url,
-                &resp,
-                &mut redirects,
-                state.allow_private_networks,
-                r.timeout,
-            )?;
-            current_url = next.0;
-            current_client = next.1;
-
-            // Standard redirect semantics: 303 (and 301/302 for non-GET/HEAD)
-            // switch to GET and drop the body; 307/308 preserve method + body.
-            match status {
-                303 => {
-                    current_method = Method::GET;
-                    current_body = None;
-                }
-                301 | 302 if current_method != Method::GET && current_method != Method::HEAD => {
-                    current_method = Method::GET;
-                    current_body = None;
-                }
-                _ => {}
-            }
-
-            continue;
-        }
-
-        let response = build_response_struct(resp, state.max_response_bytes)?;
-        let value = to_lua_value(lua, &response)?;
-        let Value::Table(tbl) = value else {
-            return Err(RuntimeError(
-                "to_lua_value did not produce a table for HttpResponse".into(),
-            ));
-        };
-        return Ok(tbl);
+        hop = next_hop(hop, &resp, &mut redirects)?;
     }
 }
 
@@ -192,7 +161,7 @@ struct RequestOpts {
     method: Method,
     url: String,
     timeout: Duration,
-    body: Option<String>,
+    body: Option<Vec<u8>>,
     headers: Vec<(String, String)>,
 }
 
@@ -223,7 +192,7 @@ fn parse_request_opts(opts: HttpRequest) -> LuaResult<RequestOpts> {
         method,
         url: opts.url,
         timeout,
-        body: opts.body,
+        body: opts.body.map(|body| body.0),
         headers,
     })
 }
@@ -243,6 +212,63 @@ fn parse_timeout(timeout: Option<f64>) -> LuaResult<Duration> {
         .map_err(|e| RuntimeError(format!("invalid timeout {secs}: {e}")))
 }
 
+/// One request of a (possibly redirected) exchange.
+struct Hop {
+    url: String,
+    method: Method,
+    body: Option<Vec<u8>>,
+}
+
+/// Send one hop of the exchange on a freshly resolved (and, without
+/// `allow_private_networks`, pinned) client.
+fn send_hop(state: &HttpState, lua: &Lua, r: &RequestOpts, hop: &Hop) -> LuaResult<Response> {
+    let timeout = hop_timeout(lua, r.timeout)?;
+    let client = resolve_and_build_client(&hop.url, state.allow_private_networks, timeout)?;
+
+    // Sensitive headers (Authorization, Cookie, …) are only replayed to the
+    // ORIGINAL origin — a redirect to another scheme, host or port must not
+    // receive the caller's credentials (reqwest's own redirect policy draws
+    // the same line).
+    let keep_credentials = same_origin(&hop.url, &r.url);
+
+    let mut req = client.request(hop.method.clone(), &hop.url);
+
+    for (k, v) in &r.headers {
+        if !keep_credentials && is_sensitive_header(k) {
+            continue;
+        }
+
+        req = req.header(k.as_str(), v.as_str());
+    }
+
+    if let Some(ref b) = hop.body {
+        req = req.body(b.clone());
+    }
+
+    req.send().map_err(|e| transport_error(lua, &e))
+}
+
+/// The timeout of the next hop: the caller's `timeout`, bounded by what is
+/// left of the VM's job deadline. A job past its deadline stops before its
+/// next request (or redirect hop); one still inside it cannot overrun it
+/// with a request already in flight either.
+fn hop_timeout(lua: &Lua, requested: Duration) -> LuaResult<Duration> {
+    let left = execution_time_left(lua)?;
+
+    Ok(left.map_or(requested, |left| requested.min(left)))
+}
+
+/// A failed send: the job deadline's error when the hop was cut short by
+/// it (the timeout the hop ran under was the deadline's), the transport
+/// error otherwise.
+fn transport_error(lua: &Lua, e: &ReqwestError) -> LuaError {
+    if let Err(deadline) = check_execution_deadline(lua) {
+        return deadline;
+    }
+
+    RuntimeError(format!("HTTP transport error: {e}"))
+}
+
 /// Resolve DNS and build a pinned HTTP client (or unpinned if private networks allowed).
 fn resolve_and_build_client(
     url: &str,
@@ -259,14 +285,11 @@ fn resolve_and_build_client(
     build_client(pin.as_ref().map(|(h, a)| (h.as_str(), *a)), timeout).map_err(RuntimeError)
 }
 
-/// Handle a redirect: validate Location, re-resolve DNS, return new (url, client).
-fn follow_redirect(
-    current_url: &str,
-    resp: &reqwest::blocking::Response,
-    redirects: &mut u8,
-    allow_private_networks: bool,
-    timeout: Duration,
-) -> LuaResult<(String, Client)> {
+/// The hop a redirect response leads to: the resolved `Location`, with
+/// standard method semantics — 303 (and 301/302 for non-GET/HEAD) switch to
+/// GET and drop the body; 307/308 preserve method + body. The target is
+/// vetted against the SSRF policy when its hop is sent.
+fn next_hop(hop: Hop, resp: &Response, redirects: &mut u8) -> LuaResult<Hop> {
     *redirects += 1;
     if *redirects > MAX_REDIRECTS {
         return Err(RuntimeError("too many redirects (max 10)".to_string()));
@@ -278,24 +301,49 @@ fn follow_redirect(
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| RuntimeError("redirect without Location header".to_string()))?;
 
-    let next_url = Url::parse(current_url)
+    let url = Url::parse(&hop.url)
         .and_then(|base| base.join(location))
         .map_err(|e| RuntimeError(format!("invalid redirect URL: {e}")))?
         .to_string();
 
-    let client = resolve_and_build_client(&next_url, allow_private_networks, timeout)?;
+    let rewrite_to_get = match resp.status().as_u16() {
+        303 => true,
+        301 | 302 => hop.method != Method::GET && hop.method != Method::HEAD,
+        _ => false,
+    };
 
-    Ok((next_url, client))
+    if rewrite_to_get {
+        return Ok(Hop {
+            url,
+            method: Method::GET,
+            body: None,
+        });
+    }
+
+    Ok(Hop { url, ..hop })
 }
 
-/// Lowercased host component of a URL, if parseable.
-fn host_of(url: &str) -> Option<String> {
-    Url::parse(url)
-        .ok()
-        .and_then(|u| u.host_str().map(str::to_lowercase))
+/// Whether a response is a redirect the client follows: 301, 302, 303,
+/// 307 and 308. The other 3xx statuses are final answers handed back to the
+/// caller — `304 Not Modified` answers a conditional request (and carries no
+/// `Location`), `300 Multiple Choices` asks the caller to pick one.
+fn is_followed_redirect(status: StatusCode) -> bool {
+    matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308)
 }
 
-/// Headers that carry credentials — never replayed to a different host on
+/// Whether two URLs share an origin — scheme, host and port (the scheme's
+/// default when omitted). An unparseable URL shares no origin.
+fn same_origin(a: &str, b: &str) -> bool {
+    let (Ok(a), Ok(b)) = (Url::parse(a), Url::parse(b)) else {
+        return false;
+    };
+
+    a.scheme() == b.scheme()
+        && a.host_str().map(str::to_ascii_lowercase) == b.host_str().map(str::to_ascii_lowercase)
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
+/// Headers that carry credentials — never replayed to a different origin on
 /// redirect (same list reqwest's redirect policy scrubs).
 fn is_sensitive_header(name: &str) -> bool {
     matches!(
@@ -304,11 +352,13 @@ fn is_sensitive_header(name: &str) -> bool {
     )
 }
 
+/// Convert the final (non-redirect) response into the Lua response table.
+fn into_lua_response(lua: &Lua, resp: Response, max_bytes: u64) -> LuaResult<Table> {
+    build_response_struct(resp, max_bytes)?.into_lua(lua)
+}
+
 /// Build a `HttpResponse` from a `reqwest` response.
-fn build_response_struct(
-    resp: reqwest::blocking::Response,
-    max_bytes: u64,
-) -> LuaResult<HttpResponse> {
+fn build_response_struct(resp: Response, max_bytes: u64) -> LuaResult<HttpResponse> {
     let status = i64::from(resp.status().as_u16());
 
     // Duplicate headers (multiple Set-Cookie, Vary, …) are comma-joined
@@ -342,113 +392,11 @@ fn build_response_struct(
         )));
     }
 
-    let body = String::from_utf8(body_bytes)
-        .map_err(|e| RuntimeError(format!("response body is not valid UTF-8: {e}")))?;
-
     Ok(HttpResponse {
         status,
         headers,
-        body,
+        body: body_bytes,
     })
-}
-
-/// Resolve and validate a URL against SSRF policy.
-/// Returns `(hostname, SocketAddr)` — caller pins via `ClientBuilder::resolve()`.
-fn validate_url(url_str: &str) -> StdResult<(String, SocketAddr), String> {
-    let parsed = Url::parse(url_str).map_err(|e| format!("invalid URL: {e}"))?;
-
-    match parsed.scheme() {
-        "http" | "https" => {}
-        s => return Err(format!("unsupported scheme: {s}")),
-    }
-
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| "URL has no host".to_string())?
-        .to_string();
-
-    let port = parsed.port_or_known_default().unwrap_or(80);
-    let addrs: Vec<SocketAddr> = format!("{host}:{port}")
-        .to_socket_addrs()
-        .map_err(|e| format!("DNS resolution failed: {e}"))?
-        .collect();
-
-    // Find first non-private address to pin
-    for &addr in &addrs {
-        if is_private_ip(addr.ip()) {
-            continue;
-        }
-
-        return Ok((host, addr));
-    }
-
-    // All addresses were private. Log the concrete reason for operators,
-    // but return a redacted error to the Lua caller — the caller could be
-    // attacker-controlled and would otherwise enumerate internal IP
-    // topology from these messages (see SEC-C).
-    if let Some(addr) = addrs.first() {
-        let ip = addr.ip();
-        let class = if ip.is_loopback() {
-            "loopback"
-        } else if ip.is_unspecified() {
-            "unspecified"
-        } else {
-            "private"
-        };
-
-        warn!(
-            url = %url_str,
-            host = %host,
-            resolved_ip = %ip,
-            class = class,
-            "crap.http: blocking request — target resolves to non-public address"
-        );
-
-        return Err(
-            "Target resolves to a blocked address; see server logs for details".to_string(),
-        );
-    }
-
-    Err("DNS resolution returned no addresses".to_string())
-}
-
-/// Non-public IPv4 ranges beyond loopback/unspecified: RFC 1918 private,
-/// link-local, CGNAT (100.64.0.0/10 — Tailscale/fly.io internal networks),
-/// IETF protocol assignments (192.0.0.0/24), and benchmarking (198.18.0.0/15).
-fn is_private_v4(v4: std::net::Ipv4Addr) -> bool {
-    let o = v4.octets();
-
-    v4.is_loopback()
-        || v4.is_unspecified()
-        || v4.is_private()
-        || v4.is_link_local()
-        || (o[0] == 100 && (o[1] & 0xc0) == 64)
-        || (o[0] == 192 && o[1] == 0 && o[2] == 0)
-        || (o[0] == 198 && (o[1] & 0xfe) == 18)
-}
-
-/// Check whether an IP address is private/loopback/link-local/unspecified.
-fn is_private_ip(ip: IpAddr) -> bool {
-    if ip.is_loopback() || ip.is_unspecified() {
-        return true;
-    }
-
-    match ip {
-        IpAddr::V4(v4) => is_private_v4(v4),
-        IpAddr::V6(v6) => {
-            // IPv6-mapped (::ffff:x.x.x.x) and the deprecated IPv4-compatible
-            // (::x.x.x.x) forms both embed a v4 address — extract and re-check
-            // with the full v4 range list.
-            if let Some(v4) = v6.to_ipv4() {
-                return is_private_v4(v4);
-            }
-
-            let segments = v6.segments();
-
-            // fc00::/7 (unique local) or fe80::/10 (link-local)
-            (segments[0] & 0xfe00) == 0xfc00 || (segments[0] & 0xffc0) == 0xfe80
-        }
-    }
 }
 
 /// Build a reqwest blocking client with optional DNS pinning.
@@ -548,174 +496,23 @@ mod tests {
     }
 
     #[test]
-    fn validate_url_rejects_loopback() {
-        let err = validate_url("http://127.0.0.1/foo").unwrap_err();
-        assert!(err.contains("blocked"), "unexpected: {err}");
-    }
-
-    #[test]
-    fn validate_url_rejects_private_10() {
-        let err = validate_url("http://10.0.0.1/foo").unwrap_err();
-        assert!(err.contains("blocked"), "unexpected: {err}");
-    }
-
-    #[test]
-    fn validate_url_rejects_private_192() {
-        let err = validate_url("http://192.168.1.1/foo").unwrap_err();
-        assert!(err.contains("blocked"), "unexpected: {err}");
-    }
-
-    #[test]
-    fn validate_url_rejects_link_local() {
-        let err = validate_url("http://169.254.0.1/foo").unwrap_err();
-        assert!(err.contains("blocked"), "unexpected: {err}");
-    }
-
-    // SEC-C regression: the Lua-visible error must NOT leak the resolved IP
-    // or any information about which private-network class was hit. Operators
-    // still get the full detail via `tracing::warn!` in validate_url.
-    #[test]
-    fn ssrf_error_message_does_not_leak_ip() {
-        for url in [
-            "http://127.0.0.1/foo",
-            "http://10.0.0.1/foo",
-            "http://192.168.1.1/foo",
-            "http://169.254.0.1/foo",
-            "http://172.16.0.1/foo",
-        ] {
-            let err = validate_url(url).unwrap_err();
-
-            // No IP literal.
-            assert!(
-                !err.contains("127.0.0.1")
-                    && !err.contains("10.0.0.1")
-                    && !err.contains("192.168.1.1")
-                    && !err.contains("169.254.0.1")
-                    && !err.contains("172.16.0.1"),
-                "error leaks IP for {url}: {err}"
-            );
-
-            // No class hint ("private network", "loopback", etc.) either —
-            // those also narrow the search space for an attacker.
-            let lc = err.to_ascii_lowercase();
-            assert!(
-                !lc.contains("private network")
-                    && !lc.contains("loopback")
-                    && !lc.contains("link-local")
-                    && !lc.contains("unspecified"),
-                "error leaks address class for {url}: {err}"
-            );
-        }
-    }
-
-    #[test]
-    fn validate_url_rejects_unsupported_scheme() {
-        let err = validate_url("ftp://example.com/foo").unwrap_err();
-        assert!(err.contains("unsupported scheme"), "unexpected: {err}");
-    }
-
-    #[test]
-    fn validate_url_allows_public() {
-        let (host, addr) = validate_url("https://93.184.215.14").unwrap();
-        assert_eq!(host, "93.184.215.14");
-        assert!(!is_private_ip(addr.ip()));
-    }
-
-    #[test]
-    fn validate_url_returns_hostname_and_addr() {
-        let (host, addr) = validate_url("https://93.184.215.14:443/path").unwrap();
-        assert_eq!(host, "93.184.215.14");
-        assert_eq!(addr.port(), 443);
-        assert!(!is_private_ip(addr.ip()));
-    }
-
-    #[test]
     fn build_client_no_pin() {
-        let client = build_client(None, std::time::Duration::from_secs(5));
+        let client = build_client(None, Duration::from_secs(5));
         assert!(client.is_ok());
     }
 
     #[test]
     fn build_client_with_pin() {
         let addr: SocketAddr = "93.184.215.14:443".parse().unwrap();
-        let client = build_client(
-            Some(("example.com", addr)),
-            std::time::Duration::from_secs(5),
-        );
+        let client = build_client(Some(("example.com", addr)), Duration::from_secs(5));
         assert!(client.is_ok());
-    }
-
-    #[test]
-    fn is_private_ip_detects_loopback() {
-        assert!(is_private_ip("127.0.0.1".parse().unwrap()));
-        assert!(is_private_ip("::1".parse().unwrap()));
-    }
-
-    #[test]
-    fn is_private_ip_detects_rfc1918() {
-        assert!(is_private_ip("10.0.0.1".parse().unwrap()));
-        assert!(is_private_ip("172.16.0.1".parse().unwrap()));
-        assert!(is_private_ip("192.168.1.1".parse().unwrap()));
-    }
-
-    #[test]
-    fn is_private_ip_allows_public() {
-        assert!(!is_private_ip("93.184.215.14".parse().unwrap()));
-        assert!(!is_private_ip("8.8.8.8".parse().unwrap()));
-    }
-
-    #[test]
-    fn is_private_ip_detects_ipv6_mapped_ipv4() {
-        // ::ffff:127.0.0.1 — loopback via IPv6-mapped
-        assert!(is_private_ip("::ffff:127.0.0.1".parse().unwrap()));
-        // ::ffff:10.0.0.1 — RFC1918 via IPv6-mapped
-        assert!(is_private_ip("::ffff:10.0.0.1".parse().unwrap()));
-        // ::ffff:192.168.1.1 — RFC1918 via IPv6-mapped
-        assert!(is_private_ip("::ffff:192.168.1.1".parse().unwrap()));
-        // ::ffff:169.254.0.1 — link-local via IPv6-mapped
-        assert!(is_private_ip("::ffff:169.254.0.1".parse().unwrap()));
-        // ::ffff:0.0.0.0 — unspecified via IPv6-mapped
-        assert!(is_private_ip("::ffff:0.0.0.0".parse().unwrap()));
-    }
-
-    #[test]
-    fn is_private_ip_detects_unspecified() {
-        assert!(is_private_ip("0.0.0.0".parse().unwrap()));
-        assert!(is_private_ip("::".parse().unwrap()));
-    }
-
-    #[test]
-    fn is_private_ip_allows_public_ipv6_mapped() {
-        // ::ffff:93.184.215.14 — public via IPv6-mapped
-        assert!(!is_private_ip("::ffff:93.184.215.14".parse().unwrap()));
-    }
-
-    /// Regression: CGNAT (100.64.0.0/10 — Tailscale/fly.io internal),
-    /// 192.0.0.0/24, 198.18.0.0/15, and the deprecated IPv4-compatible
-    /// IPv6 form were not blocked.
-    #[test]
-    fn is_private_ip_detects_special_use_ranges() {
-        assert!(is_private_ip("100.64.0.1".parse().unwrap()));
-        assert!(is_private_ip("100.101.102.103".parse().unwrap()));
-        assert!(is_private_ip("100.127.255.255".parse().unwrap()));
-        assert!(is_private_ip("192.0.0.1".parse().unwrap()));
-        assert!(is_private_ip("198.18.0.1".parse().unwrap()));
-        assert!(is_private_ip("198.19.255.255".parse().unwrap()));
-        // IPv4-compatible IPv6 embedding of an RFC1918 address
-        assert!(is_private_ip("::192.168.1.1".parse().unwrap()));
-        // Boundary neighbors stay public
-        assert!(!is_private_ip("100.63.255.255".parse().unwrap()));
-        assert!(!is_private_ip("100.128.0.0".parse().unwrap()));
-        assert!(!is_private_ip("198.17.255.255".parse().unwrap()));
-        assert!(!is_private_ip("198.20.0.0".parse().unwrap()));
     }
 
     // ── Scripted local server for redirect / body-limit semantics ──────
 
-    use std::io::Write as _;
-    use std::net::TcpListener;
-    use std::sync::mpsc;
-    use std::thread;
+    use std::{io::Write as _, net::TcpListener, sync::mpsc, thread, time::Instant};
+
+    use crate::hooks::lifecycle::{ExecutionDeadline, ExecutionDeadlineGuard};
 
     fn headers_end(buf: &[u8]) -> Option<usize> {
         buf.windows(4).position(|w| w == b"\r\n\r\n")
@@ -900,5 +697,212 @@ mod tests {
         );
         let body: String = lua.load(&code).eval().unwrap();
         assert_eq!(body, "01234567", "at-limit body must pass through intact");
+    }
+
+    /// Regression: every 3xx was treated as a redirect, so a conditional
+    /// request answered `304 Not Modified` (no `Location`) failed with
+    /// "redirect without Location header" instead of returning the 304.
+    #[test]
+    fn not_modified_is_returned_not_followed() {
+        let not_modified =
+            "HTTP/1.1 304 Not Modified\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n".to_string();
+        let (base, _rx) = scripted_server(vec![not_modified]);
+        let lua = lua_with_http(1024);
+
+        let code = format!(
+            r#"
+            local resp = crap.http.request({{
+                url = "{base}/cached",
+                headers = {{ ["If-None-Match"] = '"v1"' }},
+                timeout = 5,
+            }})
+            return resp.status
+            "#
+        );
+        let status: i64 = lua.load(&code).eval().unwrap();
+
+        assert_eq!(status, 304);
+    }
+
+    #[test]
+    fn only_redirect_statuses_are_followed() {
+        for code in [301, 302, 303, 307, 308] {
+            assert!(
+                is_followed_redirect(StatusCode::from_u16(code).unwrap()),
+                "{code}"
+            );
+        }
+
+        for code in [300, 304, 305, 200, 404] {
+            assert!(
+                !is_followed_redirect(StatusCode::from_u16(code).unwrap()),
+                "{code}"
+            );
+        }
+    }
+
+    /// Regression: the redirect credential scrub compared hosts only, so a
+    /// redirect to the same host on another port or scheme (a different
+    /// service, possibly over cleartext) received the caller's credentials.
+    #[test]
+    fn same_origin_compares_scheme_host_and_port() {
+        assert!(same_origin(
+            "https://api.x.com/a",
+            "https://API.x.com:443/b"
+        ));
+        assert!(same_origin("http://api.x.com/a", "http://api.x.com:80/b"));
+        assert!(!same_origin("https://api.x.com/", "http://api.x.com/"));
+        assert!(!same_origin(
+            "https://api.x.com/",
+            "https://api.x.com:8443/"
+        ));
+        assert!(!same_origin("https://api.x.com/", "https://other.x.com/"));
+        assert!(!same_origin("not a url", "not a url"));
+    }
+
+    /// End-to-end: a redirect to the same host on another port drops the
+    /// `Authorization` header; a non-sensitive header still travels.
+    #[test]
+    fn redirect_to_another_port_drops_credentials() {
+        let (target, target_rx) = scripted_server(vec![ok_resp("ok")]);
+        let hop = format!(
+            "HTTP/1.1 302 Found\r\nLocation: {target}/next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let (base, _rx) = scripted_server(vec![hop]);
+        let lua = lua_with_http(1024 * 1024);
+
+        let code = format!(
+            r#"
+            local resp = crap.http.request({{
+                url = "{base}/start",
+                headers = {{ Authorization = "Bearer s3cret", ["X-Trace"] = "t1" }},
+                timeout = 5,
+            }})
+            return resp.status
+            "#
+        );
+        let status: i64 = lua.load(&code).eval().unwrap();
+        assert_eq!(status, 200);
+
+        let replayed = target_rx.recv().unwrap().to_ascii_lowercase();
+        assert!(
+            !replayed.contains("s3cret"),
+            "credentials must not cross to another port:\n{replayed}"
+        );
+        assert!(replayed.contains("x-trace: t1"), "{replayed}");
+    }
+
+    /// Answer one request with its own body, byte for byte.
+    fn echo_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = Vec::new();
+            let mut tmp = [0u8; 1024];
+
+            let body = loop {
+                let n = stream.read(&mut tmp).unwrap();
+                assert!(n > 0, "the client closed before sending its request");
+                buf.extend_from_slice(&tmp[..n]);
+
+                let Some(pos) = headers_end(&buf) else {
+                    continue;
+                };
+
+                let head = String::from_utf8_lossy(&buf[..pos]).to_string();
+                let want = pos + 4 + content_length(&head);
+
+                while buf.len() < want {
+                    let n = stream.read(&mut tmp).unwrap();
+                    buf.extend_from_slice(&tmp[..n]);
+                }
+
+                break buf[pos + 4..want].to_vec();
+            };
+
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(head.as_bytes()).unwrap();
+            stream.write_all(&body).unwrap();
+        });
+
+        format!("http://{addr}")
+    }
+
+    /// Regression: request and response bodies went through Rust `String`s,
+    /// so any non-UTF-8 byte failed the call — a custom storage backend could
+    /// not `PUT` or `GET` an image. Both directions now carry raw bytes.
+    #[test]
+    fn binary_bodies_round_trip() {
+        let base = echo_server();
+        let lua = lua_with_http(1024);
+
+        let code = format!(
+            r#"
+            local sent = "\0\255\128png"
+            local resp = crap.http.request({{
+                url = "{base}/echo",
+                method = "PUT",
+                body = sent,
+                timeout = 5,
+            }})
+            return resp.body == sent, #resp.body
+            "#
+        );
+        let (same, len): (bool, i64) = lua.load(&code).eval().unwrap();
+
+        assert!(same, "the binary body must round-trip unchanged");
+        assert_eq!(len, 6);
+    }
+
+    /// Accept connections and never answer — a request to it hangs until its
+    /// timeout.
+    fn silent_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        thread::spawn(move || {
+            let mut held = Vec::new();
+
+            while let Ok((stream, _)) = listener.accept() {
+                held.push(stream);
+            }
+        });
+
+        format!("http://{addr}")
+    }
+
+    /// Regression: the job deadline was checked only before a request, which
+    /// then ran for its full `timeout` — a job with a short timeout doing a
+    /// long request overran its deadline by up to that timeout. The hop's
+    /// timeout is now bounded by the time the deadline leaves, and the
+    /// failure reports the deadline.
+    #[test]
+    fn a_request_in_flight_stops_at_the_job_deadline() {
+        let base = silent_server();
+        let lua = lua_with_http(1024);
+        let _deadline = ExecutionDeadlineGuard::install(&lua, ExecutionDeadline::new(1));
+
+        let started = Instant::now();
+        let err = lua
+            .load(format!(
+                r#"return crap.http.request({{ url = "{base}/hang", timeout = 60 }})"#
+            ))
+            .exec()
+            .expect_err("the request must stop at the deadline");
+
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the request ran past the deadline: {:?}",
+            started.elapsed()
+        );
+        assert!(
+            err.to_string().contains("exceeded its timeout"),
+            "unexpected error: {err}"
+        );
     }
 }

@@ -49,7 +49,10 @@ fn column_keys(
             defaults.push("_status".to_string());
         }
 
-        defaults.push("created_at".to_string());
+        if def.timestamps {
+            defaults.push("created_at".to_string());
+        }
+
         defaults
     };
 
@@ -145,8 +148,10 @@ pub(in crate::admin::handlers::collections) fn build_column_options(
         options.push(option("_status", "status".to_string()));
     }
 
-    options.push(option("created_at", "created".to_string()));
-    options.push(option("updated_at", "updated".to_string()));
+    if def.timestamps {
+        options.push(option("created_at", "created".to_string()));
+        options.push(option("updated_at", "updated".to_string()));
+    }
 
     let title_field = def.title_field();
 
@@ -332,6 +337,28 @@ mod tests {
         );
         assert_eq!(cols[0]["is_sorted_asc"], false);
         assert_eq!(cols[0]["is_sorted_desc"], true);
+    }
+
+    /// Regression: a collection defined with `timestamps = false` has no
+    /// timestamp columns — neither the default columns nor the picker may
+    /// offer them (their sort header answered an error page).
+    #[test]
+    fn timestamps_columns_need_timestamps() {
+        let mut def = test_collection();
+        def.timestamps = false;
+
+        let cols = resolve_columns(&def, None, &test_url_ctx(None), &open());
+        assert!(cols.is_empty(), "{cols:?}");
+
+        let saved = vec!["created_at".to_string(), "views".to_string()];
+        let cols = resolve_columns(&def, Some(&saved), &test_url_ctx(None), &open());
+        assert_eq!(keys(&cols), vec!["views"]);
+
+        let opts = build_column_options(&def, &[], &open());
+        let keys = keys(&opts);
+        assert!(!keys.contains(&"created_at"));
+        assert!(!keys.contains(&"updated_at"));
+        assert!(keys.contains(&"views"));
     }
 
     #[test]

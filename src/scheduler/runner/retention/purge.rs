@@ -8,8 +8,8 @@ use tracing::{debug, info, warn};
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, Registry},
-    db::{DbConnection, DbValue, LocaleContext, query},
-    service::{PurgeEvents, owned_file_keys},
+    db::{DbConnection, DbValue},
+    service::{PurgeEvents, TrashedDoc, TrashedPurge},
 };
 
 use super::{
@@ -162,9 +162,6 @@ fn purge_collection(
 ) -> Result<CollectionScan, PurgeFailure> {
     let ids = expired_candidates(p).map_err(PurgeFailure::Scan)?;
 
-    // The row reads need the locale context: a collection with localized
-    // fields has no bare columns to select.
-    let locale_ctx = LocaleContext::default_for(p.locale_config);
     let purged_before = batch.purged;
 
     for id in &ids {
@@ -172,7 +169,7 @@ fn purge_collection(
             continue;
         }
 
-        purge_candidate(p, id, locale_ctx.as_ref(), batch).map_err(|error| PurgeFailure::Row {
+        purge_candidate(p, id, batch).map_err(|error| PurgeFailure::Row {
             id: id.clone(),
             error,
         })?;
@@ -227,65 +224,34 @@ fn expired_candidates(p: &PurgeCollectionInput<'_>) -> Result<Vec<String>> {
 }
 
 /// Purge one candidate if it is still trashed past retention and nothing
-/// references it.
+/// references it — through the purge of the trash every caller shares, which
+/// re-checks both under the row's lock (the candidates were read without
+/// one, and a restore may have committed since) and runs the hard delete with
+/// every cleanup it needs (ref counts, FTS entry, queued image conversions).
 ///
-/// Every read of the row — the storage keys its upload owns (its row's AND
-/// its version snapshots') and its delete event — finishes before anything is
-/// written, and a failure of any of them fails the document rather than
-/// purging it without its files or its event. The keys go to the caller only
-/// once the row is gone, for deletion after the commit: a crash between DB
-/// delete and file delete leaves orphaned files (safe), never DB records
-/// pointing to deleted files (unsafe).
-fn purge_candidate(
-    p: &PurgeCollectionInput<'_>,
-    id: &str,
-    locale_ctx: Option<&LocaleContext>,
-    batch: &mut PurgeBatch,
-) -> Result<()> {
-    if !is_purgeable(p, id)? {
-        return Ok(());
-    }
+/// The storage keys the purged upload owned go to the batch, for deletion
+/// once the purge commits.
+fn purge_candidate(p: &PurgeCollectionInput<'_>, id: &str, batch: &mut PurgeBatch) -> Result<()> {
+    let slug = &p.def.slug;
+    let doc = TrashedDoc::new(id, Some(p.retention_seconds));
 
-    let keys = owned_file_keys(p.conn, p.def, id, locale_ctx)?;
-    let captured = batch.events.capture(p.conn, p.def, id, p.locale_config)?;
-
-    // The hard delete with every cleanup it needs (ref counts, FTS entry,
-    // queued image conversions), shared with the service and CLI purges.
-    if batch
+    match batch
         .events
-        .complete(p.conn, p.def, captured, p.locale_config)?
+        .purge_trashed(p.conn, p.def, doc, p.locale_config)?
     {
-        batch.purged += 1;
-        batch.files.extend(keys);
+        TrashedPurge::Purged(keys) => {
+            batch.purged += 1;
+            batch.files.extend(keys);
+        }
+        TrashedPurge::NotTrashed => {
+            debug!("Skipping purge of {slug}/{id}: no longer trashed past retention");
+        }
+        TrashedPurge::Referenced(count) => {
+            debug!("Skipping purge of {slug}/{id}: referenced by {count} document(s)");
+        }
     }
 
     Ok(())
-}
-
-/// Lock the row and re-check that it is still trashed past retention and
-/// unreferenced: the candidates were read without a lock, and a restore may
-/// have committed since. The same lock keeps a concurrent create from
-/// incrementing the ref count between this check and the DELETE (Postgres
-/// only; `SQLite` serializes via IMMEDIATE).
-fn is_purgeable(p: &PurgeCollectionInput<'_>, id: &str) -> Result<bool> {
-    let slug = &p.def.slug;
-
-    let Some(ref_count) =
-        query::ref_count::get_purgeable_ref_count_locked(p.conn, slug, id, p.retention_seconds)?
-    else {
-        debug!("Skipping purge of {slug}/{id}: no longer trashed past retention");
-
-        return Ok(false);
-    };
-
-    // Skip documents that are still referenced -- protect referential integrity.
-    if ref_count > 0 {
-        debug!("Skipping purge of {slug}/{id}: referenced by {ref_count} document(s)");
-
-        return Ok(false);
-    }
-
-    Ok(true)
 }
 
 #[cfg(all(test, feature = "sqlite"))]

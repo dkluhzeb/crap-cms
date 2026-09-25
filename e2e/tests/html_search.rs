@@ -27,7 +27,7 @@ use crap_cms::core::DocumentFields;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 use crap_cms::db::query;
-use crap_cms::db::query::fts::fts_upsert;
+use crap_cms::db::query::fts::{FtsIndex, fts_upsert};
 use crap_cms_e2e::helpers::*;
 
 // ── search_returns_matching_docs ─────────────────────────────────────────
@@ -169,10 +169,8 @@ fn seed_post(app: &TestApp, title: &str) -> String {
     // does — call it manually so the doc is discoverable by search.
     fts_upsert(
         &tx,
-        "posts",
+        &FtsIndex::builder("posts", &def, &crap_cms::config::LocaleConfig::default()).build(),
         &doc.id,
-        &def,
-        &crap_cms::config::LocaleConfig::default(),
     )
     .expect("fts upsert");
     tx.commit().unwrap();

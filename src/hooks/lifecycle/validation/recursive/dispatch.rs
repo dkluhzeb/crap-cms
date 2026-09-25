@@ -5,7 +5,7 @@ use mlua::Lua;
 
 use crate::{
     core::{DocumentFields, FieldDefinition, FieldType, validate::FieldError, walk_leaf_fields},
-    hooks::ValidationCtx,
+    hooks::{ValidationCtx, lifecycle::validation::stored::StoredDocument},
 };
 
 /// Per-walk invariants for recursive validation. Methods take ≤ 4 args.
@@ -20,6 +20,8 @@ pub(in crate::hooks::lifecycle::validation) struct ValidationWalker<'a> {
     pub(in crate::hooks::lifecycle::validation::recursive) data: &'a DocumentFields,
     pub(in crate::hooks::lifecycle::validation::recursive) document: &'a DocumentFields,
     pub(in crate::hooks::lifecycle::validation::recursive) ctx: &'a ValidationCtx<'a>,
+    /// The edited document, for values a write may resubmit unchanged.
+    pub(in crate::hooks::lifecycle::validation::recursive) stored: &'a StoredDocument<'a>,
 }
 
 impl<'a> ValidationWalker<'a> {
@@ -27,13 +29,14 @@ impl<'a> ValidationWalker<'a> {
         lua: &'a Lua,
         data: &'a DocumentFields,
         document: &'a DocumentFields,
-        ctx: &'a ValidationCtx<'a>,
+        stored: &'a StoredDocument<'a>,
     ) -> Self {
         Self {
             lua,
             data,
             document,
-            ctx,
+            ctx: stored.ctx(),
+            stored,
         }
     }
 

@@ -20,8 +20,38 @@
  */
 
 /**
+ * URL schemes a link may use. Every other scheme (`javascript:`, `data:`,
+ * `vbscript:`, …) is refused. The server renderer applies the same list.
+ */
+const ALLOWED_LINK_SCHEMES = new Set(['http', 'https', 'mailto', 'tel']);
+
+/**
+ * Whether a link `href` is allowed: relative (no scheme — a path, `#`, `?`
+ * or `//host` reference) or using an allowlisted scheme. The scheme is read
+ * the way a browser reads it: leading whitespace/control characters are
+ * ignored and tabs/newlines inside the URL are removed. The one rule for
+ * links inserted in the modal, pasted, and loaded from stored content.
+ *
+ * @param {string|null|undefined} href
+ * @returns {boolean}
+ */
+export function isAllowedLinkHref(href) {
+  const raw = String(href ?? '');
+  let start = 0;
+  while (start < raw.length && raw.charCodeAt(start) <= 0x20) start++;
+  const cleaned = raw.slice(start).replace(/[\t\n\r]/g, '');
+  if (!cleaned) return false;
+  const end = cleaned.search(/[:/?#]/);
+  if (end === -1 || cleaned[end] !== ':') return true;
+  return ALLOWED_LINK_SCHEMES.has(cleaned.slice(0, end).toLowerCase());
+}
+
+/**
  * Build a fresh ProseMirror `Schema` for the editor.
  *
+ *  - The basic schema's `image` node is removed: the server neither
+ *    validates nor renders images inside rich text, and no toolbar
+ *    inserts one — a pasted `<img>` is dropped instead of stored.
  *  - List nodes are added when either list feature is enabled.
  *  - Block nodes are removed for disabled features (`heading`,
  *    `codeBlock`, `blockquote`, `horizontalRule`).
@@ -32,7 +62,7 @@
  * @param {CustomNodeDef[]} customNodes
  */
 export function buildSchema(PM, has, customNodes) {
-  let nodes = PM.basicSchema.spec.nodes;
+  let nodes = PM.basicSchema.spec.nodes.remove('image');
   if (has('orderedList') || has('bulletList')) {
     nodes = PM.addListNodes(nodes, 'paragraph block*', 'block');
   }
@@ -75,18 +105,25 @@ function buildLinkMarkSpec() {
     parseDOM: [
       {
         tag: 'a[href]',
-        getAttrs: (/** @type {Element} */ dom) => ({
-          href: dom.getAttribute('href'),
-          title: dom.getAttribute('title'),
-          target: dom.getAttribute('target'),
-          rel: dom.getAttribute('rel'),
-        }),
+        // A disallowed href keeps the text but drops the link mark.
+        getAttrs: (/** @type {Element} */ dom) => {
+          const href = dom.getAttribute('href');
+          if (!isAllowedLinkHref(href)) return false;
+          return {
+            href,
+            title: dom.getAttribute('title'),
+            target: dom.getAttribute('target'),
+            rel: dom.getAttribute('rel'),
+          };
+        },
       },
     ],
     toDOM: (/** @type {any} */ node) => {
       const { href, title, target, rel } = node.attrs;
       /** @type {Record<string, string>} */
-      const attrs = { href };
+      const attrs = {};
+      // A stored document may still carry a disallowed href: never display it.
+      if (isAllowedLinkHref(href)) attrs.href = href;
       if (title) attrs.title = title;
       if (target) attrs.target = target;
       if (rel) attrs.rel = rel;

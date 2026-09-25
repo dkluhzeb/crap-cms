@@ -6,12 +6,15 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 
-use crate::admin::{
-    AdminState,
-    handlers::{
-        auth::{append_cookies, clear_mfa_pending_cookie, extract_mfa_token, render_mfa},
-        shared::paths,
+use crate::{
+    admin::{
+        AdminState,
+        handlers::{
+            auth::{append_cookies, clear_mfa_pending_cookie, extract_mfa_token, render_mfa},
+            shared::paths,
+        },
     },
+    core::collection::Surface,
 };
 
 /// GET /admin/mfa — show the MFA code entry form. For `mfa = "totp"` the
@@ -23,8 +26,13 @@ pub async fn mfa_page(State(state): State<AdminState>, headers: HeaderMap) -> Re
         return Redirect::to(paths::LOGIN).into_response();
     };
 
-    let Ok(claims) = state.infra.token_provider.validate_pending_token(&token) else {
-        // Expired/invalid pending token: clear the cookie, back to login.
+    let Ok(claims) = state
+        .infra
+        .token_provider
+        .validate_pending_token(&token, Surface::Admin)
+    else {
+        // Expired/invalid pending token, or one another surface issued: clear
+        // the cookie, back to login.
         let cookie = clear_mfa_pending_cookie(state.config.admin.dev_mode);
         let mut response = Redirect::to(paths::LOGIN).into_response();
 

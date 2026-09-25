@@ -79,10 +79,11 @@ impl OrphanTable {
 /// Every table name the registry accounts for: each collection and global
 /// table, their versions tables, and every junction table their fields imply.
 ///
-/// A superset on purpose — a has-one relationship names a junction table that
-/// was never created, and a collection without versions names a versions table
-/// it never got. Naming a table that doesn't exist costs nothing; failing to
-/// name one that does would report a live table as a leftover.
+/// A superset on purpose — a collection without versions names a versions
+/// table it never got. Naming a table that doesn't exist costs nothing; failing
+/// to name one that does would report a live table as a leftover. A has-one
+/// reference names no junction: its values live in a column of the owning
+/// table, so a junction left from the field's has-many past is a leftover.
 fn known_tables(registry: &Registry) -> HashSet<String> {
     let mut known = HashSet::new();
 
@@ -201,7 +202,9 @@ pub(super) fn warn_orphan_tables(conn: &dyn DbConnection, registry: &Registry) -
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
-    use crate::core::{CollectionDefinition, FieldDefinition, FieldType, VersionsConfig};
+    use crate::core::{
+        CollectionDefinition, FieldDefinition, FieldType, RelationshipConfig, VersionsConfig,
+    };
     use crate::db::migrate::collection::test_helpers::*;
     use crate::db::migrate::sync_all;
 
@@ -278,6 +281,35 @@ mod tests {
         without_array.register_collection(def);
 
         assert_eq!(orphan_names(&conn, &without_array), vec!["posts_items"]);
+    }
+
+    /// A relationship turned from has-many to has-one stores its value in the
+    /// owning table's column; the junction its has-many past left is reported
+    /// like any other leftover, so `db cleanup` can drop it.
+    #[test]
+    fn a_has_one_reference_leaves_its_old_junction_reported() {
+        let (_dir, pool) = in_memory_pool();
+
+        let posts = |has_many: bool| {
+            let mut registry = Registry::new();
+            registry.register_collection(simple_collection("tags", vec![]));
+            registry.register_collection(simple_collection(
+                "posts",
+                vec![
+                    FieldDefinition::builder("tags", FieldType::Relationship)
+                        .relationship(RelationshipConfig::new("tags", has_many))
+                        .build(),
+                ],
+            ));
+
+            registry
+        };
+
+        sync_all(&pool, &posts(true), &no_locale()).unwrap();
+        let conn = pool.get().unwrap();
+
+        assert!(orphan_names(&conn, &posts(true)).is_empty());
+        assert_eq!(orphan_names(&conn, &posts(false)), vec!["posts_tags"]);
     }
 
     /// A global removed from the registry leaves its `_global_` table.

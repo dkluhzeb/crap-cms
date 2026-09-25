@@ -28,7 +28,7 @@ use crate::core::{
     },
     field::{FieldHookFn, FieldWidth, JoinConfig, PickerAppearance, ValidateFunction},
     job::JobLabels,
-    upload::{CollectionUpload, FormatOptions, FormatQuality, ImageFit, ImageSize},
+    upload::{CollectionUpload, FormatOptions, FormatQuality, ImageFit, ImageSize, StorageStat},
 };
 use crate::db::query::PaginationResult;
 use crate::hooks::lifecycle::{
@@ -96,7 +96,10 @@ use crate::hooks::lua_api::{
     log::render_crap_log_lua,
     pages::{PageOptions, render_crap_pages_lua},
     parse::JobDefinitionConfig,
-    richtext::{RichtextNodeSpec, render_crap_richtext_init_lua, render_crap_richtext_render_lua},
+    richtext::{
+        RichtextNodeSpec, RichtextRenderOptions, render_crap_richtext_init_lua,
+        render_crap_richtext_render_lua,
+    },
     routes::render_crap_routes_lua,
     schema::{SchemaCollection, SchemaField, render_crap_schema_init_lua},
     storage::render_crap_storage_lua,
@@ -534,6 +537,7 @@ fn render_crap_richtext(out: &mut String) {
     render_crap_richtext_init_lua(out);
     RichtextNodeSpec::render_lua_annotation(out);
     render_crap_richtext_render_lua(out);
+    RichtextRenderOptions::render_lua_annotation(out);
     out.push('\n');
 }
 fn render_crap_log(out: &mut String) {
@@ -588,6 +592,7 @@ fn render_crap_email(out: &mut String) {
 }
 fn render_crap_storage(out: &mut String) {
     render_crap_storage_lua(out);
+    StorageStat::render_lua_annotation(out);
     out.push('\n');
 }
 fn render_crap_config(out: &mut String) {

@@ -1,7 +1,7 @@
 //! POST /admin/mfa — verify the MFA (Multi-Factor Authentication) code and
 //! complete login.
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     extract::{ConnectInfo, Form, State},
@@ -16,19 +16,23 @@ use crate::{
         AdminState,
         handlers::{
             auth::{
-                MfaForm, SessionGrant, append_cookies, clear_mfa_pending_cookie, client_ip,
-                create_session_token, extract_mfa_token, render_mfa, session_redirect,
+                MfaForm, append_cookies, clear_mfa_pending_cookie, client_ip, create_session_token,
+                extract_mfa_token, render_mfa, session_redirect,
             },
             shared::paths,
         },
     },
-    core::auth::Claims,
-    service::{self, auth::reload_authenticated_user},
+    core::{auth::Claims, collection::Surface},
+    db::query::MfaCode,
+    service::{
+        self, AppInfra, ServiceError,
+        auth::{SessionGrant, reload_authenticated_user},
+    },
 };
 
 /// Owned inputs for the second-factor verification `spawn_blocking` body.
 struct VerifyMfaInput {
-    infra: std::sync::Arc<service::AppInfra>,
+    infra: Arc<AppInfra>,
     auth_secret: String,
     slug: String,
     user_id: String,
@@ -39,25 +43,22 @@ struct VerifyMfaInput {
 /// collection's MFA mode). Extracted so the `spawn_blocking` body is a
 /// single named call.
 fn verify_mfa_blocking(input: &VerifyMfaInput) -> anyhow::Result<bool> {
-    service::auth::verify_second_factor(
-        &input.infra,
-        &input.auth_secret,
-        &input.slug,
-        &input.user_id,
-        &input.code,
-    )
-    .map_err(service::ServiceError::into_anyhow)
+    let attempt = MfaCode::builder(&input.user_id, &input.code, &input.auth_secret).build();
+
+    service::auth::verify_second_factor(&input.infra, &input.slug, &attempt)
+        .map_err(ServiceError::into_anyhow)
 }
 
 /// Build the final session response after successful MFA verification.
 async fn build_mfa_session_response(state: &AdminState, pending: &Claims) -> Response {
     let grant = SessionGrant::builder(
-        pending.sub.to_string(),
+        &pending.sub,
         &pending.collection,
-        pending.email.clone(),
+        &pending.email,
         pending.session_version,
+        Surface::Admin,
     )
-    .build();
+    .mfa(true);
 
     let session = match create_session_token(state, grant) {
         Ok(s) => s,
@@ -92,10 +93,11 @@ pub async fn verify_mfa_action(
     let Ok(pending_claims) = state
         .infra
         .token_provider
-        .validate_pending_token(&mfa_token)
+        .validate_pending_token(&mfa_token, Surface::Admin)
     else {
-        // Token expired, invalid, or not an MFA-pending token (a full session
-        // token can't be replayed here) — clear cookie, redirect to login.
+        // Token expired, invalid, not an MFA-pending token (a full session
+        // token can't be replayed here), or issued by another surface's
+        // login — clear cookie, redirect to login.
         let cookie = clear_mfa_pending_cookie(state.config.admin.dev_mode);
         let mut response = Redirect::to(paths::LOGIN).into_response();
 
@@ -123,7 +125,7 @@ pub async fn verify_mfa_action(
 
     // Verify the second factor (TOTP or stored code, per the collection).
     let input = VerifyMfaInput {
-        infra: std::sync::Arc::clone(&state.infra),
+        infra: Arc::clone(&state.infra),
         auth_secret: AsRef::<str>::as_ref(&state.config.auth.secret).to_string(),
         slug: pending_claims.collection.to_string(),
         user_id: user_id.clone(),
@@ -155,7 +157,7 @@ pub async fn verify_mfa_action(
     // challenge. Mirrors the gRPC VerifyMfa path via the shared
     // `reload_authenticated_user`, so both surfaces refuse to complete login
     // for an account that changed under the challenge.
-    let infra = std::sync::Arc::clone(&state.infra);
+    let infra = Arc::clone(&state.infra);
     let claims_for_load = pending_claims.clone();
     let reloaded =
         task::spawn_blocking(move || reload_authenticated_user(&infra, &claims_for_load)).await;

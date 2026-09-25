@@ -89,8 +89,9 @@ Unknown keys anywhere in the file are fatal (`deny_unknown_fields`), so a typo n
 | `[cors]` | `allowed_origins`: `"*"` must be the only entry and cannot be combined with `allow_credentials = true`; every other origin needs a scheme and a host and no path; `allowed_methods` entries must be valid HTTP method tokens; `allowed_headers` / `exposed_headers` entries must be valid header names |
 | `[pagination]` | `default_limit > 0`, `max_limit > 0`, `default_limit <= max_limit` |
 | `[depth]` | `default_depth >= 0`, `max_depth >= 0`, `max_nesting_depth >= 1` |
-| `[hooks]` | `vm_pool_size > 0`, `max_vm_pool_size > 0` |
+| `[hooks]` | `vm_pool_size > 0`, `max_vm_pool_size > 0`; every `io_roots` entry non-empty, without NUL bytes and not `/` — and, when the Lua VMs are built at startup, an existing directory outside `/proc`, `/sys`, `/dev` and the refused paths (`data/`, `backups/`, logs, database) |
 | `[jobs]` | `poll_interval`, `cron_interval`, `heartbeat_interval` must be `> 0` |
+| `[auth]` | `token_expiry > 0` (every auth collection without its own `token_expiry` inherits it) |
 | `[auth]` | `password_policy.min_length <= password_policy.max_length` |
 | `[email]` | `smtp_port > 0` when `smtp_host` is set |
 | `[logging]` | `path` must not be empty when `file = true` |
@@ -235,6 +236,7 @@ max_instructions = 10000000  # Max Lua instructions per hook (0 = unlimited)
 max_memory = "50MB"          # Max Lua memory per VM (0 = unlimited)
 allow_private_networks = false  # Block HTTP requests to private/loopback IPs
 http_max_response_bytes = "10MB"  # Max HTTP response body size
+# io_roots = ["/srv/crap-media"]  # Extra dirs Lua `io` may reach (config dir always allowed)
 
 [live]
 enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
@@ -392,7 +394,7 @@ nonce applies to `script-src` only).
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `secret` | string | `""` (empty) | JWT signing secret, also keying MFA code digests, sealed TOTP secrets, `crap.crypto` and signed URLs. If empty, a random secret is generated and **persisted to `data/.jwt_secret`** so tokens survive restarts — per node. **Required when more than one node can run:** loading the config fails with an empty secret if a Redis cache, event transport, or rate-limit backend is configured (the server and every CLI command), and a warning is logged on Postgres. |
-| `token_expiry` | integer/string | `7200` (`"2h"`) | Default JWT token lifetime. Accepts seconds (integer) or human-readable (`"2h"`, `"30m"`). Can be overridden per auth collection. |
+| `token_expiry` | integer/string | `7200` (`"2h"`) | Default session token lifetime, used by every auth collection that sets no `token_expiry` of its own. Accepts seconds (integer) or human-readable (`"2h"`, `"30m"`); must be > 0. |
 | `password_policy` | table | *(see below)* | Password strength requirements. See `[auth.password_policy]`. |
 | `max_login_attempts` | integer | `5` | Maximum failed login attempts per email before temporary lockout. |
 | `max_ip_login_attempts` | integer | `20` | Maximum failed login attempts per IP before temporary lockout. Higher than per-email to tolerate shared IPs (offices, NAT). Also used as the per-IP threshold for forgot-password requests. |
@@ -480,7 +482,7 @@ S3-compatible storage configuration. Only used when `storage = "s3"`.
 | `from_address` | string | `"noreply@example.com"` | Sender email address for outgoing mail. |
 | `from_name` | string | `"Crap CMS"` | Sender display name. |
 | `smtp_timeout` | integer/string | `30` | SMTP connection and send timeout in seconds. Accepts integer or duration string (`"30s"`, `"1m"`). |
-| `webhook_url` | string | `""` | URL for the webhook email provider. Receives POST with JSON body. |
+| `webhook_url` | string | `""` | URL for the webhook email provider. Receives POST with JSON body. Redirects are **not** followed — a `3xx` answer fails the send (and the queued job retries), so point it at the endpoint's final address. Error messages and the job's error column show only the URL's origin (`scheme://host:port`), never its path, query or credentials. |
 | `webhook_headers` | map | `{}` | Extra HTTP headers for webhook requests (e.g., `{ Authorization = "Bearer ..." }`). |
 
 Background email delivery (queue size, retry budget, per-attempt
@@ -499,10 +501,11 @@ When configured, email enables password reset ("Forgot password?" link on login)
 | `max_depth` | integer | `3` | Maximum hook recursion depth. When Lua CRUD in hooks triggers more hooks, this caps the chain. `0` = never run hooks from Lua CRUD. |
 | `vm_pool_size` | integer | CPU cores | Number of Lua VMs **pre-warmed** at startup for concurrent hook execution (default: available CPU cores, fallback 4). The pool is no longer capped at this size — it grows on demand up to `max_vm_pool_size`. |
 | `max_vm_pool_size` | integer | `CPU cores × 8` (min 32) | Hard ceiling on the number of Lua VMs the hook pool will create. The pool pre-warms `vm_pool_size` and grows toward this cap as concurrency rises; only when all VMs are checked out does a further hook briefly wait for one to return. Bounds worst-case VM memory. Clamped up to `vm_pool_size` if set lower. |
-| `max_instructions` | integer | `10000000` | Maximum Lua instructions per hook invocation. `0` = unlimited. |
-| `max_memory` | integer/string | `52428800` (50 MB) | Maximum Lua memory per VM in bytes. Accepts integer or filesize string (`"50MB"`, `"100MB"`). `0` = unlimited. |
+| `max_instructions` | integer | `10000000` | Maximum Lua instructions per hook invocation — and per definition file / `init.lua` at startup. `0` = unlimited. |
+| `max_memory` | integer/string | `52428800` (50 MB) | Maximum Lua memory per VM in bytes (the startup VM included). Accepts integer or filesize string (`"50MB"`, `"100MB"`). `0` = unlimited. |
 | `allow_private_networks` | boolean | `false` | Allow `crap.http.request` to reach private/loopback/link-local IPs. |
 | `http_max_response_bytes` | integer/string | `10485760` (10 MB) | Maximum HTTP response body size. Accepts integer or filesize string (`"10MB"`, `"1GB"`). |
+| `io_roots` | string[] | `[]` | Directories beyond the config directory that Lua `io` file access (`io.open`, `io.lines`, `io.input`, `io.output`) may reach — e.g. where a Lua storage backend writes. Relative entries resolve against the config directory; each must exist, be a directory, and not lie inside a refused path (below) or `/proc`, `/sys`, `/dev` — startup fails otherwise. The config directory is always allowed; `crap.toml`, `data/`, `backups/`, the log directory and the database file are refused under every root, and `/proc`, `/sys`, `/dev` everywhere. See [Sandbox](../hooks/overview.md#sandbox). |
 
 ### `[live]`
 

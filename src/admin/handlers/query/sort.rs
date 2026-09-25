@@ -18,14 +18,15 @@ pub(crate) fn validate_sort(sort: &str, def: &CollectionDefinition) -> Option<St
 /// the SINGLE source of truth, shared by the sort gate below, the list-view
 /// header/column resolver and the saved column preferences.
 ///
-/// `_status` exists only on a collection that keeps drafts. Accepting it
-/// unconditionally let `?sort=_status` and a saved `_status` column through to
-/// SQL naming a column that was never created, which answers 500 instead of
-/// the 400 an unknown key owes.
+/// `_status` exists only on a collection that keeps drafts, and the
+/// timestamps only on one defined with `timestamps` (the default). Accepting
+/// them unconditionally let `?sort=_status` and a saved `_status` column
+/// through to a query naming a column that was never created, which answers
+/// an error page instead of the 400 an unknown key owes.
 #[must_use]
 pub(crate) fn is_meta_column(key: &str, def: &CollectionDefinition) -> bool {
     match key {
-        "created_at" | "updated_at" => true,
+        "created_at" | "updated_at" => def.timestamps,
         "_status" => def.has_drafts(),
         _ => false,
     }
@@ -133,8 +134,24 @@ mod tests {
         assert!(is_meta_column("_status", &with_drafts));
     }
 
-    /// The timestamp columns exist on every collection; `id` is sortable but
-    /// is not a list column.
+    /// Regression: a collection defined with `timestamps = false` has no
+    /// `created_at`/`updated_at` columns, so they are neither list columns
+    /// nor sort keys there.
+    #[test]
+    fn timestamps_are_meta_columns_only_with_timestamps() {
+        let mut def = test_def();
+        def.timestamps = false;
+
+        for key in ["created_at", "updated_at"] {
+            assert!(!is_meta_column(key, &def), "{key}");
+            assert_eq!(validate_sort(&format!("-{key}"), &def), None, "{key}");
+        }
+
+        assert_eq!(validate_sort("id", &def), Some("id".to_string()));
+    }
+
+    /// The timestamp columns exist on a collection with timestamps; `id` is
+    /// sortable but is not a list column.
     #[test]
     fn meta_columns_are_the_timestamps() {
         let def = test_def();

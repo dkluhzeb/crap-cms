@@ -11,7 +11,7 @@ mod test_helpers;
 
 pub use bulk::{
     cancel_pending_job, cancel_pending_jobs, delete_pending_failed_jobs_matching, purge_old_jobs,
-    purge_old_jobs_for_slug,
+    purge_old_jobs_for_slug, retry_failed_jobs,
 };
 pub use claim::{ClaimParams, claim_pending_jobs, claim_pending_jobs_with};
 pub use cron::{cron_fired_at, try_claim_cron_window};

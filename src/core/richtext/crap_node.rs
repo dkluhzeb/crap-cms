@@ -13,9 +13,13 @@
 //!   another attribute's value is that value, not an attribute;
 //! - a repeated attribute keeps its first occurrence, as the browser does;
 //! - character references (`&quot;`, `&#39;`, `&#x27;`, `&amp;`, …) in values
-//!   are decoded in one pass, the exact inverse of `html_escape_attr`.
+//!   are decoded in one pass, the exact inverse of `html_escape_attr`;
+//! - `<crap-node` text inside a comment, another element's attribute value or
+//!   a `<script>` / `<style>` is not a node.
 
 use serde_json::{Map, Value};
+
+use crate::core::richtext::html_lex::markup_len;
 
 const TAG: &str = "crap-node";
 const CLOSE_TAG: &str = "</crap-node>";
@@ -71,8 +75,11 @@ pub fn find_crap_nodes(html: &str) -> Vec<CrapNodeTag> {
     while let Some(rel) = html[pos..].find('<') {
         let start = pos + rel;
 
+        // Anything else at a `<` — a comment, another element's tag (whose
+        // attribute values may hold `<crap-node` text), a raw-text element — is
+        // skipped whole, as the browser never reads a node inside it.
         let Some(after_name) = match_tag_name(html, start) else {
-            pos = start + 1;
+            pos = start + markup_len(&html[start..]).unwrap_or(1);
             continue;
         };
 
@@ -211,7 +218,7 @@ fn find_close(html: &str, from: usize) -> Option<usize> {
 }
 
 /// Decode HTML character references in one pass: the named `&amp;`, `&lt;`,
-/// `&gt;`, `&quot;`, `&apos;` and numeric `&#NN;` / `&#xHH;`. An unknown or
+/// `&gt;`, `&quot;`, `&apos;`, `&nbsp;` and numeric `&#NN;` / `&#xHH;`. An unknown or
 /// malformed reference stays as written.
 #[must_use]
 pub fn decode_entities(s: &str) -> String {
@@ -247,6 +254,7 @@ fn decode_one(s: &str) -> Option<(char, usize)> {
         "gt" => '>',
         "quot" => '"',
         "apos" => '\'',
+        "nbsp" => '\u{a0}',
         _ => {
             let num = body.strip_prefix('#')?;
             let code = match num.strip_prefix(['x', 'X']) {
@@ -356,6 +364,24 @@ mod tests {
         let html = r#"<crap-node data-attrs='{"t":"a/>b"}' data-type="cta"></crap-node>"#;
 
         assert_eq!(types(html), vec![Some("cta".into())]);
+    }
+
+    /// Regression: `<crap-node` text inside a comment, another element's
+    /// attribute value or a script was read as a node — and one inside an
+    /// attribute ran to the next real node's closing tag, hiding that node
+    /// from validation.
+    #[test]
+    fn node_text_inside_other_markup_is_not_a_node() {
+        let real = r#"<crap-node data-type="real"></crap-node>"#;
+
+        for decoy in [
+            r#"<!-- <crap-node data-type="c"></crap-node> -->"#,
+            r#"<p title='<crap-node data-type="a">'>x</p>"#,
+            r#"<script>'<crap-node data-type="s">'</script>"#,
+        ] {
+            let html = format!("{decoy}{real}");
+            assert_eq!(types(&html), vec![Some("real".into())], "{decoy}");
+        }
     }
 
     #[test]

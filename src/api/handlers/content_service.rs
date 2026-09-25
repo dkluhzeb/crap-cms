@@ -432,6 +432,9 @@ pub(in crate::api::handlers) fn auth_failure_status(failure: AuthFailure) -> Sta
         AuthFailure::Unaccepted => {
             Status::unauthenticated("Credential not accepted on this surface")
         }
+        AuthFailure::MfaRequired => {
+            Status::unauthenticated("Second factor required on this surface")
+        }
     }
 }
 
@@ -757,6 +760,7 @@ mod auth_status_tests {
             (AuthFailure::Lookup, Code::Unavailable),
             (AuthFailure::BadToken, Code::Unauthenticated),
             (AuthFailure::Unaccepted, Code::Unauthenticated),
+            (AuthFailure::MfaRequired, Code::Unauthenticated),
         ];
 
         for (failure, code) in cases {

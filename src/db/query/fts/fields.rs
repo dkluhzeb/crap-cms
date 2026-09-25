@@ -1,12 +1,15 @@
 //! Field/column resolution helpers for FTS5 indexing.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use anyhow::Result;
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, FieldDefinition, FieldDenial, FieldType, Registry},
+    core::{
+        CollectionDefinition, FieldDefinition, FieldDenial, FieldType, Registry,
+        richtext::SearchableAttrs,
+    },
     db::query::{
         column_is_localized,
         helpers::{prefixed_name, walk_leaf_fields},
@@ -167,63 +170,78 @@ pub fn get_fts_columns(
     Ok(columns)
 }
 
-/// Build a set of column names that are JSON-format richtext fields — including
-/// group-nested ones (as `group__field`), so a richtext field indexed by FTS is
-/// JSON-extracted rather than treated as plain text wherever it lives.
-pub(super) fn json_richtext_columns(def: &CollectionDefinition) -> HashSet<String> {
-    let mut set = HashSet::new();
+/// How an indexed rich text column's value is read for its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RichtextFormat {
+    Html,
+    Json,
+}
+
+/// The rich text columns of `def` and their storage format — including
+/// group-nested ones (as `group__field`), so a rich text field indexed by FTS
+/// is indexed by its text rather than its markup wherever it lives.
+pub(super) fn richtext_columns(def: &CollectionDefinition) -> HashMap<String, RichtextFormat> {
+    let mut map = HashMap::new();
     let _ = walk_leaf_fields(&def.fields, "", false, &mut |field, prefix, _| {
-        if field.field_type == FieldType::Richtext
-            && field.admin.richtext_format.as_deref() == Some("json")
-        {
-            set.insert(prefixed_name(prefix, &field.name));
+        if field.field_type == FieldType::Richtext {
+            let format = if field.parses_json() {
+                RichtextFormat::Json
+            } else {
+                RichtextFormat::Html
+            };
+            map.insert(prefixed_name(prefix, &field.name), format);
         }
         Ok(())
     });
-    set
+    map
 }
 
-/// Whether an FTS column holds JSON richtext — either a richtext column name in
-/// `json_rt_cols`, or its per-locale form `column__locale`. The locale is the
+/// The rich text format of an FTS column — a rich text column name in
+/// `rt_cols`, or its per-locale form `column__locale`. The locale is the
 /// trailing `__` segment, so it's stripped from the tail (`seo__body__en` →
-/// `seo__body`), never the head.
-pub(super) fn is_json_richtext_column(col_name: &str, json_rt_cols: &HashSet<String>) -> bool {
-    json_rt_cols.contains(col_name)
-        || col_name
+/// `seo__body`), never the head. `None` for any other column.
+pub(super) fn richtext_column_format(
+    col_name: &str,
+    rt_cols: &HashMap<String, RichtextFormat>,
+) -> Option<RichtextFormat> {
+    rt_cols.get(col_name).copied().or_else(|| {
+        col_name
             .rsplit_once("__")
-            .is_some_and(|(base, _locale)| json_rt_cols.contains(base))
+            .and_then(|(base, _locale)| rt_cols.get(base).copied())
+    })
 }
 
 /// Build a map of node type name → searchable attr names from collection definition
-/// and registry. Used for FTS extraction of custom richtext node content.
+/// and registry. Used for FTS extraction of custom richtext node content, in
+/// either storage format.
 pub(super) fn build_node_searchable_map<'a>(
-    def: Option<&'a CollectionDefinition>,
+    def: &'a CollectionDefinition,
     registry: Option<&'a Registry>,
-) -> HashMap<&'a str, Vec<&'a str>> {
-    let mut map = HashMap::new();
-    let (Some(def), Some(registry)) = (def, registry) else {
+) -> SearchableAttrs<'a> {
+    let mut map = SearchableAttrs::new();
+    let Some(registry) = registry else {
         return map;
     };
-    // Descend groups so a JSON-richtext field nested in a group contributes its
+    // Descend groups so a richtext field nested in a group contributes its
     // searchable node attrs too (the map is keyed by node type, so the column
     // prefix is irrelevant here — only reaching every richtext field matters).
     let _ = walk_leaf_fields(&def.fields, "", false, &mut |field, _prefix, _| {
-        if field.field_type == FieldType::Richtext
-            && field.admin.richtext_format.as_deref() == Some("json")
-        {
-            for node_name in &field.admin.nodes {
-                if let Some(node_def) = registry.get_richtext_node(node_name)
-                    && !node_def.searchable_attrs.is_empty()
-                {
-                    map.insert(
-                        node_def.name.as_str(),
-                        node_def
-                            .searchable_attrs
-                            .iter()
-                            .map(std::string::String::as_str)
-                            .collect(),
-                    );
-                }
+        if field.field_type != FieldType::Richtext {
+            return Ok(());
+        }
+
+        for node_name in &field.admin.nodes {
+            if let Some(node_def) = registry.get_richtext_node(node_name)
+                && !node_def.searchable_attrs.is_empty()
+            {
+                map.insert(
+                    node_def.name.as_str(),
+                    node_def
+                        .searchable_attrs
+                        .iter()
+                        .map(String::as_str)
+                        .collect(),
+                );
             }
         }
         Ok(())
@@ -234,6 +252,8 @@ pub(super) fn build_node_searchable_map<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::{HookRef, collection::*, field::*};
+    use crate::db::migrate::collection::test_helpers::{locale_en_de, localized_field, text_field};
 
     /// Hidden and read-gated fields never enter the default index; a hidden
     /// field is dropped even when listed explicitly, a read-gated one is kept
@@ -247,8 +267,8 @@ mod tests {
                 .hidden(true)
                 .build(),
             FieldDefinition::builder("notes", FieldType::Textarea)
-                .access(crate::core::field::FieldAccess {
-                    read: Some(crate::core::HookRef::new("access.admin_only")),
+                .access(FieldAccess {
+                    read: Some(HookRef::new("access.admin_only")),
                     ..Default::default()
                 })
                 .build(),
@@ -279,10 +299,6 @@ mod tests {
 
         assert_eq!(get_fts_fields(&def), vec!["title".to_string()]);
     }
-    use crate::core::collection::*;
-    use crate::core::field::*;
-    use crate::db::migrate::collection::test_helpers::{locale_en_de, localized_field, text_field};
-
     fn simple_def(fields: Vec<FieldDefinition>) -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
         def.fields = fields;
@@ -377,35 +393,54 @@ mod tests {
     }
 
     #[test]
-    fn json_richtext_columns_includes_group_nested() {
+    fn richtext_columns_include_group_nested_in_both_formats() {
         let mut body = FieldDefinition::builder("body", FieldType::Richtext).build();
         body.admin.richtext_format = Some("json".into());
         let def = simple_def(vec![
             FieldDefinition::builder("seo", FieldType::Group)
                 .fields(vec![body])
                 .build(),
+            FieldDefinition::builder("intro", FieldType::Richtext).build(),
         ]);
-        let cols = json_richtext_columns(&def);
-        assert!(
-            cols.contains("seo__body"),
-            "group-nested json richtext must be detected as seo__body, got {cols:?}"
+        let cols = richtext_columns(&def);
+
+        assert_eq!(
+            cols.get("seo__body"),
+            Some(&RichtextFormat::Json),
+            "{cols:?}"
         );
+        assert_eq!(cols.get("intro"), Some(&RichtextFormat::Html), "{cols:?}");
     }
 
     #[test]
-    fn is_json_richtext_column_handles_group_prefix_and_locale_suffix() {
-        let cols: HashSet<String> = ["seo__body".to_string(), "body".to_string()]
-            .into_iter()
-            .collect();
+    fn richtext_column_format_handles_group_prefix_and_locale_suffix() {
+        let cols: HashMap<String, RichtextFormat> = [
+            ("seo__body".to_string(), RichtextFormat::Json),
+            ("body".to_string(), RichtextFormat::Html),
+        ]
+        .into_iter()
+        .collect();
         // group, non-localized + localized; top-level non-localized + localized
-        assert!(is_json_richtext_column("seo__body", &cols));
-        assert!(is_json_richtext_column("seo__body__en", &cols));
-        assert!(is_json_richtext_column("body", &cols));
-        assert!(is_json_richtext_column("body__de", &cols));
+        assert_eq!(
+            richtext_column_format("seo__body", &cols),
+            Some(RichtextFormat::Json)
+        );
+        assert_eq!(
+            richtext_column_format("seo__body__en", &cols),
+            Some(RichtextFormat::Json)
+        );
+        assert_eq!(
+            richtext_column_format("body", &cols),
+            Some(RichtextFormat::Html)
+        );
+        assert_eq!(
+            richtext_column_format("body__de", &cols),
+            Some(RichtextFormat::Html)
+        );
         // a plain text group column must NOT be mis-detected (locale strip is
         // tail-only, so `seo__title` does not resolve to the group root `seo`)
-        assert!(!is_json_richtext_column("seo__title", &cols));
-        assert!(!is_json_richtext_column("seo", &cols));
+        assert_eq!(richtext_column_format("seo__title", &cols), None);
+        assert_eq!(richtext_column_format("seo", &cols), None);
     }
 
     #[test]

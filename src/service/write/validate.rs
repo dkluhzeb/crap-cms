@@ -104,6 +104,9 @@ pub struct ValidateContext<'a> {
     /// Collection-level `required_locales` default, so the dry-run mirrors the
     /// completeness check that `create`/`update` apply. `None` for globals.
     pub required_locales: Option<&'a RequiredLocales>,
+    /// The acting user's UI locale the dry-run's hooks and validators see —
+    /// the context's, as the real write hands them.
+    pub ui_locale: Option<&'a str>,
     /// The stored document field-level `access.update` rules judge as
     /// `ctx.document`, exactly as the real update does. `None` in create mode;
     /// an update without one judges an empty document, so stored-value rules
@@ -166,7 +169,9 @@ pub fn validate_document(
         .data(hook_data)
         .locale(input.locale_ctx.map(LocaleContext::access_locale))
         .draft(is_draft)
-        .user(user);
+        .user(user)
+        .ui_locale(ctx.ui_locale);
+
     // On an update dry-run, expose the target id (matches the real write path,
     // so a field hook's `ctx.id` agrees between validate and persist).
     if let Some(id) = ctx.exclude_id {
@@ -181,8 +186,9 @@ pub fn validate_document(
         .soft_delete(ctx.soft_delete)
         .collection_required_locales(ctx.required_locales)
         .user(user)
-        .ui_locale(input.ui_locale.as_deref())
+        .ui_locale(ctx.ui_locale)
         .locale_overlay(ctx.locale_overlay)
+        .versioned_drafts(ctx.supports_drafts)
         .build();
 
     write_hooks.run_before_write(ctx.hooks, ctx.fields, hook_ctx, &val_ctx)?;
@@ -332,5 +338,110 @@ mod strip_tests {
         strip_untrusted_upload_metadata(&mut input, &def);
 
         assert_eq!(input.data.get("url"), Some(&json!("/whatever")));
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod hook_context_tests {
+    use std::sync::Mutex;
+
+    use anyhow::Result as AnyResult;
+    use rusqlite::Connection;
+
+    use super::{ValidateContext, validate_document};
+    use crate::{
+        core::{DocumentFields, FieldDefinition, FieldType, ValidationError, collection::Hooks},
+        db::{AccessResult, DbConnection},
+        hooks::{AccessCheckInput, HookContext, HookEvent, ValidationCtx},
+        service::{FieldReadStrip, WriteInput, hooks::WriteHooks},
+    };
+
+    /// Records the `ctx.ui_locale` the before-write chain is handed.
+    #[derive(Default)]
+    struct UiLocaleSpy {
+        seen: Mutex<Vec<Option<String>>>,
+    }
+
+    impl WriteHooks for UiLocaleSpy {
+        fn run_before_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            ctx: HookContext,
+            _val_ctx: &ValidationCtx,
+        ) -> AnyResult<HookContext> {
+            self.seen.lock().unwrap().push(ctx.ui_locale.clone());
+
+            Ok(ctx)
+        }
+
+        fn run_after_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> AnyResult<HookContext> {
+            Ok(ctx)
+        }
+
+        fn run_hooks_with_conn(
+            &self,
+            _hooks: &Hooks,
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> AnyResult<HookContext> {
+            Ok(ctx)
+        }
+
+        fn check_access(&self, _input: &AccessCheckInput<'_>) -> AnyResult<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+
+        fn validate_fields(
+            &self,
+            _fields: &[FieldDefinition],
+            _data: &DocumentFields,
+            _ctx: &ValidationCtx,
+        ) -> Result<(), ValidationError> {
+            Ok(())
+        }
+    }
+
+    impl FieldReadStrip for UiLocaleSpy {}
+
+    /// Regression: the validate dry-run built its hook context without the
+    /// admin UI locale, so a `before_change` localizing its error through
+    /// `ctx.ui_locale` answered live validation in the default language while
+    /// the real save answered in the editor's.
+    #[test]
+    fn validate_dry_run_hooks_see_the_ui_locale() {
+        let conn = Connection::open_in_memory().unwrap();
+        let fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+        let hooks = Hooks::default();
+
+        let ctx = ValidateContext {
+            slug: "posts",
+            table_name: "posts",
+            fields: &fields,
+            hooks: &hooks,
+            operation: "create",
+            exclude_id: None,
+            soft_delete: false,
+            supports_drafts: false,
+            required_locales: None,
+            ui_locale: Some("de"),
+            stored_document: None,
+            locale_overlay: None,
+        };
+
+        let spy = UiLocaleSpy::default();
+        let input = WriteInput::builder(DocumentFields::new()).build();
+
+        validate_document(&conn, &spy, &ctx, input, None).expect("validate");
+
+        assert_eq!(*spy.seen.lock().unwrap(), vec![Some("de".to_string())]);
     }
 }

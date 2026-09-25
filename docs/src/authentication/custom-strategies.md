@@ -105,7 +105,13 @@ return M
 
 ## CRUD Access
 
-Strategy functions have full CRUD access (via the same TxContext pattern as hooks). They can query the database to look up users.
+Strategy functions have full CRUD access (via the same TxContext pattern as hooks): they look users up, and they may write — typically to provision a user on first sight ("find or create"). Writes are transactional: they commit only when the function returns a user (see *Side effects are transactional* below).
+
+Which connection the function runs on depends on when it runs:
+
+- **At login** (the admin login form, gRPC `Login`), on the login's write connection — the login also records failed attempts.
+- **In an [auth callback](#auth-callbacks-oauth2--oidc)**, on a write connection taken **at the hook's first CRUD call**, not before. A callback spends its time on outbound HTTP (the code exchange, the userinfo fetch), and doing those before any `crap.collections.*` call — as the example below does — means the network round trips hold no database connection; one taken earlier is held until the hook returns, so keep CRUD after the HTTP calls. A callback that makes no CRUD call never takes a connection.
+- **Per request** (a strategy whose `activates_on` matches the request), on the request's own read connection, so resolving a request never waits behind writes. A write from there still works and commits with the successful authentication, but it takes the database's write lock on every request that makes one — keep per-request writes to first-sight provisioning, never an every-request update such as a "last seen" timestamp (use a job or an `after_change` hook for that).
 
 ## Execution Order
 
@@ -120,7 +126,7 @@ The first credential that authenticates wins. Within one collection, strategies 
 
 Two consequences worth knowing:
 
-- A credential that **decodes but is invalid** (bad signature, expired, stale `session_version` after a password change, locked or deleted user, unknown collection) **short-circuits** the evaluation — the request is rejected (gRPC `UNAUTHENTICATED`; admin clears the cookie and redirects to login) and the remaining steps never run. A broken explicit credential is surfaced, not silently bypassed.
+- A credential that **decodes but is invalid** (bad signature, expired, stale `session_version` after a password change, locked or deleted user, unknown collection, or a session that did not pass the second factor on a request whose [MFA gate](mfa.md#sessions-carry-the-second-factor) requires it) **short-circuits** the evaluation — the request is rejected (gRPC `UNAUTHENTICATED`; admin clears the cookie and redirects to login) and the remaining steps never run. A broken explicit credential is surfaced, not silently bypassed.
 - A credential that is valid but **not accepted** by any method (its collection dropped `bearer`/`session_cookie` for this surface, and no strategy fired) is also rejected rather than treated as anonymous, so a stale cookie cannot loop the browser.
 
 The **login path** (admin form POST, gRPC `Login`) is separate: the submitted email/password go to `password_login` first, then to each strategy whose `surfaces` include the login surface **and** whose `activates_on` matches the request (an `always` strategy, or one whose header is present). A strategy scoped to `surfaces = {"grpc"}` never runs on the admin form.
@@ -184,8 +190,10 @@ Omit `bearer` similarly to refuse JWT authentication (rarely useful — usually 
   user's **stored** session version, read when the user was admitted, so
   a [queued bulk run](../grpc-api/rpcs.md#queued-mode-queue--true) a
   strategy-authenticated caller starts is abandoned by a later
-  session-version bump (force-logout, password reset, unverify) exactly
-  like a token user's.
+  session-version bump exactly like a token user's. **Any** logout of the
+  user bumps it (an ordinary admin-UI sign-out, not only a forced one), as
+  do a password change or reset, a lock, an unverify, and moving the account
+  to the trash.
 - **A strategy credential is never exchanged for a token.** The claims
   of a strategy-authenticated request are marked as strategy claims: the
   token provider refuses to sign them, and the admin session-refresh
@@ -203,7 +211,41 @@ GET/POST /admin/auth/callback/{name}                 # single auth collection
 GET/POST /admin/auth/callback/{collection}/{name}    # explicit auth collection
 ```
 
-Both dispatch to a Lua hook `auth_callback.{name}` which receives request headers and query parameters; the hook returns a user document to create a session. The two routes differ only in how the **target auth collection** is chosen (see *Collection binding* below).
+Both dispatch to a Lua hook `auth_callback.{name}`; the hook returns a user document to create a session. The two routes differ only in how the **target auth collection** is chosen (see *Collection binding* below).
+
+The hook gets one `ctx.headers` table describing the request:
+
+| Key | Holds |
+|-----|-------|
+| every request header (lowercase name) | the header value |
+| `_query_{param}` | each URL query parameter (`_query_code`, `_query_state`, …) |
+| `_form_{field}` | each field of a `application/x-www-form-urlencoded` request body (`_form_code`, `_form_state`, `_form_id_token`, …) |
+| `_method` | `"GET"` or `"POST"` |
+
+A request header spelled like one of the `_query_` / `_form_` / `_method`
+keys is dropped, so each of those only ever comes from where its name says.
+
+**`GET` and `POST` (`form_post`).** Most providers redirect the browser back
+with a `GET` carrying `code` and `state` in the query. A provider configured
+with `response_mode=form_post` (Apple, Azure AD / Entra ID, many OIDC
+providers) instead makes the browser `POST` a urlencoded form — the same
+values then arrive as `_form_code`, `_form_state`, `_form_id_token`. A hook
+that supports both reads either key:
+
+```lua
+local code  = ctx.headers["_query_code"]  or ctx.headers["_form_code"]
+local state = ctx.headers["_query_state"] or ctx.headers["_form_state"]
+```
+
+**The callback routes are exempt from the admin's CSRF token check.** A
+`form_post` answer is a cross-site `POST`, which never carries the admin's
+`SameSite=Strict` CSRF cookie, so the double-submit check every other admin
+`POST` passes would refuse every such login. Login CSRF on a callback is
+instead what the OAuth **`state`** parameter defends against — see the note
+below: a callback hook **must** verify `state`, whichever method delivered
+it. (For `form_post`, a `state` cookie you set before redirecting to the
+provider must be `SameSite=None; Secure` to be sent on the provider's
+cross-site `POST`.)
 
 The file lives at `{config_dir}/auth_callback/{name}.lua` (resolved by
 `require("auth_callback.{name}")`) and **returns the handler function
@@ -212,50 +254,86 @@ a `module.function` pair.
 
 ```lua
 -- auth_callback/google.lua
-return function(ctx)
-    -- ctx.headers._query_code contains the OAuth authorization code
-    local code = ctx.headers["_query_code"]
-    if not code then return nil end
+local function url_encode(s)
+    return (tostring(s):gsub("[^%w%-%._~]", function(c)
+        return string.format("%%%02X", string.byte(c))
+    end))
+end
 
-    -- Exchange code for tokens
+local function form_encode(fields)
+    local parts = {}
+    for k, v in pairs(fields) do
+        parts[#parts + 1] = url_encode(k) .. "=" .. url_encode(v)
+    end
+    return table.concat(parts, "&")
+end
+
+-- crap.env only serves CRAP_* / LUA_* names.
+local function env(name)
+    return assert(crap.env.get(name), name .. " is not set")
+end
+
+-- A request cookie by exact name.
+local function cookie(ctx, name)
+    return ("; " .. (ctx.headers["cookie"] or "")):match(";%s*" .. name .. "=([^;]+)")
+end
+
+return function(ctx)
+    -- A redirect (GET) carries the values in the query; a
+    -- `response_mode=form_post` answer (POST) in the form body.
+    local code = ctx.headers["_query_code"] or ctx.headers["_form_code"]
+    local state = ctx.headers["_query_state"] or ctx.headers["_form_state"]
+    if not code or not state then return nil end
+
+    -- Login-CSRF: the returned `state` must equal the one the start route
+    -- stored in this browser's HttpOnly cookie (see crap.routes: oauth_start).
+    -- This is the callback's only CSRF defense — the callback routes skip the
+    -- admin's CSRF token check so a provider can POST to them.
+    local expected = cookie(ctx, "oauth_state")
+    if not expected or not crap.crypto.constant_time_eq(expected, state) then
+        return nil
+    end
+
+    -- Exchange the code for tokens (form-encoded, as the token endpoint expects).
     local res = crap.http.request({
         method = "POST",
         url = "https://oauth2.googleapis.com/token",
-        json = {
+        headers = { ["Content-Type"] = "application/x-www-form-urlencoded" },
+        body = form_encode({
             code = code,
-            client_id = crap.env.get("GOOGLE_CLIENT_ID"),
-            client_secret = crap.env.get("GOOGLE_CLIENT_SECRET"),
-            redirect_uri = crap.env.get("GOOGLE_REDIRECT_URI"),
+            client_id = env("CRAP_GOOGLE_CLIENT_ID"),
+            client_secret = env("CRAP_GOOGLE_CLIENT_SECRET"),
+            redirect_uri = env("CRAP_GOOGLE_REDIRECT_URI"),
             grant_type = "authorization_code",
-        },
+        }),
+        timeout = 10,
     })
     if res.status ~= 200 then return nil end
 
     local tokens = crap.json.decode(res.body)
+    if not tokens.access_token then return nil end
 
-    -- Get user info
     local info_res = crap.http.request({
         url = "https://www.googleapis.com/oauth2/v2/userinfo",
         headers = { Authorization = "Bearer " .. tokens.access_token },
+        timeout = 10,
     })
+    if info_res.status ~= 200 then return nil end
+
     local userinfo = crap.json.decode(info_res.body)
+    -- Trust the email ONLY if the provider verified it (OIDC: email_verified).
+    if not userinfo.verified_email or not userinfo.email then return nil end
 
-    -- Trust the email ONLY if the provider verified the user owns it. Without
-    -- this, a provider (or misconfigured IdP) that returns an unverified address
-    -- lets an attacker match — and take over — an existing local user by email.
-    -- Google's v2 userinfo uses `verified_email`; OIDC uses `email_verified`.
-    if not userinfo.verified_email then return nil end
-
-    -- Find or create user
     local users = crap.collections.find("users", { where = { email = userinfo.email } })
     if #users.documents > 0 then return users.documents[1] end
 
-    return crap.collections.create("users", {
-        email = userinfo.email,
-        name = userinfo.name,
-    })
+    return crap.collections.create("users", { email = userinfo.email, name = userinfo.name })
 end
 ```
+
+With `response_mode=form_post`, the provider's POST back is cross-site, so a
+`SameSite=Lax` state cookie is not sent on it — set the `oauth_state` cookie
+with `same_site = "none"` (and `secure = true`) for a `form_post` flow.
 
 > **Trust the provider's email claim before matching by email.** Match (or
 > create) a local user by email *only after* confirming the provider **verified**
@@ -273,8 +351,11 @@ end
 > cookie), and reject the callback unless the returned `state` matches. Without
 > it, an attacker can hand a victim a callback URL carrying the *attacker's*
 > `code` and silently log the victim's browser into the attacker's account. The
-> hook can compare the two sides itself: `ctx.headers["_query_state"]` is the
-> returned value and `ctx.headers["cookie"]` carries the request cookies. PKCE
+> hook can compare the two sides itself: `ctx.headers["_query_state"]` (or
+> `ctx.headers["_form_state"]` for a `form_post` answer) is the returned value
+> and `ctx.headers["cookie"]` carries the request cookies. This check is the
+> callback's **only** login-CSRF defense — the callback routes skip the
+> admin's CSRF token check so an identity provider can `POST` to them. PKCE
 > additionally hardens the code exchange.
 >
 > **Non-browser flows don't use a cookie — pick the defense that fits the
@@ -300,6 +381,11 @@ end
 > names the user by `id` — the `admin.access` gate and the session are built
 > from the user's **stored** document, never from the fields the hook returned.
 > Return a user your provider has actually authenticated.
+>
+> **Transactional provisioning.** The hook's writes (creating the user on
+> first sign-in) commit only when it returns a user, exactly as a strategy's
+> do; the transaction opens on a write connection at the hook's first CRUD
+> call (see [CRUD Access](#crud-access)), so do the provider round trips first.
 >
 > **MFA still applies.** On a collection with an `mfa` mode, the callback does
 > not mint the session itself: it redirects to the MFA step (`/admin/mfa`,
@@ -363,7 +449,8 @@ auth = {
 function M.send(ctx)
     -- ctx.collection, ctx.user (field data), ctx.code (6 digits, SENSITIVE —
     -- never log it), ctx.expires_in (seconds). Nested CRUD is available,
-    -- e.g. to enqueue the send in a jobs collection.
+    -- e.g. to enqueue the send in a jobs collection; its writes commit when
+    -- the hook returns and roll back when it raises.
     my_sms.send(ctx.user.phone, "Your code: " .. ctx.code)
 end
 ```
@@ -372,6 +459,12 @@ end
 **startup error** — the pairing is validated so a login can never silently
 receive no code. Delivery is best-effort like the built-in email: hook errors
 are logged server-side and the previously issued code stays valid.
+
+The code is stored before the hook runs, and the hook holds no database
+connection while it delivers: its CRUD takes a write connection at its first
+call, in one transaction that commits when the hook returns (and rolls back
+when it raises). Send first and write afterwards, so the delivery I/O never
+pins a write connection.
 
 An optional `mfa_when` hook decides *whether* a verified login needs the second factor — per surface or per user:
 
@@ -391,3 +484,10 @@ function M.mfa_when(ctx)
     return ctx.user.mfa_enabled == true
 end
 ```
+
+`mfa_when` is a predicate: its `crap.*` CRUD is **read-only**. Reads (`find`,
+`find_by_id`, `count`, …) work; a write (`create`, `update`, `delete`,
+`crap.transaction`, `crap.jobs.queue`, …) raises an error naming the gate —
+which fails closed. It runs at login and again on each request a session
+without the second factor authenticates (see
+[MFA → Sessions carry the second factor](mfa.md#sessions-carry-the-second-factor)).

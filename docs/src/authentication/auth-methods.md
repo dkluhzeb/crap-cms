@@ -101,7 +101,7 @@ The first credential that authenticates wins. Within one collection, strategies 
 
 Two consequences worth knowing:
 
-- A credential that **decodes but is invalid** (bad signature, expired, stale `session_version` after a password change, locked or deleted user, unknown collection) **short-circuits** the evaluation — the request is rejected (gRPC `UNAUTHENTICATED`; admin clears the cookie and redirects to login) and the remaining steps never run. A broken explicit credential is surfaced, not silently bypassed.
+- A credential that **decodes but is invalid** (bad signature, expired, stale `session_version` after a password change, locked or deleted user, unknown collection, or a session that did not pass the second factor on a request whose [MFA gate](mfa.md#sessions-carry-the-second-factor) requires it) **short-circuits** the evaluation — the request is rejected (gRPC `UNAUTHENTICATED`; admin clears the cookie and redirects to login) and the remaining steps never run. A broken explicit credential is surfaced, not silently bypassed.
 - A credential that is valid but **not accepted** by any method (its collection dropped `bearer`/`session_cookie` for this surface, and no strategy fired) is also rejected rather than treated as anonymous, so a stale cookie cannot loop the browser.
 
 The **login path** (admin form POST, gRPC `Login`) is separate: the submitted email/password go to `password_login` first, then to each strategy whose `surfaces` include the login surface **and** whose `activates_on` matches the request (an `always` strategy, or one whose header is present). A strategy scoped to `surfaces = {"grpc"}` never runs on the admin form.

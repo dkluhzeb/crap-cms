@@ -2,11 +2,12 @@
   <crap-code
     data-language="{{language}}"
     {{#if languages}}data-languages='{{json languages}}'{{/if}}
+    {{#if rows}}data-rows="{{rows}}"{{/if}}
   >
     <textarea
       id="field-{{name}}"
       name="{{name}}"
-      rows="16"
+      rows="{{#if rows}}{{rows}}{{else}}16{{/if}}"
       data-field-type="code"
       hidden
       {{#if placeholder}}placeholder="{{placeholder}}"{{/if}}

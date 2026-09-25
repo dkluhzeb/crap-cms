@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde_json::{Map, Value};
 
 use crate::{
-    core::{Document, DocumentFields, FieldDefinition, Hooks},
+    core::{Document, DocumentFields, FieldDefinition, Hooks, Registry},
     db::{AccessResult, DbConnection},
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
@@ -86,6 +86,10 @@ impl WriteHooks for RunnerWriteHooks<'_> {
                 || !hooks.after_delete.is_empty()
                 || self.runner.has_registered_hooks_for("before_delete")
                 || self.runner.has_registered_hooks_for("after_delete"))
+    }
+
+    fn registry(&self) -> Option<&Registry> {
+        Some(self.runner.registry())
     }
 
     fn run_before_write(

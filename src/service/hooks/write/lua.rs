@@ -10,7 +10,7 @@ use crate::{
     hooks::{
         HookContext, HookEvent, ValidationCtx,
         lifecycle::{
-            AccessCheckInput, FieldHookEvent, FieldHooksCall,
+            AccessCheckInput, FieldHookEvent, FieldHookMeta, FieldHooksCall,
             access::{
                 ReadStripInput, WriteStripInput, check_collection_access,
                 strip_read_access_with_lua, strip_write_access_with_lua,
@@ -56,6 +56,10 @@ impl WriteHooks for LuaWriteHooks<'_> {
         self.hooks_enabled && (!hooks.before_delete.is_empty() || !hooks.after_delete.is_empty())
     }
 
+    fn registry(&self) -> Option<&Registry> {
+        Some(self.registry)
+    }
+
     fn run_before_write(
         &self,
         hooks: &Hooks,
@@ -82,8 +86,13 @@ impl WriteHooks for LuaWriteHooks<'_> {
                 fields,
                 &mut ctx.data,
                 self.registry,
-                &ctx.collection,
-            );
+                &FieldHookMeta {
+                    collection: &ctx.collection,
+                    operation: &ctx.operation,
+                    id: ctx.document_id.as_deref(),
+                    locale: val_ctx.locale_ctx.map(LocaleContext::access_locale),
+                },
+            )?;
 
             ctx = run_hooks_inner(self.lua, hooks, HookEvent::BeforeValidate, ctx)?;
         }

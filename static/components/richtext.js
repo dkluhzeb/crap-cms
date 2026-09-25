@@ -37,6 +37,7 @@
  */
 
 import { h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
 import { parseJsonAttribute } from './_internal/util/json.js';
 import { EV_CHANGE } from './events.js';
 import { openLinkModal } from './richtext/link-modal.js';
@@ -87,6 +88,29 @@ function readCustomNodes(host) {
   return Array.isArray(arr) ? arr : [];
 }
 
+/**
+ * Whether `doc` is the empty document: one textblock without content.
+ *
+ * @param {any} doc
+ * @returns {boolean}
+ */
+function isEmptyDoc(doc) {
+  return doc.childCount === 1 && doc.firstChild.isTextblock && doc.firstChild.content.size === 0;
+}
+
+/**
+ * Attributes of the editable root: the field's `admin.placeholder`, shown
+ * (via CSS) while the document is empty.
+ *
+ * @param {any} state
+ * @param {string} placeholder
+ * @returns {Record<string, string>}
+ */
+function editorAttributes(state, placeholder) {
+  if (!placeholder || !isEmptyDoc(state.doc)) return {};
+  return { 'data-placeholder': placeholder };
+}
+
 class CrapRichtext extends HTMLElement {
   constructor() {
     super();
@@ -96,6 +120,8 @@ class CrapRichtext extends HTMLElement {
     this._customNodes = [];
     /** @type {HTMLDivElement|null} */
     this._editorEl = null;
+    /** Set when the stored value could not be loaded (see `_mountLoadError`). */
+    this._loadFailed = false;
     this.attachShadow({ mode: 'open' });
   }
 
@@ -103,7 +129,7 @@ class CrapRichtext extends HTMLElement {
 
   connectedCallback() {
     // Idempotency: skip re-init on DOM moves (e.g. array row drag-and-drop).
-    if (this._view) return;
+    if (this._view || this._loadFailed) return;
 
     const PM = /** @type {any} */ (window).ProseMirror;
     const textarea = /** @type {HTMLTextAreaElement|null} */ (this.querySelector('textarea'));
@@ -121,6 +147,16 @@ class CrapRichtext extends HTMLElement {
     const schema = buildSchema(PM, has, this._customNodes);
     const format = this.getAttribute('data-format') || 'html';
     const doc = this._parseInitialDoc(PM, textarea, schema, format);
+    if (!doc) {
+      this._mountLoadError(textarea);
+      return;
+    }
+    // Loading drops what the editor has no place for (e.g. an attribute a
+    // custom node no longer declares), which the server refuses: submit the
+    // document as loaded, not as stored, even when it is not edited.
+    if (format === 'json' && textarea.value.trim()) {
+      textarea.value = this._serializeDoc(PM, schema, doc, format);
+    }
     const plugins = buildPlugins(PM, schema, has, (view) =>
       this._updateToolbar(view.state, schema, has),
     );
@@ -149,17 +185,24 @@ class CrapRichtext extends HTMLElement {
   }
 
   /**
+   * The stored value as a document of `schema`, or `null` when a JSON
+   * value cannot be loaded: it is not a document, or it holds a node, mark
+   * or attribute this field's editor does not have (e.g. a feature
+   * disabled after the content was written).
+   *
    * @param {any} PM
    * @param {HTMLTextAreaElement} textarea
    * @param {any} schema
    * @param {string} format
+   * @returns {any|null}
    */
   _parseInitialDoc(PM, textarea, schema, format) {
-    if (format === 'json' && textarea.value.trim()) {
+    if (format === 'json') {
+      if (!textarea.value.trim()) return schema.topNodeType.createAndFill();
       try {
         return PM.Node.fromJSON(schema, JSON.parse(textarea.value));
       } catch {
-        return schema.topNodeType.createAndFill();
+        return null;
       }
     }
     // Parse the stored HTML into an inert document: `DOMParser` output has
@@ -169,6 +212,34 @@ class CrapRichtext extends HTMLElement {
     // fires their error handlers even while the element is detached.
     const inert = new window.DOMParser().parseFromString(textarea.value || '', 'text/html');
     return PM.DOMParser.fromSchema(schema).parse(inert.body);
+  }
+
+  /**
+   * Show a stored value the editor cannot load as a read-only error
+   * instead of an empty editor — an empty editor would overwrite the
+   * stored content on the first keystroke. The textarea keeps the stored
+   * value and becomes read-only, so the value is submitted exactly as
+   * stored and cannot be edited: the server accepts a value the document
+   * already holds unchanged. Submitting it — rather than leaving it out —
+   * is what keeps it when the field sits in a row stored as JSON, where an
+   * absent key is a removed value.
+   *
+   * @param {HTMLTextAreaElement} textarea
+   */
+  _mountLoadError(textarea) {
+    this._loadFailed = true;
+    textarea.readOnly = true;
+
+    const root = /** @type {ShadowRoot} */ (this.shadowRoot);
+    root.adoptedStyleSheets = [sheet];
+    root.append(
+      h(
+        'div',
+        { class: ['richtext', 'richtext--load-error'] },
+        h('p', { class: 'richtext__load-error', role: 'alert', text: t('richtext.load_error') }),
+        h('pre', { class: 'richtext__load-error-source', text: textarea.value }),
+      ),
+    );
   }
 
   /**
@@ -206,6 +277,7 @@ class CrapRichtext extends HTMLElement {
     return new PM.EditorView(this._editorEl, {
       state,
       editable: () => !isReadonly,
+      attributes: (/** @type {any} */ st) => editorAttributes(st, textarea.placeholder),
       nodeViews: Object.fromEntries(
         this._customNodes.map((nd) => [
           nd.name,

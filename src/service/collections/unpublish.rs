@@ -1,14 +1,13 @@
 //! Collection document unpublish.
 
-use serde_json::Value;
-
 use crate::{
-    core::{Document, event::EventOperation},
+    core::{Document, EventViewPlacement, event::EventOperation},
     db::{AccessResult, query},
     hooks::AccessCheckInput,
     service::{
         Gated, ServiceContext, ServiceError, StateChange, helpers, invalidate_user_streams_if_auth,
-        persist_unpublish, run_after_change_hooks, run_pool_write, run_state_before_change,
+        persist_unpublish, require_unpublish_capability, run_after_change_hooks, run_pool_write,
+        run_state_before_change,
         write::{UploadSettle, document_file_keys, settle_upload_write},
     },
 };
@@ -27,16 +26,11 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Gated<Do
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
-    // Authoritative capability gate: unpublish sets `_status='draft'` and writes a
-    // version snapshot, both of which require versioning. Enforced here at the one
-    // service chokepoint so no surface (gRPC previously reached this ungated) can
-    // unpublish a non-versioned collection.
-    if !def.has_versions() {
-        return Err(ServiceError::HookError(format!(
-            "Collection '{}' does not support unpublish: versioning is not enabled",
-            ctx.slug
-        )));
-    }
+    // Authoritative capability gate: unpublish moves `_status` to `draft`,
+    // which only a drafts-enabled definition has. Without drafts the document
+    // stays public whatever unpublish records, so it is refused here at the one
+    // service chokepoint every surface reaches.
+    require_unpublish_capability(ctx)?;
 
     let access = write_hooks.check_access(
         &AccessCheckInput::builder("unpublish", ctx.slug)
@@ -60,10 +54,19 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Gated<Do
     // `no such column: title` on collections that have any localized field.
     let locale_ctx = ctx.default_locale_ctx();
 
+    // Lock before reading: the hooks below and the draft snapshot must see the
+    // row the status write lands on, not one a concurrent publish is about to
+    // replace (Postgres; no-op on SQLite).
+    conn.lock_row(ctx.slug, id)?;
+
     let doc = query::find_by_id_raw(conn, ctx.slug, def, id, locale_ctx.as_ref(), false)?
         .ok_or_else(|| {
             ServiceError::NotFound(format!("Document '{id}' not found in '{}'", ctx.slug))
         })?;
+
+    // Where the row sat going in: unpublishing a published document moves it
+    // out of the published view; one that is already a draft moves nowhere.
+    let prior = EventViewPlacement::from_fields(&doc.fields);
 
     let change = StateChange::Unpublish;
     let req_context = run_state_before_change(ctx, change, &doc, locale_ctx.as_ref())?;
@@ -76,7 +79,8 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Gated<Do
     // nothing naming it.
     let before_files = document_file_keys(ctx, def, id, locale_ctx.as_ref())?;
 
-    persist_unpublish(ctx, id)?;
+    // The stored row, stamped `_status = "draft"`.
+    let mut doc = persist_unpublish(ctx, id)?;
 
     // Only `_status` moved, so the published row still references exactly what
     // it did going in; what can go is a file only a pruned snapshot named.
@@ -86,10 +90,6 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Gated<Do
             .before(Some(&before_files))
             .build(),
     )?;
-
-    let mut doc = doc;
-    doc.fields
-        .insert("_status".to_string(), Value::String("draft".into()));
 
     // Hydrate join fields BEFORE after-change hooks so they see nested data.
     helpers::hydrate_reported(ctx, &mut doc, locale_ctx.as_ref())?;
@@ -104,8 +104,9 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Gated<Do
     )?;
 
     // The row as stored, before anything is shaped or stripped for the writer:
-    // the live event is built from it.
-    let row = ctx.event_row(&doc);
+    // the live event is built from it — and announces a removal to the
+    // subscribers that could only see it published.
+    let row = ctx.event_row(&doc).map(|row| row.moved_from(Some(prior)));
 
     helpers::strip_reported(ctx, write_hooks, &mut doc, locale_ctx.as_ref())?;
 

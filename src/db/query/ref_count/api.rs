@@ -55,11 +55,12 @@ pub fn get_ref_count_locked(
 
 /// Lock a trashed row for purging and return its reference count.
 ///
-/// `None` when the row is gone, no longer trashed, or trashed less than
-/// `retention_seconds` ago. The retention purge picks its candidates before it
-/// holds any lock; on Postgres a restore can commit in between. Re-checking the
-/// trash state under the same `FOR UPDATE` that guards the reference count keeps
-/// a just-restored document from being hard-deleted.
+/// `None` when the row is gone, no longer trashed, or — with
+/// `older_than_seconds` set — trashed less than that long ago. Every purge of
+/// the trash picks its candidates before it holds any lock, and a restore can
+/// commit in between. Re-checking the trash state under the same `FOR UPDATE`
+/// that guards the reference count keeps a just-restored document from being
+/// hard-deleted.
 ///
 /// # Errors
 ///
@@ -68,20 +69,32 @@ pub fn get_purgeable_ref_count_locked(
     conn: &dyn DbConnection,
     collection: &str,
     id: &str,
-    retention_seconds: i64,
+    older_than_seconds: Option<i64>,
 ) -> Result<Option<i64>> {
-    let p1 = conn.placeholder(1);
-    let (offset_sql, offset_param) = conn.date_offset_expr(retention_seconds, 2);
+    let mut params = vec![DbValue::Text(id.to_string())];
+
+    let age_sql = match older_than_seconds {
+        Some(seconds) => {
+            let (offset_sql, offset_param) = conn.date_offset_expr(seconds, 2);
+            params.push(offset_param);
+
+            format!(" AND _deleted_at < {offset_sql}")
+        }
+        None => String::new(),
+    };
+
     let for_update = if conn.is_postgres() {
         " FOR UPDATE"
     } else {
         ""
     };
+
     let sql = format!(
-        "SELECT _ref_count FROM \"{collection}\" WHERE id = {p1} \
-         AND _deleted_at IS NOT NULL AND _deleted_at < {offset_sql}{for_update}"
+        "SELECT _ref_count FROM \"{collection}\" WHERE id = {} \
+         AND _deleted_at IS NOT NULL{age_sql}{for_update}",
+        conn.placeholder(1)
     );
-    let row = conn.query_one(&sql, &[DbValue::Text(id.to_string()), offset_param])?;
+    let row = conn.query_one(&sql, &params)?;
 
     Ok(row.map(|r| match r.get_value(0) {
         Some(DbValue::Integer(n)) => *n,
@@ -1171,7 +1184,7 @@ mod tests {
         )
         .unwrap();
 
-        let week = 7 * 86_400;
+        let week = Some(7 * 86_400);
         assert_eq!(
             get_purgeable_ref_count_locked(&conn, "posts", "old", week).unwrap(),
             Some(0)
@@ -1186,6 +1199,17 @@ mod tests {
         );
         assert_eq!(
             get_purgeable_ref_count_locked(&conn, "posts", "gone", week).unwrap(),
+            None
+        );
+
+        // Without an age threshold any trashed row qualifies — a live one
+        // never does.
+        assert_eq!(
+            get_purgeable_ref_count_locked(&conn, "posts", "recent", None).unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            get_purgeable_ref_count_locked(&conn, "posts", "live", None).unwrap(),
             None
         );
     }

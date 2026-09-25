@@ -49,8 +49,10 @@ use crate::common::production_code;
 const ALLOWLIST: &[(&str, usize, &str)] = &[
     (
         "src/db/query/columns.rs",
-        1,
-        "per-field junction-table predicate (which field types own a join table), no tree descent",
+        2,
+        "per-field junction-table predicate (which field types own a join table) + \
+         per-type expected junction columns (array sub-fields via the shared \
+         flatten_array_sub_fields), no hand-rolled tree descent",
     ),
     (
         "src/core/field/storage.rs",
@@ -92,9 +94,14 @@ const ALLOWLIST: &[(&str, usize, &str)] = &[
         "per-variant FieldContext construction / enrichment (value map)",
     ),
     (
-        "src/admin/handlers/field_context/enrich/nested.rs",
-        2,
-        "enrich walk zips FieldContext with its defs — needs both, cannot use the classifier",
+        "src/admin/handlers/field_context/enrich/nested/dispatch.rs",
+        1,
+        "construct_sub_variant — per-variant typed sub-field FieldContext constructor (value map)",
+    ),
+    (
+        "src/admin/handlers/field_context/enrich/nested/sub_field.rs",
+        1,
+        "stringify_sub_field_value — per-type row value stringification (value map)",
     ),
     (
         "src/admin/handlers/forms/join_data.rs",
@@ -153,7 +160,12 @@ const ALLOWLIST: &[(&str, usize, &str)] = &[
         "per-type expected default_value JSON type (value map)",
     ),
     (
-        "src/hooks/lua_api/parse/fields/single.rs",
+        "src/hooks/lua_api/parse/admin.rs",
+        1,
+        "picker_values — per-type allowed admin.picker values (value map)",
+    ),
+    (
+        "src/hooks/lua_api/parse/fields/single/keys.rs",
         1,
         "type_specific_field_keys — per-type allowed schema keys, exhaustive (value map)",
     ),
@@ -163,7 +175,7 @@ const ALLOWLIST: &[(&str, usize, &str)] = &[
         "field_schema — per-type JSON Schema (value map)",
     ),
     (
-        "src/admin/handlers/field_context/builder/single.rs",
+        "src/admin/handlers/field_context/builder/single/entry.rs",
         1,
         "construct_field_variant — per-variant typed FieldContext constructor (value map)",
     ),

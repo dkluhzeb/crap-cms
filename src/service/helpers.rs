@@ -303,13 +303,13 @@ impl StateChange {
 /// The stored document is the hook's `ctx.data`, and a hook may not replace it
 /// — a state write carries no field edits — so only the request context
 /// travels on to [`run_after_change_hooks`]. An error here aborts the write
-/// before anything has moved. Unpublish and undelete share this so neither can
-/// drift on what a hook sees.
+/// before anything has moved. Collection and global unpublish and undelete
+/// share this so none can drift on what a hook sees.
 ///
 /// # Errors
 ///
 /// Returns the hook's own error, or an internal error when no connection,
-/// write hooks or collection definition is attached.
+/// write hooks or definition is attached.
 pub(crate) fn run_state_before_change(
     ctx: &ServiceContext,
     change: StateChange,
@@ -318,23 +318,18 @@ pub(crate) fn run_state_before_change(
 ) -> Result<ReqContext, ServiceError> {
     let conn = ctx.resolve_conn()?;
     let write_hooks = ctx.write_hooks()?;
-    let def = ctx.collection_def()?;
+    let hooks = ctx.hooks()?;
 
-    let hook_ctx = HookContext::builder(ctx.slug, change.operation())
+    let hook_ctx = ctx
+        .hook_context(change.operation())
         .data(doc.fields.clone())
         .document_id(doc.id.to_string())
         .draft(change.is_draft())
         .locale(locale_ctx.map(LocaleContext::access_locale))
-        .user(ctx.user)
-        .ui_locale(ctx.ui_locale.as_deref())
         .build();
 
-    let final_ctx = write_hooks.run_hooks_with_conn(
-        &def.hooks,
-        HookEvent::BeforeChange,
-        hook_ctx,
-        conn.as_ref(),
-    )?;
+    let final_ctx =
+        write_hooks.run_hooks_with_conn(hooks, HookEvent::BeforeChange, hook_ctx, conn.as_ref())?;
 
     Ok(final_ctx.context)
 }
@@ -416,6 +411,32 @@ pub(crate) fn enforce_access_constraints(
     }
 
     Ok(())
+}
+
+/// Whether `access` — an access outcome for row `id` — admits that row: an
+/// allow does, a denial does not, a filter table when the row matches it (the
+/// row check [`enforce_access_constraints`] runs). For a surface that decides
+/// on a row without writing it — a snapshot's visibility, a write's
+/// confirmation page — so it admits exactly the rows the write would.
+///
+/// # Errors
+///
+/// Returns a backend error if the constraint count query fails.
+pub(crate) fn access_admits_row(
+    ctx: &ServiceContext,
+    id: &str,
+    access: &AccessResult,
+    include_deleted: bool,
+) -> Result<bool, ServiceError> {
+    if matches!(access, AccessResult::Denied) {
+        return Ok(false);
+    }
+
+    match enforce_access_constraints(ctx, id, access, "Row", include_deleted) {
+        Ok(()) => Ok(true),
+        Err(ServiceError::AccessDenied(_)) => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 /// Rewrite a list read's dotted group sort (`seo.title`, `-seo.title`) to the
@@ -542,6 +563,8 @@ pub(crate) fn finish_cursor_overfetch(
 mod tests {
     use std::cell::Cell;
 
+    #[cfg(feature = "sqlite")]
+    use rusqlite::Connection;
     use serde_json::json;
 
     use super::*;
@@ -567,6 +590,38 @@ mod tests {
                 change.operation()
             );
         }
+    }
+
+    /// An allow admits every row, a denial none, a filter table exactly the
+    /// rows it matches — judged against the stored row.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn access_admits_row_judges_a_filter_table_against_the_row() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY, owner TEXT, created_at TEXT, updated_at TEXT);
+            INSERT INTO posts (id, owner) VALUES ('p1', 'u1');",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![FieldDefinition::builder("owner", FieldType::Text).build()];
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .build();
+
+        let owner_is = |owner: &str| {
+            AccessResult::Constrained(vec![FilterClause::Single(Filter {
+                field: "owner".to_string(),
+                op: FilterOp::Equals(owner.to_string()),
+            })])
+        };
+        let admits = |access: &AccessResult| access_admits_row(&ctx, "p1", access, false).unwrap();
+
+        assert!(admits(&AccessResult::Allowed));
+        assert!(!admits(&AccessResult::Denied));
+        assert!(admits(&owner_is("u1")));
+        assert!(!admits(&owner_is("u2")));
     }
 
     /// Write hooks that run nothing.

@@ -13,7 +13,9 @@ use crate::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
             LuaCrudInfra,
-            execution::{AfterReadCtx, apply_after_read_inner, has_field_hooks_for_event},
+            execution::{
+                AfterReadCtx, FieldHookMeta, apply_after_read_inner, has_field_hooks_for_event,
+            },
             types::{FieldHookEvent, TxContextGuard},
             validation::{
                 richtext_attrs::{apply_node_attr_before_validate, has_node_attr_before_validate},
@@ -197,7 +199,23 @@ impl HookRunner {
         )?;
 
         // Run before_validate hooks on richtext node attrs (normalize attr values)
-        self.run_richtext_node_attr_before_validate(fields, &mut ctx.data, &ctx.collection);
+        let wctx = FieldWriteCtx::builder(val_ctx.conn)
+            .user(ctx.user.as_ref())
+            .ui_locale(ctx.ui_locale.as_deref())
+            .infra(infra.clone())
+            .build();
+
+        self.run_richtext_node_attr_before_validate(
+            fields,
+            &mut ctx.data,
+            &FieldHookMeta {
+                collection: &ctx.collection,
+                operation: &ctx.operation,
+                id: ctx.document_id.as_deref(),
+                locale: val_ctx.locale_ctx.map(LocaleContext::access_locale),
+            },
+            wctx,
+        )?;
 
         // Collection-level before_validate
         let ctx = self.run_hooks_with_conn(
@@ -289,26 +307,36 @@ impl HookRunner {
     }
 
     /// Run `before_validate` hooks on richtext node attrs within field data,
-    /// at any depth. The VM is acquired only when some field has such hooks.
+    /// at any depth. The VM is acquired only when some field has such hooks;
+    /// like field hooks, they run with the write's transaction, user and UI
+    /// locale injected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no VM can be acquired or a hook fails — the write
+    /// must not proceed with an attr value its hook never normalized.
     fn run_richtext_node_attr_before_validate(
         &self,
         fields: &[FieldDefinition],
         data: &mut DocumentFields,
-        collection: &str,
-    ) {
+        meta: &FieldHookMeta<'_>,
+        wctx: FieldWriteCtx<'_>,
+    ) -> Result<()> {
         if !has_node_attr_before_validate(fields, &self.registry) {
-            return;
+            return Ok(());
         }
 
-        let lua = match self.pool.acquire() {
-            Ok(l) => l,
-            Err(e) => {
-                tracing::warn!("VM pool error in richtext node attr before_validate: {}", e);
-                return;
-            }
-        };
+        let lua = self.pool.acquire()?;
 
-        apply_node_attr_before_validate(&lua, fields, data, &self.registry, collection);
+        let _guard = TxContextGuard::set(
+            &lua,
+            wctx.conn,
+            wctx.user.cloned(),
+            wctx.ui_locale.map(ToString::to_string),
+            wctx.infra,
+        );
+
+        apply_node_attr_before_validate(&lua, fields, data, &self.registry, meta)
     }
 
     /// Validate field data against field definitions.

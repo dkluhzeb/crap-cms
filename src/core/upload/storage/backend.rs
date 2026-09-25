@@ -5,7 +5,7 @@ use std::{fmt, path::PathBuf, sync::Arc};
 
 use anyhow::{Result, bail};
 
-use crate::core::upload::storage::range::{ByteRange, RangedObject, slice_locally};
+use crate::core::upload::storage::range::{ByteRange, ObjectMeta, RangedObject, whole_or_slice};
 
 /// Thread-safe shared reference to a storage backend.
 pub type SharedStorage = Arc<dyn StorageBackend>;
@@ -98,8 +98,8 @@ pub trait StorageBackend: Send + Sync {
     ///
     /// The default implementation reads the whole object through
     /// [`get`](Self::get) and slices locally, so a backend that only knows how
-    /// to hand over whole files — the Lua [`custom`](super::custom) backend,
-    /// whose bytes contract must not change — keeps working untouched. A
+    /// to hand over whole files — the Lua [`custom`](super::custom) backend
+    /// without ranged handlers — keeps working untouched. A
     /// backend that can push the range down to its remote (S3 sends an HTTP
     /// `Range` header) overrides this so a ranged request never transfers the
     /// whole object.
@@ -113,13 +113,32 @@ pub trait StorageBackend: Send + Sync {
     /// confirmed miss, any other error for a transient or infrastructure
     /// failure.
     fn get_range(&self, key: &str, range: Option<ByteRange>) -> Result<Option<RangedObject>> {
-        let data = self.get(key)?;
+        Ok(whole_or_slice(self.get(key)?, range.as_ref()))
+    }
 
-        let Some(range) = range else {
-            return Ok(Some(RangedObject::whole(data).build()));
-        };
-
-        Ok(slice_locally(&data, &range))
+    /// An object's size and validators, read without transferring its bytes
+    /// (S3 answers a `HEAD`).
+    ///
+    /// `Ok(None)` means the backend cannot tell without reading the object —
+    /// the default, and the Lua [`custom`](super::custom) backend's answer
+    /// unless it registered `stat` and `get_range` handlers.
+    /// The serve route then reads the object through
+    /// [`get_range`](Self::get_range) in one piece.
+    ///
+    /// A backend that returns `Some` promises that its `get_range` fetches
+    /// only the requested bytes from the remote: the serve route answers
+    /// conditional requests from this metadata alone and streams the body as
+    /// a series of bounded ranged reads, so memory per request stays bounded
+    /// whatever the object's size.
+    ///
+    /// # Errors
+    ///
+    /// Same contract as [`get`](Self::get): [`StorageNotFound`] for a
+    /// confirmed miss, any other error for a transient or infrastructure
+    /// failure.
+    fn stat(&self, key: &str) -> Result<Option<ObjectMeta>> {
+        let _ = key;
+        Ok(None)
     }
 
     /// Delete a file. No error if the key doesn't exist.

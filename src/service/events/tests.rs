@@ -14,7 +14,7 @@ use crate::{
     hooks,
 };
 
-fn fixture_dir() -> PathBuf {
+pub(super) fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
 }
 
@@ -99,7 +99,7 @@ fn draft_axis_resolves_identically_for_collections_and_globals() {
 fn global_draft_event_is_gated_by_the_draft_view() {
     let draft_event = EventViewMeta {
         status: Some("draft".to_string()),
-        trashed: false,
+        ..EventViewMeta::default()
     };
 
     let open = EventViewGate {
@@ -167,7 +167,7 @@ fn leak_delivery(user: Option<&Document>, data: DocumentFields) -> Map<String, V
         user_doc: user,
     };
 
-    gate.evaluate(&event).expect("event must be delivered")
+    gate.evaluate(&event).expect("event must be delivered").data
 }
 
 /// The stored `event_leak` row: every field set, `secret` (read-denied to
@@ -334,7 +334,7 @@ fn deliver(
         user_doc: None,
     };
 
-    gate.evaluate(event)
+    gate.evaluate(event).map(|delivery| delivery.data)
 }
 
 /// Whether a subscriber constrained by `constraint` receives `event`.

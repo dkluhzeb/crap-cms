@@ -11,8 +11,9 @@
 //! Scope: EVERY `HookRef` the definition model can carry — collection +
 //! global hooks, access rules, live filters, field hooks, field access,
 //! `required_when` / `validate` predicates, field display conditions, job
-//! handler/access refs, and auth method refs (strategy `authenticate`,
-//! `mfa_when`, `mfa_deliver`) — plus the `[admin] access` config gate. Only
+//! handler/access refs, auth method refs (strategy `authenticate`,
+//! `mfa_when`, `mfa_deliver`) and the refs on custom rich text node attrs —
+//! plus the `[admin] access` config gate. Only
 //! dynamic registrations (via `crap.hooks.register`, which passes a live
 //! function rather than a string ref) have nothing to validate here. The pin
 //! test at the bottom scans `src/core` for `HookRef`-typed keys and fails when
@@ -35,7 +36,7 @@ use crate::hooks::lifecycle::resolve_hook_function;
 /// single aggregated message listing every unresolved ref and its source.
 ///
 /// Must be called after `init_lua` so `require(...)` can locate modules
-/// under `{config_dir}/hooks/` (path configured by `setup_package_paths`).
+/// under `{config_dir}/hooks/` (path configured by `install_module_loader`).
 ///
 /// # Errors
 ///
@@ -46,6 +47,7 @@ pub fn validate_hook_references(lua: &Lua, registry: &Registry) -> Result<()> {
     check_collections(lua, registry, &mut missing);
     check_globals(lua, registry, &mut missing);
     check_jobs(lua, registry, &mut missing);
+    check_richtext_nodes(lua, registry, &mut missing);
 
     if missing.is_empty() {
         return Ok(());
@@ -122,6 +124,15 @@ fn check_jobs(lua: &Lua, registry: &Registry, out: &mut Vec<String>) {
             &format!("job '{slug}': access"),
             out,
         );
+    }
+}
+
+/// A custom rich text node's attrs are fields: their `before_validate` hooks
+/// and `validate` functions fail the write when unresolvable, so a typo fails
+/// to boot instead.
+fn check_richtext_nodes(lua: &Lua, registry: &Registry, out: &mut Vec<String>) {
+    for (name, def) in &registry.richtext_nodes {
+        check_field_list(lua, &def.attrs, &format!("richtext node '{name}'"), out);
     }
 }
 
@@ -372,23 +383,32 @@ fn check_one_field(lua: &Lua, f: &FieldDefinition, field_src: &str, out: &mut Ve
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-    use std::fs::{read_dir, read_to_string};
-    use std::path::Path;
+    use std::{
+        collections::BTreeSet,
+        fs::{read_dir, read_to_string},
+        path::Path,
+        sync::Arc,
+    };
 
     use mlua::{Lua, LuaOptions, StdLib};
 
-    use crate::core::{
-        CollectionDefinition, FieldDefinition, FieldType, GlobalDefinition, Registry,
-        collection::{Activation, Auth, AuthMethod, MfaMode, SurfaceSet},
-        job::JobDefinition,
+    use crate::{
+        config::CrapConfig,
+        core::{
+            CollectionDefinition, FieldDefinition, FieldType, GlobalDefinition, Registry,
+            RichtextNodeDef,
+            collection::{Activation, Auth, AuthMethod, MfaMode, SurfaceSet},
+            job::JobDefinition,
+        },
+        hooks::{IoJail, sandbox_lua},
     };
 
     use super::*;
 
     fn sandboxed_lua() -> Lua {
         let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default()).unwrap();
-        crate::hooks::sandbox_lua(&lua).unwrap();
+        let jail = Arc::new(IoJail::new(Path::new("."), &CrapConfig::default()).unwrap());
+        sandbox_lua(&lua, &jail).unwrap();
         lua
     }
 
@@ -418,6 +438,34 @@ mod tests {
             msg.contains("hooks.missing.module"),
             "expected ref in msg: {msg}"
         );
+    }
+
+    /// Regression: a custom rich text node's attr hooks were never checked at
+    /// startup, and a missing `before_validate` hook was skipped at write time.
+    #[test]
+    fn validate_hook_references_reports_missing_richtext_node_attr_hook() {
+        let lua = sandboxed_lua();
+        let mut registry = Registry::new();
+        registry.register_richtext_node(
+            RichtextNodeDef::builder("cta", "CTA")
+                .attrs(vec![
+                    FieldDefinition::builder("url", FieldType::Text)
+                        .hooks(FieldHooks {
+                            before_validate: vec![HookRef::new("hooks.missing.normalize")],
+                            ..Default::default()
+                        })
+                        .build(),
+                ])
+                .build(),
+        );
+
+        let msg = format!(
+            "{:#}",
+            validate_hook_references(&lua, &registry).unwrap_err()
+        );
+        assert!(msg.contains("richtext node 'cta'"), "{msg}");
+        assert!(msg.contains("field 'url': before_validate"), "{msg}");
+        assert!(msg.contains("hooks.missing.normalize"), "{msg}");
     }
 
     /// Missing field-level access ref surfaces with the field name too.

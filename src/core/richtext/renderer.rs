@@ -26,9 +26,20 @@ where
     F: Fn(&str, &Value) -> Option<String>,
 {
     let parsed: Value = serde_json::from_str(json_str).map_err(|e| format!("Invalid JSON: {e}"))?;
+
+    Ok(render_prosemirror_document(&parsed, custom_renderer))
+}
+
+/// Render an already-parsed `ProseMirror` document to HTML — the same output
+/// as [`render_prosemirror_to_html`] for its JSON text.
+#[must_use]
+pub fn render_prosemirror_document<F>(doc: &Value, custom_renderer: &F) -> String
+where
+    F: Fn(&str, &Value) -> Option<String>,
+{
     let mut out = String::new();
-    render_node(&parsed, custom_renderer, &mut out);
-    Ok(out)
+    render_node(doc, custom_renderer, &mut out);
+    out
 }
 
 pub(super) fn render_node<F>(node: &Value, custom_renderer: &F, out: &mut String)
@@ -206,26 +217,38 @@ where
     result
 }
 
-/// Check if a URL uses a safe protocol (or is relative/anchor).
-fn is_safe_url(url: &str) -> bool {
-    let trimmed = url.trim_start();
+/// The URL schemes a rendered link may use. Every other scheme (`javascript:`,
+/// `data:`, `vbscript:`, …) is replaced by `#`. The admin editor applies the
+/// same rule to links it loads, pastes and inserts.
+const SAFE_LINK_SCHEMES: &[&str] = &["http", "https", "mailto", "tel"];
 
-    if trimmed.is_empty() {
+/// Whether a link URL is safe to render: relative (no scheme — a path, `#`,
+/// `?` or `//host` reference) or using an allowlisted scheme.
+///
+/// The scheme is read the way a browser reads it: leading whitespace and
+/// control characters are ignored and tabs/newlines inside the URL are
+/// removed, so `" java\tscript:"` is still `javascript:`.
+fn is_safe_url(url: &str) -> bool {
+    let cleaned: String = url
+        .trim_start_matches(|c: char| c <= ' ')
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
+
+    if cleaned.is_empty() {
         return false;
     }
 
-    // Relative URLs, anchors, query strings are safe
-    if trimmed.starts_with('/') || trimmed.starts_with('#') || trimmed.starts_with('?') {
+    let Some(end) = cleaned.find([':', '/', '?', '#']) else {
+        return true;
+    };
+
+    if !cleaned[end..].starts_with(':') {
         return true;
     }
 
-    // Allowlisted protocols
-    let lower = trimmed.to_lowercase();
-    lower.starts_with("http://")
-        || lower.starts_with("https://")
-        || lower.starts_with("mailto:")
-        || lower.starts_with("tel:")
-        || lower.starts_with("ftp://")
+    let scheme = cleaned[..end].to_ascii_lowercase();
+    SAFE_LINK_SCHEMES.contains(&scheme.as_str())
 }
 
 pub(crate) fn html_escape(s: &str) -> String {
@@ -521,8 +544,9 @@ mod tests {
         assert!(is_safe_url("http://example.com"));
         assert!(is_safe_url("mailto:a@b.com"));
         assert!(is_safe_url("tel:+1234567890"));
-        assert!(is_safe_url("ftp://files.example.com"));
         assert!(is_safe_url("/path"));
+        assert!(is_safe_url("page.html"));
+        assert!(is_safe_url("//cdn.example.com/x"));
         assert!(is_safe_url("#anchor"));
         assert!(is_safe_url("?query=1"));
 
@@ -533,6 +557,22 @@ mod tests {
         assert!(!is_safe_url("vbscript:msgbox"));
         assert!(!is_safe_url(""));
         assert!(!is_safe_url("  javascript:alert(1)"));
+        assert!(!is_safe_url("java\tscript:alert(1)"));
+        assert!(!is_safe_url("\u{1}javascript:alert(1)"));
+        // No longer allowlisted: browsers dropped FTP, and the editor never
+        // accepted it.
+        assert!(!is_safe_url("ftp://files.example.com"));
+    }
+
+    #[test]
+    fn document_render_matches_text_render() {
+        let json = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Hi"}]}]}"#;
+        let doc: Value = serde_json::from_str(json).unwrap();
+
+        assert_eq!(
+            render_prosemirror_document(&doc, &no_custom),
+            render_prosemirror_to_html(json, &no_custom).unwrap()
+        );
     }
 
     mod fuzz {

@@ -8,7 +8,8 @@ use crate::{
     core::FieldDefinition,
     db::{
         DbConnection,
-        query::helpers::{prefixed_name, walk_leaf_fields},
+        migrate::collection::append_default_value_for,
+        query::helpers::{prefixed_name, quote_ident, walk_leaf_fields},
     },
 };
 
@@ -41,6 +42,32 @@ impl ColumnSpec<'_> {
         } else {
             conn.column_type_for(&self.field.field_type)
         }
+    }
+
+    /// The full column definition of `col_name` (the spec's column, or one of
+    /// its locale columns): the quoted name, the [`Self::ddl_type`], and the
+    /// field's DEFAULT — the one definition every CREATE TABLE and ALTER TABLE
+    /// ADD COLUMN of a collection or global uses.
+    ///
+    /// It never carries `NOT NULL`: `required` is enforced by validation on
+    /// every write surface, which also knows when it does not apply (a draft
+    /// save, a non-default locale). A constraint baked into the table would
+    /// outlive the definition that asked for it — removing `required`,
+    /// enabling drafts or removing the field would leave every write that
+    /// omits the value failing at the database. A companion column carries no
+    /// default either.
+    pub(in crate::db::migrate) fn column_def(
+        &self,
+        conn: &dyn DbConnection,
+        col_name: &str,
+    ) -> String {
+        let mut col = format!("{} {}", quote_ident(col_name), self.ddl_type(conn));
+
+        if !self.companion_text {
+            append_default_value_for(&mut col, self.field);
+        }
+
+        col
     }
 }
 

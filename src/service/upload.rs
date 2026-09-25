@@ -100,11 +100,10 @@ fn judge_write_access(
 ) -> Result<()> {
     let def = ctx.collection_def()?;
     let locale = probe.locale_ctx.map(LocaleContext::access_locale);
-    let ui_locale = probe.ui_locale.as_deref();
 
     match id {
-        Some(id) => check_update_access(ctx, write_hooks, def, id, &probe.data, locale, ui_locale),
-        None => check_create_access(ctx, write_hooks, def, &probe.data, locale, ui_locale),
+        Some(id) => check_update_access(ctx, write_hooks, def, id, &probe.data, locale),
+        None => check_create_access(ctx, write_hooks, def, &probe.data, locale),
     }
 }
 
@@ -260,7 +259,6 @@ pub struct CreateUploadInput<'a> {
     /// needs the context to address `title__en` rather than a bare `title`.
     pub locale_ctx: Option<&'a LocaleContext>,
     pub password: Option<String>,
-    pub ui_locale: Option<String>,
     pub draft: bool,
     pub upload_max_file_size: u64,
     /// `max_attempts` the queued conversions are inserted with. Derived from
@@ -277,7 +275,6 @@ pub struct UpdateUploadInput<'a> {
     pub form: FormData,
     pub locale_ctx: Option<&'a LocaleContext>,
     pub password: Option<String>,
-    pub ui_locale: Option<String>,
     pub draft: bool,
     pub upload_max_file_size: u64,
     /// See [`CreateUploadInput::image_max_attempts`].
@@ -291,19 +288,17 @@ pub struct UpdateUploadInput<'a> {
     pub form_echoes_locked_fields: bool,
 }
 
-/// The builder of an upload write on `data`: the request's locale, draft
-/// flag and UI locale, with the server-derived upload columns trusted (they
+/// The builder of an upload write on `data`: the request's locale and draft
+/// flag, with the server-derived upload columns trusted (they
 /// were injected from the inspected file, never taken from the caller).
 fn upload_write(
     data: impl Into<DocumentFields>,
     locale_ctx: Option<&LocaleContext>,
     draft: bool,
-    ui_locale: Option<String>,
 ) -> WriteInputBuilder<'_> {
     WriteInput::builder(data)
         .locale_ctx(locale_ctx)
         .draft(draft)
-        .ui_locale(ui_locale)
         .trusted_upload_metadata(true)
 }
 
@@ -318,12 +313,7 @@ fn store_create_file(
     let inspected = inspect_file(upload, input.file, input.upload_max_file_size)?;
 
     let probe = probe_form(&input.form, &inspected, upload);
-    let precheck = upload_write(
-        probe,
-        input.locale_ctx,
-        input.draft,
-        input.ui_locale.clone(),
-    );
+    let precheck = upload_write(probe, input.locale_ctx, input.draft);
     precheck_write_access(ctx, None, precheck.build())?;
 
     let (guard, queued) = store_file(ctx, input.storage, inspected, &mut input.form)?;
@@ -353,7 +343,7 @@ pub fn create_upload(
 
     let (stored, conversions) = store_create_file(ctx, &mut input)?;
 
-    let write = upload_write(input.form, input.locale_ctx, input.draft, input.ui_locale)
+    let write = upload_write(input.form, input.locale_ctx, input.draft)
         .password(input.password.as_deref())
         .upload_conversions(Some(conversions));
     let (doc, req_context) = create_document(ctx, write.build())?;
@@ -399,13 +389,7 @@ fn update_precheck<'a>(
         input.form_echoes_locked_fields,
     );
 
-    upload_write(
-        probe,
-        input.locale_ctx,
-        input.draft,
-        input.ui_locale.clone(),
-    )
-    .build()
+    upload_write(probe, input.locale_ctx, input.draft).build()
 }
 
 /// Inspect the update's replacement file (if it carries one), pre-check the
@@ -461,7 +445,7 @@ pub fn update_upload(
         input.locale_ctx,
         input.form_echoes_locked_fields,
     );
-    let write = upload_write(data, input.locale_ctx, input.draft, input.ui_locale)
+    let write = upload_write(data, input.locale_ctx, input.draft)
         .password(input.password.as_deref())
         .upload_conversions(conversions);
     let (doc, req_context) = update_document(ctx, input.id, write.build())?;

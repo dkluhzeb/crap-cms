@@ -10,7 +10,7 @@ use crate::{
     config::LocaleConfig,
     core::{
         Builder, CollectionDefinition, DocumentFields, FieldChildren, FieldDefinition, FieldType,
-        canonicalize_text_values, field_children, nest_group_fields,
+        Registry, canonicalize_text_values, field_children, nest_group_fields,
     },
     db::{
         DbConnection, DbValue,
@@ -36,6 +36,9 @@ pub(super) struct ImportTarget<'a> {
     /// an auth collection.
     #[builder(default = Vec::new())]
     pub(super) credential_columns: Vec<&'static str>,
+    /// Resolves rich text custom nodes' `searchable_attrs` for the search
+    /// index, as a write through the service layer resolves them.
+    pub(super) registry: Option<&'a Registry>,
 }
 
 impl<'a> ImportTarget<'a> {
@@ -54,6 +57,13 @@ impl<'a> ImportTarget<'a> {
         Ok(Self::builder(slug, def, locale)
             .credential_columns(credential_columns)
             .build())
+    }
+
+    /// Index imported documents with `registry`'s rich text custom nodes.
+    #[must_use]
+    pub(super) fn with_registry(mut self, registry: &'a Registry) -> Self {
+        self.registry = Some(registry);
+        self
     }
 }
 

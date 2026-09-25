@@ -79,11 +79,37 @@ export const sheet = css`
     resize: vertical;
   }
   .richtext--no-resize .richtext__editor { resize: none; }
+
+  .richtext--load-error { border-color: var(--color-danger, #ff4d4f); }
+  .richtext__load-error {
+    margin: 0;
+    padding: var(--space-sm, 0.5rem) var(--space-md, 0.75rem);
+    background: var(--color-danger-bg, rgba(255, 77, 79, 0.06));
+    color: var(--color-danger, #ff4d4f);
+    font-size: var(--text-sm, 0.8125rem);
+  }
+  .richtext__load-error-source {
+    margin: 0;
+    padding: var(--space-md, 0.75rem);
+    max-height: 15rem;
+    overflow: auto;
+    font-size: var(--text-xs, 0.75rem);
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--text-secondary, rgba(0,0,0,0.65));
+  }
   .richtext__editor:focus { outline: none; }
 
   .ProseMirror {
     outline: none;
     min-height: 4rem;
+  }
+  .ProseMirror[data-placeholder]::before {
+    content: attr(data-placeholder);
+    float: left;
+    height: 0;
+    pointer-events: none;
+    color: var(--text-tertiary, rgba(0,0,0,0.4));
   }
   .ProseMirror p {
     margin: 0 0 var(--space-sm, 0.5rem);
@@ -236,20 +262,22 @@ export const sheet = css`
     color: var(--text-primary, rgba(0,0,0,0.88));
   }
   .crap-node-modal__body {
+    --field-gap: var(--space-md, 0.75rem);
     padding: var(--space-lg, 1rem);
     display: flex;
     flex-wrap: wrap;
-    gap: var(--space-md, 0.75rem);
+    gap: var(--field-gap);
   }
   .crap-node-modal__field {
-    flex: 1 1 100%;
+    flex: 0 1 var(--field-basis, 100%);
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: var(--space-xs, 0.25rem);
   }
-  .crap-node-modal__field[data-field-width="50"]  { flex: 1 1 calc(50% - var(--space-md, 0.75rem) / 2); min-width: 0; }
-  .crap-node-modal__field[data-field-width="33"]  { flex: 1 1 calc(33.33% - var(--space-md, 0.75rem)); min-width: 0; }
-  .crap-node-modal__field[data-field-width="25"]  { flex: 1 1 calc(25% - var(--space-md, 0.75rem)); min-width: 0; }
+  /* admin.width: named widths here, any other CSS width via field-width.js. */
+  .crap-node-modal__field[data-field-width="half"] { --field-basis: calc((100% - var(--field-gap)) / 2); }
+  .crap-node-modal__field[data-field-width="third"] { --field-basis: calc((100% - 2 * var(--field-gap)) / 3); }
   .crap-node-modal__label {
     font-size: var(--text-sm, 0.8125rem);
     font-weight: 500;

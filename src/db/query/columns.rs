@@ -175,10 +175,15 @@ pub fn join_fields(fields: &[FieldDefinition]) -> Vec<(String, &FieldDefinition)
     let mut found = Vec::new();
 
     let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
-        if matches!(
-            field.field_type,
-            FieldType::Array | FieldType::Blocks | FieldType::Relationship | FieldType::Upload
-        ) {
+        let has_join_table = match field.field_type {
+            FieldType::Array | FieldType::Blocks => true,
+            // A has-one reference lives in a column of the owning table; a
+            // junction left by the field's has-many past is a leftover.
+            FieldType::Relationship | FieldType::Upload => !field.has_parent_column(),
+            _ => false,
+        };
+
+        if has_join_table {
             found.push((prefixed_name(prefix, &field.name), field));
         }
 
@@ -253,7 +258,7 @@ fn collect_valid_filter_names(fields: &[FieldDefinition], valid: &mut HashSet<St
 mod tests {
     use super::*;
     use crate::config::LocaleConfig;
-    use crate::core::{FieldAdmin, FieldTab, FieldType, VersionsConfig};
+    use crate::core::{FieldAdmin, FieldTab, FieldType, RelationshipConfig, VersionsConfig};
     use crate::db::query::test_helpers::*;
 
     #[test]
@@ -944,7 +949,12 @@ mod tests {
                 "meta",
                 vec![FieldDefinition::builder("items", FieldType::Array).build()],
             ),
-            make_field("tags", FieldType::Relationship),
+            FieldDefinition::builder("tags", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("tags", true))
+                .build(),
+            FieldDefinition::builder("author", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("users", false))
+                .build(),
         ];
 
         let names: Vec<String> = join_fields(&fields)
@@ -953,6 +963,10 @@ mod tests {
             .collect();
 
         assert_eq!(names, join_field_names(&fields));
-        assert_eq!(names, vec!["meta__items", "tags"]);
+        assert_eq!(
+            names,
+            vec!["meta__items", "tags"],
+            "a has-one reference has no junction table"
+        );
     }
 }

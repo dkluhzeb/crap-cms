@@ -23,7 +23,7 @@ use crate::{
     admin::{
         context::field::{
             ArrayField, BaseFieldData, BlockDefinition, BlocksField, CodeField, ConditionData,
-            FieldContext, TabPanel, TextareaField, ValidationAttrs,
+            FieldContext, TabPanel, TextareaField, ValidationAttrs, WidthAttrs,
         },
         handlers::{
             field_context::{
@@ -152,6 +152,7 @@ fn build_child_base(
         extra: child.admin.extra.clone(),
         error: opts.errors.get(child_name).cloned(),
         validation: ValidationAttrs::default(),
+        layout: WidthAttrs::from_width(child.admin.width.as_ref()),
         condition: ConditionData::default(),
     }
 }

@@ -31,4 +31,4 @@ Each option is a table with:
 
 ## Admin Rendering
 
-Renders as a group of radio buttons (one selectable at a time). Functionally identical to [Select](select.md) but with a different UI presentation — use radio when there are few options and you want them all visible at once.
+Renders as a group of radio buttons (one selectable at a time). Functionally identical to [Select](select.md) but with a different UI presentation — use radio when there are few options and you want them all visible at once. A removed option a document already holds is kept the same way — see [Removing an Option](select.md#removing-an-option).

@@ -10,7 +10,11 @@
 
 mod before_validate;
 mod extract;
+mod held;
 mod validate;
 
 pub(crate) use before_validate::{apply_node_attr_before_validate, has_node_attr_before_validate};
-pub(crate) use validate::{RichtextValidationCtx, validate_richtext_node_attrs};
+pub(in crate::hooks::lifecycle::validation) use held::NodeAttrSite;
+pub(in crate::hooks::lifecycle::validation) use validate::{
+    RichtextValidationCtx, validate_richtext_node_attrs,
+};

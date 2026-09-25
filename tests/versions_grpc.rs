@@ -1410,7 +1410,13 @@ fn persist_unpublish_sets_draft_status() {
         .into_iter()
         .collect();
     let doc = query::create(&conn, "articles", &def, &create_data, None).unwrap();
-    query::set_document_status(&conn, "articles", &doc.id, "published").unwrap();
+    query::set_document_status(
+        &conn,
+        query::StatusTable::new("articles", true),
+        &doc.id,
+        "published",
+    )
+    .unwrap();
 
     // Call persist_unpublish
     let ctx = service::ServiceContext::collection("articles", &def)

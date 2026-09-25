@@ -13,11 +13,15 @@
 )]
 #![cfg(feature = "sqlite")]
 
-//! CLI integration tests: roundtrip, typegen, migrate, backup, blueprint, jobs.
+//! CLI integration tests: roundtrip, typegen, migrate, backup, jobs.
 //!
 //! Split from `cli_integration.rs` for faster parallel compilation.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::process::Command;
 use std::sync::Arc;
 
 use crap_cms::commands;
@@ -69,26 +73,6 @@ fn copy_dir(src: &Path, dst: &Path) {
         let entry = entry.unwrap();
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir(&src_path, &dst_path);
-        } else {
-            std::fs::copy(&src_path, &dst_path).unwrap();
-        }
-    }
-}
-
-/// Recursively copy a directory, skipping named subdirs/files.
-fn copy_dir_skip(src: &Path, dst: &Path, skip: &[&str]) {
-    std::fs::create_dir_all(dst).unwrap();
-    for entry in std::fs::read_dir(src).unwrap() {
-        let entry = entry.unwrap();
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if skip.iter().any(|s| *s == name_str.as_ref()) {
-            continue;
-        }
-        let src_path = entry.path();
-        let dst_path = dst.join(&name);
         if src_path.is_dir() {
             copy_dir(&src_path, &dst_path);
         } else {
@@ -454,236 +438,12 @@ fn migrate_fresh() {
     }
 
     // Drop all tables and recreate
-    migrate::drop_all_tables(&db_pool).unwrap();
-    migrate::sync_all(&db_pool, &registry, &cfg.locale).unwrap();
+    migrate::recreate_all(&db_pool, &registry, &cfg.locale).unwrap();
 
     // Verify data is gone but tables exist
     let def = registry.get_collection("posts").unwrap();
     let count = ops::count_documents(&db_pool, "posts", def, &[], None).unwrap();
     assert_eq!(count, 0, "data should be gone after fresh");
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// 15. Backup
-// ═══════════════════════════════════════════════════════════════════════════
-
-#[test]
-fn backup_snapshot() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let config_dir = tmp.path().join("config");
-    copy_dir(&fixture_dir(), &config_dir);
-
-    let cfg = CrapConfig::load(&config_dir).expect("load config");
-    let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
-    let db_pool = pool::create_pool(&config_dir, &cfg).expect("create pool");
-    migrate::sync_all(&db_pool, &registry, &cfg.locale).expect("sync");
-
-    // Create a document so the DB has data
-    {
-        let def = registry.get_collection("posts").unwrap();
-        let mut conn = db_pool.get().unwrap();
-        let tx = conn.transaction().unwrap();
-        let mut data = DocumentFields::new();
-        data.insert("title".to_string(), json!("Backup test"));
-        query::create(&tx, "posts", def, &data, None).unwrap();
-        tx.commit().unwrap();
-    }
-    // Ensure pool connections are returned before backup
-    drop(db_pool);
-
-    // Replicate backup: VACUUM INTO
-    let db_path = cfg.db_path(&config_dir);
-    let backup_dir = tmp.path().join("backup-test");
-    std::fs::create_dir_all(&backup_dir).unwrap();
-    let backup_db_path = backup_dir.join("crap.db");
-    {
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute(
-            "VACUUM INTO ?1",
-            [backup_db_path.to_string_lossy().as_ref()],
-        )
-        .unwrap();
-    }
-    assert!(backup_db_path.exists());
-    assert!(std::fs::metadata(&backup_db_path).unwrap().len() > 0);
-
-    // Write manifest
-    let manifest = json!({
-        "timestamp": "2024-01-01T00:00:00+00:00",
-        "db_size": std::fs::metadata(&backup_db_path).unwrap().len(),
-        "include_uploads": false,
-        "source_db": db_path.to_string_lossy(),
-        "source_config": config_dir.to_string_lossy(),
-    });
-    let manifest_path = backup_dir.join("manifest.json");
-    std::fs::write(
-        &manifest_path,
-        serde_json::to_string_pretty(&manifest).unwrap(),
-    )
-    .unwrap();
-
-    assert!(backup_dir.join("crap.db").exists());
-    assert!(backup_dir.join("manifest.json").exists());
-}
-
-#[test]
-fn backup_manifest_valid() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let backup_dir = tmp.path().join("backup");
-    std::fs::create_dir_all(&backup_dir).unwrap();
-
-    let manifest = json!({
-        "timestamp": "2024-06-15T12:00:00+00:00",
-        "db_size": 12345,
-        "uploads_size": null,
-        "include_uploads": false,
-        "source_db": "/some/path/crap.db",
-        "source_config": "/some/path/config",
-    });
-
-    let manifest_path = backup_dir.join("manifest.json");
-    std::fs::write(
-        &manifest_path,
-        serde_json::to_string_pretty(&manifest).unwrap(),
-    )
-    .unwrap();
-
-    let content = std::fs::read_to_string(&manifest_path).unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-    assert!(parsed.get("timestamp").is_some());
-    assert!(parsed.get("db_size").is_some());
-    assert_eq!(parsed["db_size"].as_u64().unwrap(), 12345);
-    assert!(!parsed["include_uploads"].as_bool().unwrap());
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// 16. Blueprint
-// ═══════════════════════════════════════════════════════════════════════════
-
-#[test]
-fn blueprint_save_and_list() {
-    // We test via the internal copy_dir_recursive pattern (same as scaffold.rs unit tests)
-    // since blueprint_save/use depend on the global ~/.config/crap-cms/blueprints/ dir.
-    let tmp = tempfile::tempdir().expect("tempdir");
-
-    let config_dir = tmp.path().join("config");
-    std::fs::create_dir_all(config_dir.join("collections")).unwrap();
-    std::fs::write(config_dir.join("crap.toml"), "# test config").unwrap();
-    std::fs::write(config_dir.join("init.lua"), "-- test init").unwrap();
-    std::fs::write(config_dir.join("collections/posts.lua"), "-- posts").unwrap();
-
-    let bp_dir = tmp.path().join("blueprints").join("my-blog");
-    std::fs::create_dir_all(&bp_dir).unwrap();
-
-    // Simulate save: copy config to blueprint dir (skip data/uploads/types)
-    copy_dir_skip(&config_dir, &bp_dir, &["data", "uploads", "types"]);
-
-    assert!(bp_dir.join("crap.toml").exists());
-    assert!(bp_dir.join("init.lua").exists());
-    assert!(bp_dir.join("collections/posts.lua").exists());
-
-    // Simulate list
-    let bp_base = tmp.path().join("blueprints");
-    let names: Vec<String> = std::fs::read_dir(&bp_base)
-        .unwrap()
-        .filter_map(std::result::Result::ok)
-        .filter(|e| e.path().is_dir())
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .collect();
-    assert!(names.contains(&"my-blog".to_string()));
-}
-
-#[test]
-fn blueprint_use() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-
-    // Create blueprint
-    let bp_dir = tmp.path().join("blueprints").join("starter");
-    std::fs::create_dir_all(bp_dir.join("collections")).unwrap();
-    std::fs::write(bp_dir.join("crap.toml"), "[server]\nadmin_port = 5000\n").unwrap();
-    std::fs::write(bp_dir.join("init.lua"), "-- starter").unwrap();
-    std::fs::write(bp_dir.join("collections/pages.lua"), "-- pages").unwrap();
-
-    // Use it
-    let new_project = tmp.path().join("new-project");
-    std::fs::create_dir_all(&new_project).unwrap();
-    copy_dir(&bp_dir, &new_project);
-
-    assert!(new_project.join("crap.toml").exists());
-    let toml = std::fs::read_to_string(new_project.join("crap.toml")).unwrap();
-    assert!(toml.contains("admin_port = 5000"));
-    assert!(new_project.join("collections/pages.lua").exists());
-}
-
-#[test]
-fn blueprint_remove() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-
-    let bp_dir = tmp.path().join("blueprints").join("throwaway");
-    std::fs::create_dir_all(&bp_dir).unwrap();
-    std::fs::write(bp_dir.join("crap.toml"), "# throwaway").unwrap();
-
-    assert!(bp_dir.exists());
-    std::fs::remove_dir_all(&bp_dir).unwrap();
-    assert!(!bp_dir.exists());
-}
-
-#[test]
-fn blueprint_refuses_overwrite() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-
-    let config_dir = tmp.path().join("config");
-    std::fs::create_dir_all(&config_dir).unwrap();
-    std::fs::write(config_dir.join("crap.toml"), "# config").unwrap();
-
-    // Simulate: blueprint_save calls scaffold::blueprint_save which checks existence
-    let result = scaffold::blueprint_save(&config_dir, "test-bp-overwrite-check", false);
-    if result.is_ok() {
-        // Second save should fail without force
-        let result2 = scaffold::blueprint_save(&config_dir, "test-bp-overwrite-check", false);
-        assert!(result2.is_err());
-        assert!(result2.unwrap_err().to_string().contains("already exists"));
-        // Clean up
-        let _ = scaffold::blueprint_remove("test-bp-overwrite-check");
-    }
-    // If first save fails (e.g., no config dir permissions), that's also acceptable for this test
-}
-
-#[test]
-fn blueprint_save_writes_manifest() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-
-    let config_dir = tmp.path().join("config");
-    std::fs::create_dir_all(&config_dir).unwrap();
-    std::fs::write(config_dir.join("crap.toml"), "# config").unwrap();
-
-    let bp_name = "test-bp-manifest-check";
-    let result = scaffold::blueprint_save(&config_dir, bp_name, true);
-    if result.is_ok() {
-        // Read the manifest from the blueprint directory
-        let bp_dir = dirs::config_dir()
-            .unwrap()
-            .join("crap-cms/blueprints")
-            .join(bp_name);
-        let manifest_path = bp_dir.join(".crap-blueprint.toml");
-        assert!(
-            manifest_path.exists(),
-            "manifest should be created on blueprint save"
-        );
-
-        let contents = std::fs::read_to_string(&manifest_path).unwrap();
-        assert!(
-            contents.contains("crap_version"),
-            "manifest should contain crap_version"
-        );
-        assert!(
-            contents.contains(env!("CARGO_PKG_VERSION")),
-            "manifest should contain current version"
-        );
-
-        // Clean up
-        let _ = scaffold::blueprint_remove(bp_name);
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -968,6 +728,104 @@ fn cmd_restore_roundtrip() {
     let results = query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].fields.get("title").unwrap(), "Restore Test Post");
+}
+
+/// The only backup directory under `output`.
+fn only_backup_dir(output: &Path) -> PathBuf {
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(output)
+        .unwrap()
+        .filter_map(std::result::Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    assert_eq!(dirs.len(), 1, "expected exactly one backup directory");
+
+    dirs.remove(0)
+}
+
+/// Regression: backups were written with the umask (typically world-readable)
+/// although they hold password hashes and sealed secrets, and `tar` read the
+/// live uploads tree — in-flight `*.crap-tmp` files made it fail on a busy
+/// site.
+#[cfg(unix)]
+#[test]
+fn cmd_backup_is_owner_only_and_archives_a_clean_uploads_capture() {
+    let (tmp, pool, _registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    drop(pool);
+
+    let media = config_dir.join("uploads/media");
+    std::fs::create_dir_all(&media).unwrap();
+    std::fs::write(media.join("a.png"), b"png").unwrap();
+    std::fs::write(media.join(".a.png.1.0.crap-tmp"), b"half").unwrap();
+
+    let backup_output = tmp.path().join("backups");
+    let opts = BackupOpts::builder()
+        .output(Some(backup_output.clone()))
+        .include_uploads(true)
+        .build();
+    commands::db::backup(&config_dir, opts).unwrap();
+
+    let backup_dir = only_backup_dir(&backup_output);
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&backup_dir), 0o700);
+    for file in ["crap.db", "uploads.tar.gz", "manifest.json"] {
+        assert_eq!(mode(&backup_dir.join(file)), 0o600, "{file}");
+    }
+
+    let listing = Command::new("tar")
+        .args(["tzf", &backup_dir.join("uploads.tar.gz").to_string_lossy()])
+        .output()
+        .unwrap();
+    let listing = String::from_utf8_lossy(&listing.stdout);
+    assert!(listing.contains("uploads/media/a.png"), "{listing}");
+    assert!(!listing.contains("crap-tmp"), "{listing}");
+
+    let leftovers = std::fs::read_dir(config_dir.join("data"))
+        .unwrap()
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with(".crap-backup-"))
+        .count();
+    assert_eq!(leftovers, 0, "the uploads capture must be removed");
+}
+
+/// Regression: a backup from a newer crap-cms was restored with a message
+/// promising a forward migration; it is a downgrade and is now refused before
+/// the live database is touched.
+#[test]
+fn cmd_restore_refuses_a_backup_from_a_newer_version() {
+    let (tmp, pool, _registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    drop(pool);
+
+    let backup_output = tmp.path().join("backups");
+    let opts = BackupOpts::builder()
+        .output(Some(backup_output.clone()))
+        .build();
+    commands::db::backup(&config_dir, opts).unwrap();
+
+    let backup_dir = only_backup_dir(&backup_output);
+    let manifest_path = backup_dir.join("manifest.json");
+    let mut manifest: Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["crap_version"] = json!("999.0.0");
+    std::fs::write(&manifest_path, manifest.to_string()).unwrap();
+
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
+    let live = std::fs::read(cfg.db_path(&config_dir)).unwrap();
+
+    let err = commands::db::restore(
+        &config_dir,
+        &backup_dir,
+        RestoreOpts::builder().confirm(true).build(),
+    )
+    .unwrap_err();
+
+    assert!(
+        format!("{err:#}").contains("newer than this binary"),
+        "{err:#}"
+    );
+    assert_eq!(std::fs::read(cfg.db_path(&config_dir)).unwrap(), live);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -89,7 +89,7 @@ Get a global's current value. Returns the typed document.
 | --- | --- | --- |
 | `locale` | string | Locale code (e.g. `"en"`, `"de"`). Fetches locale-specific field values; omit for default locale. |
 | `override_access` | boolean | Bypass the global's `access.read` check (default `false`). |
-| `draft` | boolean | Read unpublished (draft) content (default `false`). Gated by `access.draft` (falling back to `access.update`); a reader without draft access silently gets the published snapshot, never an error. When the global has drafts enabled and has been unpublished, a normal read serves the last published snapshot; set `true` to read the draft. |
+| `draft` | boolean | Read unpublished (draft) content (default `false`). Gated by `access.draft` (falling back to `access.update`); a reader without draft access silently gets the published view, never an error. When the global has drafts enabled and has been unpublished, a normal read returns an empty global (every field `nil`, `_status = "draft"`) until it is published again; set `true` to read the draft. |
 
 ```lua
 local settings = crap.globals.site_settings.get()
@@ -135,9 +135,14 @@ crap.globals.site_settings.update({ tagline = "WIP" }, { draft = true })
 
 ### `crap.globals.<slug>.unpublish(opts?)`
 
-Revert a versioned global's `_status` to `"draft"` without modifying its
-stored field data. Only available on globals with `versions` enabled
-(errors otherwise). Mirrors `crap.collections.unpublish`.
+Revert a global's `_status` to `"draft"` without modifying its stored field
+data. Only available on globals with `versions = { drafts = true }` (errors
+otherwise — without drafts there is no unpublished state). Until the global is
+published again, non-draft reads (every surface) return an empty global; reads
+with `draft = true` still see the content. Mirrors `crap.collections.unpublish`.
+
+Global version history (listing and restoring versions) has no Lua function —
+see [Globals › Versions by surface](../globals/overview.md#versions-by-surface).
 
 **Options:**
 

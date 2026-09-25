@@ -12,7 +12,7 @@ use tokio::{runtime::Handle, task::block_in_place};
 use crate::config::S3Config;
 
 use super::backend::validate_key;
-use super::{ByteRange, RangedObject, SharedStorage, StorageBackend, StorageNotFound};
+use super::{ByteRange, ObjectMeta, RangedObject, SharedStorage, StorageBackend, StorageNotFound};
 
 /// S3-compatible storage backend.
 pub struct S3Storage {
@@ -108,8 +108,13 @@ fn header<'a>(headers: &'a HashMap<String, String>, name: &str) -> Option<&'a st
 /// An S3 entity tag with its transport quoting removed, so it can be re-quoted
 /// once by whoever emits an HTTP `ETag`.
 fn unquoted_etag(headers: &HashMap<String, String>) -> Option<String> {
-    let raw = header(headers, "etag")?.trim();
-    let value = raw.trim_start_matches('"').trim_end_matches('"');
+    unquote_etag(header(headers, "etag")?)
+}
+
+/// An entity tag with surrounding whitespace and quotes removed; `None` when
+/// nothing remains.
+fn unquote_etag(raw: &str) -> Option<String> {
+    let value = raw.trim().trim_start_matches('"').trim_end_matches('"');
 
     (!value.is_empty()).then(|| value.to_string())
 }
@@ -306,6 +311,24 @@ impl StorageBackend for S3Storage {
         Ok(ranged_object(&response, bounds))
     }
 
+    fn stat(&self, key: &str) -> Result<Option<ObjectMeta>> {
+        validate_key(key)?;
+        let full_key = self.full_key(key);
+
+        let (head, status) = block_on_s3(self.bucket.head_object(&full_key))
+            .with_context(|| format!("S3 head failed: {full_key}"))?;
+
+        check_status("head", &full_key, status, Missing::NotFound)?;
+
+        Ok(Some(
+            ObjectMeta::builder()
+                .size(head.content_length.and_then(|n| u64::try_from(n).ok()))
+                .etag(head.e_tag.as_deref().and_then(unquote_etag))
+                .last_modified(head.last_modified)
+                .build(),
+        ))
+    }
+
     fn delete(&self, key: &str) -> Result<()> {
         validate_key(key)?;
         let full_key = self.full_key(key);
@@ -424,6 +447,17 @@ mod tests {
 
     use super::*;
     use crate::config::S3Config;
+
+    /// `stat` reports a `HEAD`'s entity tag the same way a ranged read reports
+    /// its `ETag` header, so the served validator does not change between the
+    /// metadata and the body.
+    #[test]
+    fn head_and_header_entity_tags_unquote_alike() {
+        let headers = HashMap::from([("ETag".to_string(), "\"abc\"".to_string())]);
+
+        assert_eq!(unquoted_etag(&headers), unquote_etag(" \"abc\" "));
+        assert_eq!(unquote_etag("\"\""), None);
+    }
 
     /// True when `err` is the typed "object genuinely absent" marker.
     fn is_not_found(err: &Error) -> bool {

@@ -14,8 +14,9 @@ use crate::{
             helpers::global_table,
             ref_count,
             versions::{
-                VersionWrite, create_version_and_prune, restore::row::restore_locale_and_join_data,
-                set_document_status, snapshot::extract_snapshot_data,
+                StatusTable, VersionWrite, create_version_and_prune,
+                restore::row::restore_locale_and_join_data, set_document_status,
+                snapshot::extract_snapshot_data,
             },
         },
     },
@@ -83,7 +84,7 @@ pub fn restore_global_version(
     )?;
 
     if def.has_drafts() {
-        set_document_status(conn, &gtable, "default", status)?;
+        set_document_status(conn, StatusTable::new(&gtable, true), "default", status)?;
     }
 
     // Recording the restore prunes to the same cap every other version write

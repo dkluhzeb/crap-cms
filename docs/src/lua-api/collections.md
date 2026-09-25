@@ -220,7 +220,7 @@ crap.collections.articles.update("abc123", {
 |-------|------|---------|-------------|
 | `locale` | string | `nil` | Locale code for localized fields. |
 | `draft` | boolean | `false` | Version-only save. Creates a draft version snapshot without touching the main table. |
-| `unpublish` | boolean | `false` | Set status to `draft` and create a draft version snapshot. Ignores `data` when unpublishing. Versioned collections only. |
+| `unpublish` | boolean | `false` | Set status to `draft` and create a draft version snapshot. Ignores `data` when unpublishing. Collections with `versions = { drafts = true }` only (errors otherwise). |
 | `override_access` | boolean | `false` | Bypass collection/field access checks. |
 | `hooks` | boolean | `true` | Run lifecycle hooks. |
 | `events` | boolean | `true` | Emit a live-update event for the updated document. Set `false` for a quiet write. |

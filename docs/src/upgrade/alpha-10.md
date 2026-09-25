@@ -165,6 +165,10 @@ of the API.
 - **Operators: keep `data/` on a filesystem with file locks.** `serve`, `work`,
   `mcp` and every CLI command that opens the database stop at startup when they
   can't take `data/crap.lock` (see Behavior changes).
+- **Hook authors: Lua `io` is jailed.** `io.open` and friends reach only the
+  config directory and the new `[hooks] io_roots`, never `data/`, backups,
+  `crap.toml` or `/proc`; `require` loads only from the config directory
+  (item 72, item 73).
 
 ## Required action items
 
@@ -1959,7 +1963,562 @@ there too: `not_exists` and `not_in = {}` match a document holding such a row.
 `not_exists` — add a `_block_type` condition to restrict it to the types you
 mean.
 
+
+### 72. Hook authors: Lua `io` reaches only the config directory and `[hooks] io_roots`
+
+`io.open`, `io.lines`, `io.input` and `io.output` used to open any path the
+process could, so hook code could read `/proc/self/environ` (every environment
+variable, `CRAP_SECRET_*` included), `data/.jwt_secret`, the database or a
+backup. A path is now resolved (symlinks followed, `..` applied) and refused
+with an error unless it lies under the config directory or a directory listed
+in the new `[hooks] io_roots`. Even there, `crap.toml`, `data/`, `backups/`,
+the log directory and the database file are refused, and `/proc`, `/sys` and
+`/dev` are refused everywhere. A missing file inside an allowed root still
+returns `nil, message`.
+
+**Action:** a hook (or Lua storage backend) that reads or writes files
+outside the config directory must list their directory:
+
+```toml
+[hooks]
+io_roots = ["/srv/crap-media"]   # relative entries resolve against the config dir
+```
+
+Each entry must exist and be a directory, or startup fails. Files a hook kept
+under `data/` or `backups/` must move elsewhere under the config directory.
+
+### 73. Hook authors: `require` resolves only in the config directory, as text
+
+`package.path` used to keep Lua's defaults after the config directory
+(`./?.lua`, `/usr/local/share/lua/5.4/…`), so a module missing from the config
+dir silently loaded from the working directory or a system install. It is now
+exactly `{config_dir}/?.lua;{config_dir}/?/init.lua`, and reassigning
+`package.path` from Lua no longer changes where `require` looks. Every file the
+CMS loads (definitions, `init.lua`, `require`d modules, migrations) is loaded
+as text — precompiled Lua bytecode is refused. `package.searchpath` is
+removed. A config directory whose path contains `;` or `?` fails startup (Lua
+module paths cannot express it). The pool VMs also no longer fail to build
+when the config path contains `"` or `\`.
+
+**Action:** move any module a hook `require`s from outside the config
+directory into it; replace precompiled `.lua` bytecode with source.
+
+### 74. Webhook email: redirects are not followed
+
+The webhook email provider followed redirects; a `301`/`302` turned the POST
+into a body-less GET, and a `2xx` from the new address recorded the email as
+sent although nothing was delivered. A `3xx` answer is now a failure (the
+queued job retries, then fails). Transport errors — logged and stored in the
+job's error column — show only the URL's origin, not its path, query or
+credentials.
+
+**Action:** if `[email] webhook_url` points at an address that redirects,
+set it to the final endpoint.
+
+### 75. Backups are owner-only; `backup -i` captures uploads consistently
+
+Everything `crap-cms backup` writes is now owner-only: the `backup-<timestamp>`
+directory is `0700`, and `crap.db`, `uploads.tar.gz` and `manifest.json` are
+`0600` (like the `jwt_secret` it already carried), whatever the umask or the
+`--output` directory's permissions — the snapshot holds password and API-key
+hashes and sealed TOTP secrets. A restore gives the restored database the
+permissions of the one it replaces.
+
+With `--include-uploads` on a running server, the uploads tree is captured as
+hard links under `data/` around the database snapshot and archived from that
+capture: files referenced by the snapshot stay in the archive even when
+deleted meanwhile, and in-flight `*.crap-tmp` files no longer make `tar` fail.
+
+**Action:** if another account (a backup agent, a sync job) reads the backup
+directory, run it as the same user or grant access explicitly after `backup`.
+
+### 76. `restore` refuses a backup taken with a newer crap-cms
+
+A backup whose `manifest.json` names a newer crap-cms than the running binary
+is refused before anything is replaced (it used to be restored with a promise
+of a forward migration — it is a downgrade the older binary cannot read
+safely). A `crap_version` that is not a valid version is refused too.
+
+**Action:** restore such a backup with that crap-cms version or later
+(`crap-cms update use <version>`).
+
+### 77. `blueprint save` leaves state and secrets out; `crap.toml` must load
+
+`blueprint save` copied `backups/` (database snapshots with the auth secret
+that unseals them), a database configured outside `data/` and its WAL files,
+and followed directory symlinks. It now also skips `backups/`, the configured
+database and log paths, any SQLite file or backup directory anywhere in the
+tree, `.jwt_secret*` files and `*.crap-tmp` files, and never follows or copies
+symlinks. It loads `crap.toml` to find the configured paths, so a config that
+fails validation is refused like every other command. `--force` builds the
+new blueprint before replacing the old one.
+
+**Action:** re-save any blueprint saved from a project that had `backups/`
+(or a database outside `data/`) and delete the old copy wherever it was
+shared — it contains that project's data and secret.
+
+### 78. `update`: version tags must be semver; installs are atomic
+
+`crap-cms update install|use|uninstall <VERSION>` refuses a version that is
+not a (`v`-prefixed or bare) semver tag — `uninstall 'v0.1.0/../..'` used to
+remove directories outside the version store. A download is written to a
+partial file inside the store, verified and renamed into place, so an
+interrupted install no longer leaves a truncated binary that counts as
+installed. A version directory without its binary is no longer listed as
+installed.
+
+**Action:** none, unless a script passed something other than a release tag.
+
+### 79. MFA collections: sessions record the second factor; users sign in again
+
+A session token did not record whether it passed the second factor, and
+every surface accepted every session token. With the second factor required
+on only one surface (`mfa_when` returning `ctx.surface == "admin"`), a token
+from a gRPC `Login` — where the gate did not ask for it — worked on the admin
+as a bearer token or as the session cookie, with no second factor. Session
+tokens now carry two new claims: `surface` (the surface that minted it) and
+`mfa` (whether it passed the second factor; an MFA-exempt auth callback
+counts as passed). A token without `mfa` is refused on every request whose
+MFA gate — the collection's `mfa` mode and `mfa_when`, judged for that
+request's surface and headers — requires the second factor: the admin clears
+the cookie and redirects to the login, gRPC answers `UNAUTHENTICATED`
+(`Second factor required on this surface`), the upload API answers `401`.
+`mfa_when` therefore also runs on each request such a token authenticates.
+The MFA-pending challenge token is bound to its surface too: a gRPC `Login`
+challenge completes only through `VerifyMfa`, an admin one only on
+`/admin/mfa`.
+
+**Action:** on a collection with an `mfa` mode, tokens and cookies issued
+before the upgrade carry no `mfa` claim, so wherever the gate requires the
+second factor they are refused — those users sign in again (completing the
+MFA step) once. Collections without an `mfa` mode are unaffected. A client
+that used a token from one surface on another where `mfa_when` requires the
+second factor must sign in on that surface. Keep `mfa_when` cheap and based
+on stable facts (surface, user fields). See
+[MFA → Sessions carry the second factor](../authentication/mfa.md#sessions-carry-the-second-factor).
+
+### 80. Auth callbacks: `form_post` works; CSRF token not required; new hook keys
+
+`POST /admin/auth/callback/...` was routed and documented but could never
+succeed: the admin CSRF check refused an identity provider's cross-site
+`response_mode=form_post` answer (it never carries the `SameSite=Strict` token
+cookie), and the posted form never reached the hook. The two callback routes
+are now exempt from the double-submit CSRF check, and the hook's
+`ctx.headers` gains `_form_{field}` (each field of a urlencoded body) and
+`_method` (`"GET"` / `"POST"`), next to the existing `_query_{param}` keys.
+A request header spelled like one of these reserved keys is dropped.
+
+**Action:** a callback hook **must** verify the OAuth `state` parameter
+(`_query_state`, or `_form_state` for `form_post`) against the value it bound
+to the browser before redirecting — with the CSRF token check gone from these
+routes, `state` is their only login-CSRF defense (it always was the documented
+one). A hook that read a request header whose name starts with `_query_` or
+`_form_`, or is `_method`, no longer sees it. See
+[Auth callbacks](../authentication/custom-strategies.md#auth-callbacks-oauth2--oidc).
+
+### 81. Trashing a user ends its sessions; any logout abandons queued bulk runs
+
+Moving an auth-collection user to the trash now bumps its session version,
+like a lock does: its tokens and cookies stay dead after a restore (they
+used to work again once the account came back), and the user signs in again.
+Queued bulk runs the user started are abandoned by the bump. Separately, the
+documentation now states what was already the case: **every** logout — an
+ordinary admin sign-out in one browser, not only a forced one — bumps the
+session version, ending the user's sessions on every device and surface and
+abandoning every bulk run the user queued that has not started.
+
+**Action:** a restored user signs in again. Don't queue bulk runs from a
+session you expect to outlive a sign-out of the same account elsewhere.
+
+### 82. MFA codes: one verdict per code under concurrent attempts
+
+An emailed / custom-delivered MFA code was read, compared, and cleared in
+separate statements, so attempts submitted at the same moment were all
+compared against the live code — a burst of guesses got several guesses per
+issued code. Consuming the code is now atomic: of concurrent attempts, exactly
+one is judged against the code; the others are refused as if it were already
+used.
+
+**Action:** none. A client that double-submits the right code sees one
+success and one `Invalid MFA code`.
+
+### 83. Unpublish requires drafts; an unpublished global reads as empty
+
+Unpublish requires `versions = { drafts = true }`: it is refused on a
+collection or global versioned with `drafts = false` (every surface; MCP no
+longer lists `unpublish_*` for such a collection). It used to succeed as a no-op that reported the document as a
+draft, recorded a spurious draft version and announced an `unpublish` event
+while the document stayed public. An unpublished global now reads as an empty
+global (every field null, `_status = "draft"`) on every non-draft read — admin
+API, Lua `crap.globals.get`, gRPC `GetGlobal`, MCP `global_read_*` — until it
+is published again; it used to keep serving its last published version, which
+was the content just unpublished.
+
+**Action:** drop `unpublish` calls against definitions without drafts (or
+enable `drafts = true`). Frontends reading a global that an editor may
+unpublish must handle an empty global. To keep serving a global's content,
+publish it instead of unpublishing it.
+
+### 84. `unique` / `index` on a global's fields fail the load
+
+A global is a single row, so a uniqueness constraint or an index on one of its
+columns never applied; it used to load with a warning. Setting `unique = true`
+or `index = true` on a global's top-level field or group sub-field (through
+layout wrappers) is now a load error naming the field. Fields inside an array
+or blocks field are not affected.
+
+**Action:** remove `unique` / `index` from global field definitions.
+
+### 85. A write reports the `_status` its row ends with
+
+A draft create used to report `_status = "published"` and a publish of a draft
+(or unpublished) document `_status = "draft"` — to the caller on every surface,
+to `after_change` hooks and to the live event. Both now report the final
+status: `after_change` hooks see `draft` on a draft create and `published` on
+every publish, and a draft create's event goes only to subscribers with draft
+access while a publish's event reaches published-view subscribers.
+
+**Action:** a hook or client that compensated for the old values (e.g. treated
+a create's reported `published` as unreliable, or re-read the status after a
+publish) can drop the workaround. A hook that acts "on publish" now also runs
+on a first publish and a re-publish.
+
+### 86. Restoring a `draft` version without drafts is validated as a publish
+
+On a collection or global without drafts, a restored version is live the moment
+it is written, so a `draft` version (left from before drafts were switched off)
+is now validated at full strictness — required fields and the other
+publish-only checks apply — and recorded as `published`. It used to restore at
+draft leniency.
+
+**Action:** none, unless such a restore is now rejected for a missing required
+value — fill the value in after restoring an older complete version, or edit
+the document directly.
+
+### 87. Rich text values are validated for their format, on every write
+
+A `format = "json"` rich text value was only checked when the field had custom
+nodes with attrs, so a string, number or list was stored and later showed as an
+empty editor. Every write now requires a ProseMirror document the field's editor
+can open — `{ "type": "doc", "content": [...] }` as JSON text or as an object —
+using only the node and mark types the field enables (`admin.features` plus the
+registered `admin.nodes`; `paragraph`, `text` and `hard_break` are always on).
+The basic `image` node is no longer part of the editor. An `"html"` value must
+be a string. New error keys: `validation.richtext_node_not_allowed`,
+`validation.richtext_mark_not_allowed`, `validation.invalid_richtext_html`.
+
+The check also refuses an attribute a node or mark does not declare (e.g. an
+attr since removed from a custom node) and an unknown mark on the root `doc`.
+
+**Action:** writes that send a JSON field something other than a document, or
+a document using a disabled feature or an `image` node, must be fixed. Existing
+stored values are not touched; the admin shows one the editor cannot open
+read-only (see the Admin UI note), and an editor that can open it drops stale
+attrs on load. An update — from any surface — may resubmit a value the document
+(or its pending draft) already holds in that field unchanged; any other value
+that fails the check is refused, including a changed one and **restoring a
+version whose snapshot holds one the document no longer does**. To find such values, dry-run each document through
+`crap.collections.validate` (e.g. in a one-off Lua migration):
+
+```lua
+local page = crap.collections.posts.find({ limit = 1000, override_access = true })
+for _, doc in ipairs(page.documents) do
+  local r = crap.collections.validate("posts", { body = doc.body },
+    { id = doc.id, override_access = true })
+  if not r.valid and r.errors.body then
+    crap.log.warn(doc.id .. ": " .. r.errors.body)
+  end
+end
+```
+
+then fix each one (re-enable the feature, or rewrite the document without the
+node or mark).
+
+### 88. `required` rich text rejects a blank document; length bounds count text
+
+A required rich text field was satisfied by the markup an emptied editor
+submits (`<p></p>`, a document with one empty paragraph). A value with no
+visible text and no custom node now counts as absent — for `required` and for
+`required_locales` completeness (which also now treats an empty has-many list as
+absent). `min_length` / `max_length` on a rich text field measure its plain text
+instead of the markup, and accept a JSON document sent as an object (it used to
+fail with "must be text").
+
+**Action:** none, unless content relied on an empty editor passing `required`,
+or on length bounds counting markup — adjust the bounds to text length.
+
+### 89. `admin.features`, `admin.nodes` and type-specific admin keys are checked at load
+
+Rich text admin configuration is checked at load, along with every
+type-specific admin key.
+
+An unknown `admin.features` name, an invalid or built-in `admin.nodes` name
+(e.g. `paragraph`, which is enabled by features, never a custom node), and a node
+name that no `crap.richtext.register_node` call registers now fail the load.
+
+Every `admin` key that only some field types read now fails the load on any
+other type (it was silently ignored there):
+
+| Key | Field types |
+|---|---|
+| `placeholder` | text, email, number, textarea, json, code, richtext |
+| `collapsed` | group, collapsible, array, blocks |
+| `label_field`, `row_label`, `labels` | array, blocks |
+| `step` | number |
+| `rows` | textarea, code, json |
+| `language`, `languages` | code |
+| `picker` | relationship, upload, blocks |
+| `resizable` | textarea, richtext |
+| `format`, `features`, `nodes` | richtext |
+
+`admin.picker` values are checked per type too: `select` or `card` on blocks,
+`drawer` or `none` on upload and relationship.
+
+**Action:** fix the names the error lists; make sure the file registering each
+custom node is loaded from `init.lua`; remove each refused key from the field
+the error names (common cases: `placeholder` on a select, date or relationship;
+`rows` on a text field — use `textarea`; `language` on a json field).
+
+### 90. Custom node attrs: inert settings fail the load; `before_validate` hooks fail closed
+
+A node attr using a setting that has no effect on it — `unique`, `index`,
+`localized`, `required_locales`, `has_many`, `required_when`, `access`,
+`hooks.before_change` / `after_change` / `after_read`, `admin.condition`,
+`mcp.description` — logged a warning; `register_node` now fails naming them.
+A node attr's `before_validate` hook that could not be resolved, raised, or
+returned an unconvertible value was skipped and the raw value stored; a missing
+hook ref now fails the boot and a failing hook fails the write, like a field
+hook. The hook's context is now the field hook context (`operation`, `id`,
+`locale`, `user`, `data` = the node's attrs, `document`, …); it used to carry
+only `collection`, `field_name` and `options`.
+
+**Action:** remove the listed settings from node attrs; make sure every node
+attr hook resolves and does not raise on valid input.
+
+### 91. `crap.richtext.render` takes the value as read
+
+`crap.richtext.render` now takes a JSON-format field's document table (it
+raised on a table before), `nil` (renders `""`), and an optional
+`{ format = "html" | "json" }`. Without `format`, a string is rendered as JSON
+only when it holds a document object — a string that merely starts with `{`
+(HTML or plain text) renders as HTML instead of raising.
+
+**Action:** none; code that pre-encoded a document with `crap.json.encode` to
+pass it can pass the table directly. Regenerate `types/crap.lua` if you vendor it.
+
+### 92. Rich text links: one URL rule; `ftp:` no longer allowed; search indexes text only
+
+The JSON → HTML renderer and the admin editor now share one link rule: a URL is
+relative or uses `http`, `https`, `mailto` or `tel` (read the way a browser reads
+the scheme, ignoring whitespace and control characters). `ftp:` links now render
+as `href="#"`. The editor drops a disallowed link when pasting or loading
+content, keeping its text. Full-text search now indexes the text of `"html"`
+rich text (not its markup and attribute values) and of custom nodes' `searchable_attrs`
+in both formats, keeps a word split by formatting whole, and logs a stored
+JSON value that does not parse.
+
+**Action:** none; the search index is rebuilt at startup.
+
+
+### 93. User-field columns lose `NOT NULL` on the first start
+
+A collection table created by an earlier release carries `NOT NULL` on the
+column of each field that was `required` (in a collection without drafts). The
+first start of this release drops it — in place on PostgreSQL, by rebuilding
+the table on SQLite (rows, child rows, leftover columns, the indexes and
+triggers your own migrations created, and the views and triggers elsewhere
+that read or write the table are kept). From now
+on `required` is enforced by validation alone, so removing `required`, enabling
+drafts or removing a field takes effect without a database error.
+
+**Action:** none. Take a backup before upgrading as always; on a large SQLite
+database the rebuild makes the first start take longer.
+
+### 94. Toggling `has_many` on a relationship or upload moves its values
+
+Turning `has_many` on or off for a relationship or upload in the document
+itself (top level or in a group) now carries the stored values between the
+column and the junction table at startup. Turning it **off** refuses to start
+while any document holds more than one value (per locale), naming the
+documents; changing `has_many` together with `localized` or the number of
+target collections is refused too. The side the values left stays behind as an
+orphan column or a leftover junction table until `crap-cms db cleanup` removes
+it; a has-one field's junction from an earlier has-many past is now reported as
+a leftover.
+
+**Action:** before turning `has_many` off, reduce each document to one value.
+The first start of this release only records each field's cardinality, so a
+value stranded by a toggle made under an earlier release is not recovered —
+and do not toggle `has_many` in the same deploy as the upgrade: start this
+release once with the definitions unchanged, then make the change.
+
+### 95. `trash purge` / `trash empty` re-check each document
+
+Both commands now skip a document that was restored, re-trashed more recently
+than `--older-than`, or is still referenced when the purge reaches it, and
+report the skips by reason ("still referenced", "no longer in the trash").
+
+**Action:** scripts that parsed the old single "skipped — still referenced"
+line should expect the second reason.
+
+### 96. `migrate fresh` is one transaction; run it with every node stopped
+
+`migrate fresh` now drops and recreates the schema in a single transaction
+under the schema-sync lock. Its exclusive lock covers only the local project,
+so on a PostgreSQL database shared by several nodes stop every node first.
+
+**Action:** none for single-node installs.
+
+### 97. Auth collections without `token_expiry` inherit `[auth] token_expiry`
+
+Auth collections without their own `token_expiry` use `[auth] token_expiry`.
+
+A collection's `auth.token_expiry` used to default to 7200 when the collection
+left it out, so the global `[auth] token_expiry` — documented as the default a
+collection overrides — never applied to any session. A collection without its
+own value now issues sessions (admin cookie and gRPC token alike) with the
+global lifetime; one that sets its own keeps it. `auth.token_expiry` must be a
+positive whole number of seconds (`0`, a negative number, a fraction or a
+string such as `"2h"` fails the load instead of being read as 7200), and
+`[auth] token_expiry = 0` is refused.
+
+**Action:** if `crap.toml` sets `[auth] token_expiry` to something other than
+the default and an auth collection relied on the old 7200, give that
+collection `token_expiry = 7200` explicitly.
+
+### 98. Live streams: a document that leaves a subscriber's view is a removal
+
+A write can move a document from one content view to another: publishing a
+draft, unpublishing it or restoring a draft version over it, restoring a
+published version over a draft, soft-deleting it, undeleting it. Its live
+event used to be gated by the view the document moved into alone, so a
+subscriber that could see it where it was — but not where it went — was
+never told, and kept showing a document its own reads now hide: a
+published-only subscriber after an unpublish or a soft delete, a draft-view
+subscriber without `trash` access after a draft was trashed (or without
+`read` after it was published), a trash-only subscriber after an undelete.
+Such a subscriber now receives the removal instead, on the admin SSE stream
+and gRPC `Subscribe` alike:
+
+- a collection document arrives as a **`delete`** event (no data, in either
+  mode);
+- a global that leaves the published view arrives as an **`update`**
+  carrying the empty global a non-draft read returns (`full` mode: no field
+  content, `_status = "draft"`). Publishing a global announces no removal —
+  it is still there to read in its draft view.
+
+Subscribers that can see the view the document moved into still receive the
+event itself (`unpublish`, `restore`, `update`, `delete`, `undelete`).
+Nothing is sent to a subscriber that could not see the document where it was
+— a draft trashed or unpublished again never reaches a published-only
+subscriber. A gRPC subscription scoped with `operations` receives the removal
+only when it lists `delete` (collections) or `update` (globals). Burst
+coalescing no longer hides such a move: the surviving event carries the view
+the document was in before the burst.
+
+**Multi-server (Redis transport):** the event's view metadata gains an
+optional `prior` (the view the document left) next to the `left_published`
+flag. During a rolling upgrade, a node that predates `prior` announces only
+a move out of the published view, and an upgraded node reads its events the
+same way; every move is announced once all nodes are upgraded.
+
+**Action:** a client needs nothing new — it already handles `delete` and
+`update` (drop the document from its list on a `delete`, whether or not it
+was trashed). A client that subscribed with `operations = ["unpublish"]` to
+drop unpublished documents, without draft access, never received those
+events; subscribe to `delete` (collections) or `update` (globals) instead.
+
+### 99. `mfa_when` is read-only; `mfa_deliver` writes are transactional
+
+The `password_login` method's `mfa_when` gate runs at login and again on
+each request a session without the second factor authenticates (see item
+79), on that request's own connection. Its `crap.*` CRUD could write, so a
+gate that wrote turned every such request into a write. `mfa_when` is a
+predicate and now runs read-only: `find`, `find_by_id`, `count` and the other
+reads work; `create`, `update`, `delete`, `crap.transaction(fn)`,
+`crap.jobs.queue` and every other write raise an error naming the gate — and
+a gate error fails closed (MFA required).
+
+An `mfa_deliver` hook's writes auto-committed one statement at a time, so a
+hook that wrote and then raised left them behind. They now run in one
+transaction that commits when the hook returns and rolls back when it raises.
+Like an auth-callback hook, `mfa_deliver` now takes its write connection only
+at its first CRUD call, so its delivery I/O holds none before it.
+
+**Action:** move any write out of `mfa_when` (record what you need from an
+`after_change` hook, a job, or the login flow instead). In `mfa_deliver`, a
+write that must survive a failed delivery belongs in a job queued before the
+hook raises — or do not raise; send first and write afterwards. In an
+auth-callback hook, keep the provider round trips before the first
+`crap.collections.*` call so they hold no database connection.
+
+### 100. Upload serving: `If-Match` / `If-Unmodified-Since` answer `412`
+
+`/uploads/...` now evaluates the preconditions first, per RFC 9110: an
+`If-Match` that does not strongly match the file's entity tag, or an
+`If-Unmodified-Since` the file was modified after (ignored when `If-Match` is
+sent), answers `412 Precondition Failed` before any `Range` is considered.
+They used to be ignored and the file served. Local files carry no entity tag,
+so an `If-Match` listing tags always answers `412` on local storage.
+
+**Action:** none for browsers. A client that sent these headers and relied on
+them being ignored must drop them — or handle the `412` by re-fetching. See
+[Uploads → Conditional requests](../uploads/overview.md#conditional-requests).
+
+### 101. `admin.position` is refused on nested fields and node attrs
+
+`admin.position = "sidebar"` moves a **top-level** field into the edit form's
+sidebar. On a field inside a group, row, collapsible, tabs, array or blocks
+field — or on a rich text node attr — it did nothing. It is now a load error
+naming the container and the sub-field.
+
+**Action:** remove `position` from nested fields (and node attrs); to place a
+nested field in the sidebar, set `position` on its top-level container instead.
+
 ## Admin UI behavior
+
+### A JSON rich text value the editor cannot open is shown read-only
+
+A stored `format = "json"` value holding a node or mark the field no longer
+enables (e.g. a feature removed from `admin.features`) — or not a document at all
+— used to load as an empty editor, and the first keystroke overwrote the stored
+content. The field now shows an error and the stored value read-only, and
+resubmits it exactly as stored, so saving the document keeps the value
+unchanged — at the top level and inside array and blocks rows alike. Validation
+accepts a rich text value the document (or its pending draft) already holds
+unchanged even when it no longer passes the field's document check; a changed
+value must pass. Re-enable the feature or migrate the value to edit it.
+
+### `admin.width` lays fields out in rows
+
+`admin.width` (`"half"`, `"third"` or any CSS width) was accepted but ignored by
+the edit form. Every field container — the main column, groups, rows,
+collapsibles, tab panels, array and blocks rows — now lays its fields out in
+wrapping rows: a narrowed field shares its row with its neighbours, and in a
+container narrower than 40rem (a phone, the create drawer) fields stack again.
+Sidebar fields stay full width. A field's wrapper carries
+`form__field--sized form__field--half|third|custom`, and a custom width
+`data-field-width="…"`. The rich text node-attribute modal's `"half"` / `"third"`
+widths, which never applied there either, work too.
+
+**Template overrides:** a field wrapper you render yourself (e.g. an overridden
+`collections/edit_form.hbs`, `fields/group.hbs`, `fields/array.hbs`) keeps full
+width unless it adds those classes and the attribute from the field context's
+`width` / `width_value`, as the built-in templates do. **Custom CSS:** the
+containers above switched from a column to `flex-flow: row wrap`, with each child
+at `flex: 0 0 100%`; a rule that relied on the column layout may need adjusting.
+
+### Array and blocks labels: `labels.plural` is the header, `labels.singular` titles rows
+
+`admin.labels.plural` was never shown. It is now the field's header when
+`admin.label` is not set (also in the back-references list). An untitled array
+row is now headed with `labels.singular` ("Slide 1") instead of the field label.
+
+### Code and JSON fields honour `admin.rows` and `admin.placeholder`
+
+`admin.rows` sizes a code field's editor (in lines) and a JSON field's textarea
+(default 12); a code field's `admin.placeholder` shows in its empty editor. Both
+settings used to apply only in the rich text node-attribute modal.
 
 ### Template overrides: `layout/auth.hbs` must render the translations island
 
@@ -2314,9 +2873,9 @@ continue to work.
   (`use_draft` / Lua `draft = true`) to read the draft.
 - **Unpublished globals are hidden from public reads.** After a global
   was unpublished, `get_global` still served the now-draft content to
-  every reader. A non-draft read now serves the last published version
-  snapshot (or empty content when nothing was ever published); the admin
-  edit form opts into drafts so the global stays editable. The Lua
+  every reader. A non-draft read now returns an empty global (every field
+  null, `_status = "draft"`) until the global is published again (item 83);
+  the admin edit form opts into drafts so the global stays editable. The Lua
   `crap.globals.get` and MCP global-read surfaces now also hide an
   unpublished global by default — a behavior change only for globals that
   have been unpublished. To read the draft on purpose, pass the new
@@ -2389,6 +2948,19 @@ continue to work.
   stream. **Action:** none.
 - **`McpApiKey` no longer prints the key through `Display`.** **Action:**
   none.
+- **Lua `io` is jailed to the config directory and `[hooks] io_roots`.**
+  `CRAP_SECRET_*` variables were readable through `/proc/self/environ` and
+  the generated secret through `data/.jwt_secret`. **Action:** see the
+  required action item on Lua `io`.
+- **`crap.http` no longer replays credentials to another port or scheme on
+  redirect.** The scrub compared hosts only, so a redirect to the same host
+  on another port (possibly over plain HTTP) received `Authorization` and
+  `Cookie`. **Action:** none.
+- **`crap.http` blocks more non-public targets.** `0.0.0.0/8`, the site-local
+  `fec0::/10`, NAT64 (`64:ff9b::/96`, judged by the embedded IPv4 address —
+  `64:ff9b::a9fe:a9fe` reached the cloud metadata service), the local-use
+  NAT64 prefix `64:ff9b:1::/48` and 6to4 addresses embedding a private IPv4
+  address are refused without `allow_private_networks`. **Action:** none.
 - **`io.popen` is no longer reachable from Lua hooks.** `os.execute` was
   already removed; `io.popen` was the surviving process-spawn path.
   **Action:** a hook that shelled out through it now errors. There is no
@@ -2843,6 +3415,19 @@ if you use versions on a localized collection.
   matching gRPC and admin. (Soft-deletes still keep the files.)
 
 ## Behavior changes (likely no action)
+
+- **A job's deadline now bounds a `crap.http` request in flight.** Each
+  request (and redirect hop) runs with the smaller of its `timeout` and the
+  time left before the job's `timeout`; one still running at the deadline
+  stops with the job-timeout error. Before, the deadline was only checked
+  between requests, so a job could overrun its timeout by a whole request.
+  **Action:** none.
+- **A queued email through a custom Lua provider runs under the email
+  queue's `timeout`.** A hung or looping `send` used to hold the email queue
+  (and the MFA, reset and verification mails behind it) indefinitely; it is
+  now stopped at `[jobs.queues.email] timeout` and the job retried.
+  **Action:** none, unless your provider legitimately takes longer — raise
+  the queue's `timeout`.
 
 - **An admin form's has-many value is a JSON array, and one plain value is
   one element.** A field the admin form submits more than once (a

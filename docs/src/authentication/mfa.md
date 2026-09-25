@@ -37,16 +37,23 @@ login page and the gRPC `Login` RPC) and on the admin
 3. A short-lived (5 minute) **MFA-pending token** binds the verified
    login to the completion step. It is purpose-bound: it cannot be used
    as a session token, and a session token cannot be replayed into the
-   MFA step.
+   MFA step. It is also bound to the surface that issued it: a challenge
+   from the gRPC `Login` completes only through `VerifyMfa`, one from the
+   admin login or a callback only on `/admin/mfa`.
 4. The code is verified on `/admin/mfa` or via the `VerifyMfa` RPC —
    both call the same verification chokepoint, and both share the same
    per-identity and per-IP guess limiters.
+5. The session minted after the second factor records that it passed it
+   (see [Sessions carry the second factor](#sessions-carry-the-second-factor)).
 
 ## Email and custom delivery
 
 `Login` generates a 6-digit code, stores it (single-use, 5-minute
-expiry — any verification attempt clears it), and delivers it: built-in
-email for `"email"`, your hook for `"custom"`:
+expiry — any verification attempt consumes it, right or wrong), and
+delivers it: built-in email for `"email"`, your hook for `"custom"`.
+Consumption is atomic: of several attempts submitted at the same moment,
+exactly one is judged against the code and the rest are refused, so a
+burst of guesses still gets one guess per issued code:
 
 ```lua
 { type = "password_login", mfa = "custom", mfa_deliver = "hooks.mfa.send_sms" },
@@ -58,7 +65,11 @@ end
 ```
 
 `mfa = "custom"` without `mfa_deliver` (or the hook without the mode) is
-a startup error. Code **issuance** is throttled per user so a
+a startup error. The code is stored before the hook runs, and the hook holds
+no database connection while it delivers: its `crap.*` CRUD (to record the
+send, or enqueue it as a job) takes a write connection at its first call, in
+one transaction that commits when the hook returns and rolls back when it
+raises. Code **issuance** is throttled per user so a
 password-holder cannot flood the delivery channel by looping the login
 form: `max_forgot_password_attempts` codes within
 `forgot_password_window_seconds`, on the admin login and gRPC `Login` alike.
@@ -163,7 +174,33 @@ end
 ```
 
 `ctx` carries `{ collection, user, surface, headers }`. A hook error
-fails closed (MFA required).
+fails closed (MFA required). The hook is a predicate, so its `crap.*` CRUD
+is **read-only**: reads (`find`, `find_by_id`, `count`, …) work, and any
+write (`create`, `update`, `delete`, `crap.transaction`, `crap.jobs.queue`,
+…) raises an error naming the gate — which, like any hook error, fails
+closed.
+
+### Sessions carry the second factor
+
+Every session token records the surface that minted it and whether it
+passed the second factor (an MFA-exempt callback counts as passed — its
+identity provider enforced one). A session that did **not** pass it is
+refused on every request whose gate requires the second factor: the
+collection's `mfa` mode and `mfa_when` are judged again **for that
+request** — its surface and headers. With the example above, a user who
+logs in over gRPC gets a token without the second factor; that token keeps
+working on gRPC, but the admin refuses it, as a bearer token and as the
+session cookie alike, and the user must sign in on the admin (completing
+the MFA step) to use it. A session that passed the second factor works on
+every surface the collection accepts it on.
+
+So `mfa_when` runs not only at login but also on each request a
+no-second-factor session authenticates on an MFA collection — keep it
+cheap, and base it on stable facts (surface, user fields) rather than
+anything that would make a signed-in user's requests flap between
+accepted and refused. A request refused this way answers like any invalid
+credential: the admin clears the cookie and redirects to the login; gRPC
+answers `UNAUTHENTICATED` (`Second factor required on this surface`).
 
 ## Auth callbacks (OAuth / OIDC)
 

@@ -452,7 +452,8 @@ fn constrained_find_filters_results() {
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let doc = query::create(&tx, "posts", &posts, &data, None).unwrap();
-        query::set_document_status(&tx, "posts", &doc.id, status).unwrap();
+        query::set_document_status(&tx, query::StatusTable::new("posts", true), &doc.id, status)
+            .unwrap();
         tx.commit().unwrap();
     }
 
@@ -497,7 +498,13 @@ fn access_check_plus_db_query_end_to_end() {
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let doc = query::create(&tx, "posts", &posts, &data, None).unwrap();
-        query::set_document_status(&tx, "posts", &doc.id, "published").unwrap();
+        query::set_document_status(
+            &tx,
+            query::StatusTable::new("posts", true),
+            &doc.id,
+            "published",
+        )
+        .unwrap();
         tx.commit().unwrap();
     }
 

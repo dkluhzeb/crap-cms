@@ -153,6 +153,7 @@ fallback = true
 # max_memory = "50MB"            # max Lua memory per VM
 # allow_private_networks = false # allow Lua HTTP requests to private/internal networks
 # http_max_response_bytes = "10MB" # max HTTP response body size for crap.http.request
+# io_roots = []                  # extra dirs Lua `io` may reach (the config dir is always allowed)
 
 # [jobs]
 # max_concurrent = 10             # cluster-wide cap on concurrent jobs (counted via DB)

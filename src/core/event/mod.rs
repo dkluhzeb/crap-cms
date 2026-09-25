@@ -33,8 +33,8 @@ pub use transport::{
     EventTransport, InvalidationTransport, SharedEventTransport, SharedInvalidationTransport,
 };
 pub use types::{
-    EventGateSnapshot, EventOperation, EventTarget, EventUser, EventViewMeta, MutationEvent,
-    MutationEventInput,
+    EventGateSnapshot, EventOperation, EventTarget, EventUser, EventViewMeta, EventViewPlacement,
+    MutationEvent, MutationEventInput,
 };
 
 pub(crate) use sequence::SequenceGen;

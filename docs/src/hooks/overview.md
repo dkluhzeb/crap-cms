@@ -33,7 +33,7 @@ hooks = {
 }
 ```
 
-This resolves to `require("hooks.posts").auto_slug` via Lua's module system. The config directory is on the package path, so `hooks/posts.lua` should return a module table:
+This resolves to `require("hooks.posts").auto_slug` via Lua's module system. The config directory is the **only** place `require` looks (`package.path` is exactly `{config_dir}/?.lua;{config_dir}/?/init.lua` — no working-directory or system Lua paths), so `hooks/posts.lua` should return a module table:
 
 ```lua
 -- hooks/posts.lua
@@ -147,8 +147,25 @@ http_max_response_bytes = 10485760 # 10 MB (increase for large file downloads)
 
 - **Instruction limit** — a hook that exceeds the instruction count is terminated with an error. The default (10M) is generous for complex hooks.
 - **Memory limit** — caps total Lua memory per VM. Exceeding it raises a memory error.
+- **Startup is limited too** — the VM that loads the definition files and runs `init.lua` at boot has the same memory limit, and each file it loads (and the hook-module resolution after them) gets its own instruction budget, so a runaway `init.lua` fails the boot with the limit's error instead of hanging it.
 - **Private network blocking** — `crap.http.request` resolves hostnames and rejects private/loopback/link-local IPs unless `allow_private_networks = true`.
 - **`crap.crypto.random_bytes`** — capped at 1 MB per call.
+
+## Sandbox
+
+Hook code runs in a sandboxed Lua 5.4 VM:
+
+- **No process execution** — `os.execute`, `io.popen` and `os.exit` are removed; `os` keeps only `clock`, `date`, `difftime` and `time`.
+- **No dynamic code loading** — `load`, `loadstring`, `loadfile`, `dofile` and `string.dump` are removed. Every file the CMS loads (definitions, `init.lua`, `require`d modules, migrations) is loaded as **text only**; a precompiled bytecode file is refused.
+- **No native modules** — `package.cpath` is empty and `package.loadlib` / `package.searchpath` are removed.
+- **Modules only from the config directory** — `require` resolves `{config_dir}/?.lua` and `{config_dir}/?/init.lua` and nothing else. Reassigning `package.path` does not change where `require` looks.
+- **`io` jailed to allowed roots** — `io.open`, `io.lines`, `io.input` and `io.output` accept a path only if it resolves (symlinks followed, `..` applied) inside the config directory or a directory listed in [`[hooks] io_roots`](../configuration/crap-toml.md#hooks). Inside those roots, the process's own secrets stay unreachable: `crap.toml`, the `data/` directory (generated auth secret, SQLite database), `backups/`, the log directory and the database file wherever it is configured. `/proc`, `/sys` and `/dev` are refused everywhere — so environment variables such as `CRAP_SECRET_*` cannot be read through `/proc/self/environ`. A refused path raises an error naming the path and the reason; a missing file inside an allowed root still returns `nil, message` as usual. Relative paths resolve against the process's working directory, as before. The protected paths are matched regardless of letter case on macOS and Windows. The jail checks paths, not file identities: a hard link the operator places inside a root keeps pointing at its file, so don't hard-link secrets into an allowed root.
+
+```toml
+[hooks]
+# Let a Lua storage backend write outside the config directory:
+io_roots = ["/srv/crap-media"]
+```
 
 ## State & Module Caching
 

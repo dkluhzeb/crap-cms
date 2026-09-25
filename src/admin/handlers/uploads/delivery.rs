@@ -8,6 +8,7 @@ use axum::{
     http::{Request, StatusCode},
     response::{IntoResponse, Response},
 };
+use tokio::fs;
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
@@ -17,7 +18,9 @@ use crate::{
         handlers::uploads::{
             headers::{
                 ConditionalHeaders, ServeHeaders, build_serve_request, extract_conditional_headers,
+                http_date,
             },
+            preconditions::{precondition_failed, preconditions_pass},
             remote::serve_remote,
         },
     },
@@ -185,8 +188,16 @@ fn negotiate_variants(req: &ServeRequest<'_>) -> Vec<(String, &'static str)> {
         .collect()
 }
 
+/// The file's `Last-Modified` as `ServeFile` will report it, for `If-Range`.
+async fn local_last_modified(path: &path::Path) -> Option<String> {
+    let modified = fs::metadata(path).await.ok()?.modified().ok()?;
+
+    Some(http_date(modified))
+}
+
 /// Serve a local file via `tower_http::services::ServeFile`, which answers
-/// Range, `ETag`, `Last-Modified` and conditional GETs itself, and then apply
+/// Range, `Last-Modified` and conditional GETs itself (`If-Range` is decided
+/// by [`build_serve_request`], the preconditions before it), and then apply
 /// the headers every served upload carries.
 async fn serve_local(
     path: &path::Path,
@@ -194,8 +205,17 @@ async fn serve_local(
     headers: &ServeHeaders<'_>,
 ) -> Response {
     let service = ServeFile::new(path);
+    let last_modified = local_last_modified(path).await;
 
-    let mut response = match service.oneshot(build_serve_request(conditional)).await {
+    // `ServeFile` sends no entity tag, so only the date can satisfy a
+    // precondition here (`If-Match: *` aside).
+    if !preconditions_pass(conditional, None, last_modified.as_deref()) {
+        return precondition_failed(headers);
+    }
+
+    let request = build_serve_request(conditional, last_modified.as_deref());
+
+    let mut response = match service.oneshot(request).await {
         Ok(r) => r.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -217,11 +237,7 @@ mod tests {
 
     /// A request that carries no range and no validators.
     fn no_conditions() -> ConditionalHeaders {
-        ConditionalHeaders {
-            range: None,
-            if_none_match: None,
-            if_modified_since: None,
-        }
+        ConditionalHeaders::default()
     }
 
     fn disposition_of(response: &Response) -> &str {
@@ -469,8 +485,7 @@ mod tests {
 
         let conditional = ConditionalHeaders {
             range: Some("bytes=2-4".parse().unwrap()),
-            if_none_match: None,
-            if_modified_since: None,
+            ..ConditionalHeaders::default()
         };
 
         let resp = serve_local(
@@ -482,6 +497,60 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(resp.headers().get(CONTENT_RANGE).unwrap(), "bytes 2-4/10");
+    }
+
+    /// A range guarded by an `If-Range` date is honoured only while the file
+    /// still carries that date; once replaced, the whole file is served.
+    #[tokio::test]
+    async fn serve_local_honours_if_range() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.bin");
+        fs::write(&path, b"0123456789").unwrap();
+        let current = local_last_modified(&path).await.unwrap();
+        let headers = ServeHeaders::new("application/octet-stream", "public");
+
+        let guarded = |date: &str| ConditionalHeaders {
+            range: Some("bytes=2-4".parse().unwrap()),
+            if_range: Some(date.parse().unwrap()),
+            ..ConditionalHeaders::default()
+        };
+
+        let fresh = serve_local(&path, &guarded(&current), &headers).await;
+        assert_eq!(fresh.status(), StatusCode::PARTIAL_CONTENT);
+
+        let stale = serve_local(&path, &guarded("Sun, 06 Nov 1994 08:49:37 GMT"), &headers).await;
+        assert_eq!(stale.status(), StatusCode::OK);
+        assert!(stale.headers().get(CONTENT_RANGE).is_none());
+    }
+
+    /// Preconditions are judged before the range: a date the file changed
+    /// after, or an entity tag (a local file has none), is a `412`; the
+    /// file's current date or `If-Match: *` lets the range through.
+    #[tokio::test]
+    async fn serve_local_judges_preconditions_before_the_range() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.bin");
+        fs::write(&path, b"0123456789").unwrap();
+        let current = local_last_modified(&path).await.unwrap();
+        let headers = ServeHeaders::new("application/octet-stream", "public");
+
+        let ranged = |if_match: Option<&str>, since: Option<&str>| ConditionalHeaders {
+            range: Some("bytes=2-4".parse().unwrap()),
+            if_match: if_match.map(|v| v.parse().unwrap()),
+            if_unmodified_since: since.map(|v| v.parse().unwrap()),
+            ..ConditionalHeaders::default()
+        };
+
+        let stale = ranged(None, Some("Sun, 06 Nov 1994 08:49:37 GMT"));
+        for cond in [stale, ranged(Some("\"abc\""), None)] {
+            let refused = serve_local(&path, &cond, &headers).await;
+            assert_eq!(refused.status(), StatusCode::PRECONDITION_FAILED);
+        }
+
+        for cond in [ranged(None, Some(&current)), ranged(Some("*"), None)] {
+            let served = serve_local(&path, &cond, &headers).await;
+            assert_eq!(served.status(), StatusCode::PARTIAL_CONTENT);
+        }
     }
 
     /// A variant that is missing (404) or whose backend failed (503) must fall

@@ -9,7 +9,7 @@ use super::BaseFieldData;
 
 // ── Text & friends ────────────────────────────────────────────────
 
-/// Text-like field. Variants: `Text`, `Email`, `Password`, `Json`.
+/// Text-like field. Variants: `Text`, `Email`, `Password`.
 ///
 /// Only `Text` (and `Number`) supports `has_many` — the others always
 /// have `has_many: None` and `tags: None`.
@@ -37,6 +37,34 @@ impl TextField {
             base,
             has_many: None,
             tags: None,
+        }
+    }
+}
+
+// ── JSON ──────────────────────────────────────────────────────────
+
+/// Free-form JSON textarea. Always emits `rows`.
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
+#[serde(default)]
+pub struct JsonField {
+    #[serde(flatten)]
+    pub base: BaseFieldData,
+
+    /// Number of visible text rows — `admin.rows`, else
+    /// [`JsonField::DEFAULT_ROWS`].
+    pub rows: u32,
+}
+
+impl JsonField {
+    /// Visible rows when the field sets no `admin.rows`.
+    pub const DEFAULT_ROWS: u32 = 12;
+
+    /// Construct with `base` and the field's `admin.rows`.
+    #[must_use]
+    pub fn new(base: BaseFieldData, rows: Option<u32>) -> Self {
+        Self {
+            base,
+            rows: rows.unwrap_or(Self::DEFAULT_ROWS),
         }
     }
 }
@@ -121,17 +149,24 @@ pub struct CodeField {
     /// picker and a hidden `_lang` companion input.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub languages: Option<Vec<String>>,
+
+    /// The field's `admin.rows`: the editor is sized to show that many lines.
+    /// Absent for the default height.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u32>,
 }
 
 impl CodeField {
     /// Construct an uninitialized variant carrying only `base`. Enrichment
-    /// populates `language` / `languages` from the field's admin config.
+    /// populates `language` / `languages` / `rows` from the field's admin
+    /// config.
     #[must_use]
     pub fn empty(base: BaseFieldData) -> Self {
         Self {
             base,
             language: String::new(),
             languages: None,
+            rows: None,
         }
     }
 }
@@ -504,10 +539,12 @@ mod tests {
             base: make_base("snippet"),
             language: "javascript".to_string(),
             languages: Some(vec!["javascript".to_string(), "python".to_string()]),
+            rows: Some(6),
         };
         let v = serde_json::to_value(FieldContext::Code(f)).unwrap();
         assert_eq!(v["language"], "javascript");
         assert_eq!(v["languages"], json!(["javascript", "python"]));
+        assert_eq!(v["rows"], 6);
     }
 
     #[test]
@@ -516,10 +553,12 @@ mod tests {
             base: make_base("snippet"),
             language: "json".to_string(),
             languages: None,
+            rows: None,
         };
         let v = serde_json::to_value(FieldContext::Code(f)).unwrap();
         assert_eq!(v["language"], "json");
         assert!(v.get("languages").is_none());
+        assert!(v.get("rows").is_none());
     }
 
     // ── Richtext ───────────────────────────────────────────────────────

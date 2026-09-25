@@ -59,6 +59,9 @@
             readonly=../readonly}}
             {{#if this.custom_label}}
               {{this.custom_label}}
+            {{else if ../add_label}}
+              {{../add_label}}
+              {{this.index}}
             {{else}}
               {{../label}}
               {{this.index}}
@@ -69,7 +72,8 @@
             <div class="form__array-row-fields">
               {{#each this.sub_fields}}
                 <div
-                  class="form__field"
+                  class="form__field{{#if width}} form__field--sized form__field--{{width}}{{/if}}"
+                  {{#if width_value}}data-field-width="{{width_value}}"{{/if}}
                   data-field-name="{{name}}"
                 >
                   {{{render_field this}}}
@@ -96,14 +100,19 @@
           expanded=true
           has_errors=false
           readonly=readonly}}
-          {{label}}__INDEX__
+          {{#if add_label}}
+            {{add_label}}__INDEX__
+          {{else}}
+            {{label}}__INDEX__
+          {{/if}}
         {{/partials/array-row-header}}
 
         <div class="form__array-row-body">
           <div class="form__array-row-fields">
             {{#each sub_fields}}
               <div
-                class="form__field"
+                class="form__field{{#if width}} form__field--sized form__field--{{width}}{{/if}}"
+                {{#if width_value}}data-field-width="{{width_value}}"{{/if}}
                 data-field-name="{{name}}"
               >
                 {{{render_field this}}}

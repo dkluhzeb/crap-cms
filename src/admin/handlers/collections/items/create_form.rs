@@ -7,6 +7,7 @@ use axum::{
     response::Response,
 };
 use serde_json::json;
+use tracing::error;
 
 use crate::{
     admin::{
@@ -21,13 +22,14 @@ use crate::{
                 EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
                 check_access_or_forbid, collection_base, editor_locale_ctx, enrich_field_contexts,
                 extract_editor_locale, forbidden, get_user_doc, is_non_default_locale, render_page,
-                require_collection, split_sidebar_fields,
+                require_collection, server_error, split_sidebar_fields,
             },
         },
     },
     core::{AuthUser, Claims, CollectionDefinition, DocumentFields},
     db::AccessResult,
     hooks::ConditionContext,
+    service::reject_create_filter,
 };
 
 /// Build, enrich, and split the field contexts for the create form.
@@ -110,8 +112,15 @@ pub async fn create_form(
                 "You don't have permission to create items in this collection",
             );
         }
+        // No row to match a filter table against: the create itself refuses
+        // it as a configuration error, so the form is not offered.
+        Ok(AccessResult::Constrained(_)) => {
+            error!("{}", reject_create_filter(&slug));
+
+            return server_error(&state, "Access configuration error");
+        }
         Err(resp) => return *resp,
-        _ => {}
+        Ok(AccessResult::Allowed) => {}
     }
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);

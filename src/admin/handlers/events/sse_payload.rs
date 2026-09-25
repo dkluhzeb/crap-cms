@@ -5,14 +5,14 @@
 //! suppression) lives in one focused, unit-testable place.
 
 use axum::response::sse::Event;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use tracing::warn;
 
 use crate::{
     admin::AdminState,
     core::{Document, MutationEvent, Registry, event::EventTarget},
     hooks::HookRunner,
-    service::{EventAccessInput, EventAccessMap, EventGate, event_op_str},
+    service::{EventAccessInput, EventAccessMap, EventDelivery, EventGate},
 };
 
 /// Resolved SSE access — the shared [`EventAccessMap`] (per-view visibility with
@@ -78,7 +78,7 @@ fn build_event_payload(
 ) -> Option<Value> {
     // The view gate + field strip is shared with the gRPC `Subscribe` stream so
     // the two surfaces can't drift on the security-critical pipeline.
-    let data = EventGate {
+    let delivery = EventGate {
         collection_views: &access.collection_views,
         global_views: &access.global_views,
         collection_modes: &access.collection_modes,
@@ -89,27 +89,29 @@ fn build_event_payload(
     }
     .evaluate(event)?;
 
-    Some(sse_envelope(event, user_doc, &data))
+    Some(sse_envelope(event, user_doc, &delivery))
 }
 
 /// The JSON envelope a subscriber receives: the event's public metadata, the
-/// `self` flag, and the already-gated `data`.
+/// `self` flag, and the already-gated delivery — the operation the subscriber
+/// receives the event as and its visible `data`.
 fn sse_envelope(
     event: &MutationEvent,
     user_doc: Option<&Document>,
-    data: &Map<String, Value>,
+    delivery: &EventDelivery,
 ) -> Value {
     // Exhaustive on purpose: a field added to `MutationEvent` fails to compile
     // here until it is decided whether subscribers may see it. What stays
-    // server-side: the unstripped `data` (only the gated `data` argument is
-    // sent),
-    // the editor's identity, the view metadata, and the gating snapshot.
+    // server-side: the unstripped `data` (only the gated delivery is sent),
+    // the editor's identity, the view metadata, and the gating snapshot. The
+    // operation is the delivery's: a published-only subscriber receives an
+    // unpublish as a removal.
     let MutationEvent {
         sequence,
         publisher,
         timestamp,
         target,
-        operation,
+        operation: _,
         collection,
         document_id,
         data: _,
@@ -138,11 +140,11 @@ fn sse_envelope(
         "publisher": publisher,
         "timestamp": timestamp,
         "target": target_str,
-        "operation": event_op_str(operation),
+        "operation": delivery.operation.as_str(),
         "collection": collection,
         "document_id": document_id,
         "self": is_self,
-        "data": data,
+        "data": delivery.data,
     })
 }
 
@@ -608,6 +610,7 @@ mod tests {
         event.view = Some(EventViewMeta {
             status: status.map(str::to_string),
             trashed,
+            ..EventViewMeta::default()
         });
         event
     }

@@ -105,7 +105,7 @@ fn make_list_def_with_drafts() -> CollectionDefinition {
 
 /// Seed a row with the system `_status` column set to either `draft`
 /// or `published`. Mirrors the seeding pattern in
-/// `tests/admin_collections.rs::list_items_status_query_narrows_drafts_only`.
+/// `tests/admin_collections_list.rs::list_items_url_status_filter_narrows_drafts_only`.
 fn create_post_with_system_status(app: &TestApp, title: &str, system_status: &str) {
     let def = app.registry.get_collection("posts").unwrap().clone();
 

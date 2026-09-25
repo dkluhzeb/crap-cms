@@ -168,16 +168,16 @@ fn migrate_list(config_dir: &Path, pool: &DbPool) -> Result<()> {
     Ok(())
 }
 
-/// Drop every table and recreate the schema from the Lua definitions.
+/// Drop every table and recreate the schema from the Lua definitions, in one
+/// transaction: a failure leaves the database as it was.
 #[cfg(not(tarpaulin_include))]
 fn recreate_schema(cfg: &CrapConfig, registry: &Arc<Registry>, pool: &DbPool) -> Result<()> {
-    let spin = Spinner::new("Dropping all tables...");
-    db_migrate::drop_all_tables(pool)?;
-    spin.finish_success("Tables dropped");
+    let spin = Spinner::new("Dropping all tables and recreating the schema...");
 
-    let spin = Spinner::new("Recreating schema...");
-    db_migrate::sync_all(pool, registry, &cfg.locale).context("Failed to sync database schema")?;
-    spin.finish_success("Schema sync complete");
+    db_migrate::recreate_all(pool, registry, &cfg.locale)
+        .context("Failed to recreate the database schema")?;
+
+    spin.finish_success("Schema recreated");
 
     Ok(())
 }

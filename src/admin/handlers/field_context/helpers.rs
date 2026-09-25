@@ -740,6 +740,7 @@ mod tests {
             },
             language: language.to_string(),
             languages: None,
+            rows: None,
         })
     }
 

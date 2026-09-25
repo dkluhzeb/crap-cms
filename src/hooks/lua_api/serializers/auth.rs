@@ -25,8 +25,8 @@ pub(super) fn collection_auth_to_lua(
 
     let auth_tbl = lua.create_table()?;
     auth_tbl.set("enabled", true)?;
-    if auth.token_expiry != 7200 {
-        auth_tbl.set("token_expiry", auth.token_expiry)?;
+    if let Some(token_expiry) = auth.token_expiry {
+        auth_tbl.set("token_expiry", token_expiry)?;
     }
 
     if !auth.methods.is_empty() {
@@ -179,6 +179,29 @@ mod tests {
         assert_eq!(m1.get::<String>("name").unwrap(), "oauth");
         let act: mlua::Table = m1.get("activates_on").unwrap();
         assert_eq!(act.get::<String>("header").unwrap(), "x-oauth");
+    }
+
+    /// Regression: an explicit `token_expiry = 7200` was dropped from the
+    /// config table (it equalled the old hard-coded default), so a round trip
+    /// through `crap.collections.config` let the collection inherit a
+    /// different global lifetime. Set values are emitted; unset stays unset.
+    #[test]
+    fn auth_emits_only_an_explicit_token_expiry() {
+        let lua = mlua::Lua::new();
+        let expiry_of = |token_expiry: Option<u64>| {
+            let mut def = CollectionDefinition::new("users");
+            def.auth = Some(Auth {
+                token_expiry,
+                ..Auth::enabled()
+            });
+            let tbl = collection_config_to_lua(&lua, &def).unwrap();
+            let auth_tbl: mlua::Table = tbl.get("auth").unwrap();
+
+            auth_tbl.get::<Option<u64>>("token_expiry").unwrap()
+        };
+
+        assert_eq!(expiry_of(Some(7200)), Some(7200));
+        assert_eq!(expiry_of(None), None);
     }
 
     /// The MFA-exempt callbacks round-trip into the Lua config table.

@@ -24,7 +24,10 @@ use crate::{
             localized_join_row_exists,
         },
     },
-    hooks::lifecycle::validation::custom::{ValidateCtxSource, run_required_condition_inner},
+    hooks::lifecycle::validation::{
+        checks::is_value_present,
+        custom::{ValidateCtxSource, run_required_condition_inner},
+    },
 };
 
 use super::{ValidationCtx, is_empty_value};
@@ -52,7 +55,10 @@ enum FieldKind {
     Join,
 }
 
-struct Target {
+struct Target<'a> {
+    /// The field itself — its value's presence is judged by the same
+    /// predicate as the per-submit `required` check.
+    field: &'a FieldDefinition,
     data_key: String,
     /// The group prefix the flat walk reached this field under (`""` at the
     /// top level) and the field's own name. Together with `data_key` they
@@ -64,7 +70,7 @@ struct Target {
     kind: FieldKind,
 }
 
-impl Target {
+impl Target<'_> {
     /// Where this field's value sits in an overlay snapshot.
     fn snapshot_key(&self) -> SnapshotKey<'_> {
         (&self.data_key, &self.prefix, &self.name)
@@ -114,7 +120,7 @@ pub(in crate::hooks::lifecycle::validation) fn check_localized_completeness(
             // the overlay this write writes back, falling back to the stored row.
             let present = if loc == write_locale {
                 match data.get(&target.data_key) {
-                    Some(value) => submitted_present(target.kind, Some(value)),
+                    Some(value) => submitted_present(target, Some(value)),
                     None => existing_present(ctx, existing.as_ref(), target, loc),
                 }
             } else {
@@ -136,10 +142,13 @@ pub(in crate::hooks::lifecycle::validation) fn check_localized_completeness(
     }
 }
 
-/// Whether the submitted (write-locale) value counts as present.
-fn submitted_present(kind: FieldKind, value: Option<&serde_json::Value>) -> bool {
-    match kind {
-        FieldKind::Scalar => !is_empty_value(value),
+/// Whether a submitted (or overlaid) value counts as present. A column-backed
+/// value is judged by [`is_value_present`], the per-submit `required`
+/// predicate — so a blank rich text document or an empty has-many list is as
+/// absent in a locale as it is at submit time.
+fn submitted_present(target: &Target<'_>, value: Option<&serde_json::Value>) -> bool {
+    match target.kind {
+        FieldKind::Scalar => is_value_present(target.field, value, is_empty_value(value)),
         // Array / blocks / has-many: a non-empty array (or non-empty JSON
         // string for the parent-column has-many form).
         FieldKind::Join => match value {
@@ -169,7 +178,7 @@ fn existing_present(
     match target.kind {
         FieldKind::Scalar => locale_column(&target.data_key, loc)
             .ok()
-            .and_then(|col| existing_cols.map(|row| db_present(row.get(&col))))
+            .and_then(|col| existing_cols.map(|row| db_present(target, row.get(&col))))
             .unwrap_or(false),
         FieldKind::Join => join_row_exists(ctx, &target.data_key, loc),
     }
@@ -193,7 +202,7 @@ fn overlay_present(ctx: &ValidationCtx, target: &Target, loc: &str) -> Option<bo
     .ok()
     .flatten()?;
 
-    Some(submitted_present(target.kind, Some(value)))
+    Some(submitted_present(target, Some(value)))
 }
 
 /// Whether the field's join table has at least one row for this parent + locale.
@@ -213,10 +222,10 @@ fn join_row_exists(ctx: &ValidationCtx, data_key: &str, loc: &str) -> bool {
 /// the wrapper's children locale-scoped here either. Group sub-fields can't
 /// be localized arrays/blocks themselves, so those join tables keep the group
 /// prefix in `data_key`.
-fn collect_required_localized(
+fn collect_required_localized<'f>(
     cctx: &CompletenessCtx<'_>,
-    fields: &[FieldDefinition],
-    out: &mut Vec<Target>,
+    fields: &'f [FieldDefinition],
+    out: &mut Vec<Target<'f>>,
     errors: &mut Vec<FieldError>,
 ) {
     let _ = walk_leaf_fields(
@@ -257,6 +266,7 @@ fn collect_required_localized(
                 FieldKind::Join
             };
             out.push(Target {
+                field,
                 data_key,
                 prefix: prefix.to_string(),
                 name: field.name.clone(),
@@ -338,7 +348,7 @@ fn effective_locales(
 /// Update only — returns `None` on create / when nothing needs reading.
 fn read_existing_columns(
     ctx: &ValidationCtx,
-    targets: &[Target],
+    targets: &[Target<'_>],
 ) -> Option<HashMap<String, DbValue>> {
     let id = ctx.exclude_id?;
 
@@ -369,14 +379,12 @@ fn read_existing_columns(
         .flatten()
 }
 
-/// Whether a DB column value counts as present for completeness (non-null,
-/// non-empty string).
-fn db_present(v: Option<&DbValue>) -> bool {
-    match v {
-        None | Some(DbValue::Null) => false,
-        Some(DbValue::Text(s)) => !s.is_empty(),
-        Some(_) => true,
-    }
+/// Whether a stored column value counts as present for completeness — the
+/// same predicate as a submitted one, over the column's JSON reading.
+fn db_present(target: &Target<'_>, v: Option<&DbValue>) -> bool {
+    let value = v.map(DbValue::to_json);
+
+    submitted_present(target, value.as_ref())
 }
 
 #[cfg(all(test, feature = "sqlite"))]
@@ -447,6 +455,34 @@ mod tests {
         check_localized_completeness(&lua, &fields, &data, &data, &ctx, &mut errors);
 
         errors
+    }
+
+    /// Regression: completeness judged a localized value present when it was
+    /// any non-empty string, so the markup of an emptied rich text editor
+    /// (`<p></p>`) counted as a translation. It shares the per-submit
+    /// `required` predicate now.
+    #[test]
+    fn a_blank_richtext_translation_is_incomplete() {
+        let lua = Lua::new();
+        let fields = vec![
+            FieldDefinition::builder("body", FieldType::Richtext)
+                .localized(true)
+                .required(true)
+                .build(),
+        ];
+        let lctx = en_de_ctx();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let ctx = ValidationCtx::builder(&conn, "docs")
+            .locale_ctx(Some(&lctx))
+            .build();
+
+        let mut data = DocumentFields::new();
+        data.insert("body".to_string(), json!("<p></p>"));
+
+        let mut errors = Vec::new();
+        check_localized_completeness(&lua, &fields, &data, &data, &ctx, &mut errors);
+
+        assert!(has_required_locale_error(&errors), "got: {errors:?}");
     }
 
     fn has_required_locale_error(errors: &[FieldError]) -> bool {

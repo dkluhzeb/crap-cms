@@ -14,7 +14,7 @@ use crate::{
             page::collections::CollectionRestoreConfirmPage,
         },
         handlers::shared::{
-            HxNav, PageRequest, check_access_or_forbid, collection_item_base,
+            HxNav, PageRequest, access_admits_row, check_access_or_forbid, collection_item_base,
             extract_editor_locale, forbidden, load_version_with_restore_gaps, paths,
             redirect_response, render_page, require_collection, server_error,
         },
@@ -24,7 +24,6 @@ use crate::{
         auth::{AuthUser, Claims},
         document::VersionSnapshot,
     },
-    db::query::AccessResult,
     service::{self, RunnerReadHooks, VersionGaps},
 };
 
@@ -79,7 +78,7 @@ pub async fn restore_confirm(
         return redirect_response(&paths::collection_item(&slug, &id));
     }
 
-    match check_access_or_forbid(
+    let access = match check_access_or_forbid(
         &state,
         def.access.update.as_ref(),
         auth_user.as_ref(),
@@ -88,11 +87,13 @@ pub async fn restore_confirm(
         "update",
         &slug,
     ) {
-        Ok(AccessResult::Denied) => {
-            return forbidden(&state, "You don't have permission to update this item");
-        }
+        Ok(access) => access,
         Err(resp) => return *resp,
-        _ => {}
+    };
+
+    // A filter-table rule is judged against the item, as the restore judges it.
+    if !access_admits_row(&state, &def, &id, &access) {
+        return forbidden(&state, "You don't have permission to update this item");
     }
 
     let user_doc = auth_user.as_ref().map(|Extension(u)| &u.user_doc);

@@ -10,8 +10,8 @@ use super::{
     composites::{ArrayField, BlocksField, GroupField, RowField, TabsField},
     refs::{JoinField, RelationshipField, UploadField},
     scalars::{
-        CheckboxField, ChoiceField, CodeField, DateField, NumberField, RichtextField, TextField,
-        TextareaField,
+        CheckboxField, ChoiceField, CodeField, DateField, JsonField, NumberField, RichtextField,
+        TextField, TextareaField,
     },
 };
 
@@ -33,7 +33,7 @@ pub enum FieldContext {
     /// Password input — synthetic, used for auth-collection forms.
     Password(TextField),
     /// Free-form JSON input.
-    Json(TextField),
+    Json(JsonField),
     /// Multi-line textarea.
     Textarea(TextareaField),
     /// Numeric input (or tag input when `has_many`).
@@ -83,10 +83,8 @@ impl FieldContext {
     /// Borrow the shared base data of this field context, regardless of variant.
     pub fn base(&self) -> &BaseFieldData {
         match self {
-            FieldContext::Text(f)
-            | FieldContext::Email(f)
-            | FieldContext::Password(f)
-            | FieldContext::Json(f) => &f.base,
+            FieldContext::Text(f) | FieldContext::Email(f) | FieldContext::Password(f) => &f.base,
+            FieldContext::Json(f) => &f.base,
             FieldContext::Textarea(f) => &f.base,
             FieldContext::Number(f) => &f.base,
             FieldContext::Code(f) => &f.base,
@@ -110,10 +108,10 @@ impl FieldContext {
     /// fields without caring about the variant.
     pub fn base_mut(&mut self) -> &mut BaseFieldData {
         match self {
-            FieldContext::Text(f)
-            | FieldContext::Email(f)
-            | FieldContext::Password(f)
-            | FieldContext::Json(f) => &mut f.base,
+            FieldContext::Text(f) | FieldContext::Email(f) | FieldContext::Password(f) => {
+                &mut f.base
+            }
+            FieldContext::Json(f) => &mut f.base,
             FieldContext::Textarea(f) => &mut f.base,
             FieldContext::Number(f) => &mut f.base,
             FieldContext::Code(f) => &mut f.base,

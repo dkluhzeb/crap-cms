@@ -1,17 +1,38 @@
 //! Extract custom node instances (with their attribute values) from richtext
 //! content. Supports both `ProseMirror` JSON and HTML serialisation formats.
 
-use std::{borrow::Cow, collections::HashMap};
+use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::core::{FieldDefinition, richtext::find_crap_nodes};
+use crate::core::{
+    FieldDefinition,
+    richtext::{find_crap_nodes, parse_document},
+};
 
-/// Most nested containers (objects and arrays) a rich text document may have —
-/// exactly what `serde_json`'s parser accepts in text (its recursion budget of
-/// 128 is exhausted on entering the 128th container), applied to documents
-/// sent as objects too so both forms agree.
-const MAX_DOCUMENT_DEPTH: usize = 127;
+/// A field's custom nodes that declare attrs: each node's attr definitions by
+/// node name.
+pub(super) type KnownNodes<'a> = HashMap<&'a str, &'a [FieldDefinition]>;
+
+/// The known custom node instances in a rich text value of `field`, in its
+/// format: a `ProseMirror` document (its text or the object itself) for a JSON
+/// field, HTML text otherwise. A value of neither shape holds no nodes.
+pub(super) fn extract_nodes(
+    field: &FieldDefinition,
+    content: &Value,
+    known_nodes: &KnownNodes<'_>,
+) -> Vec<NodeInstance> {
+    if field.parses_json() {
+        return parse_document(content)
+            .map(|doc| extract_nodes_from_json(&doc, known_nodes))
+            .unwrap_or_default();
+    }
+
+    content
+        .as_str()
+        .map(|html| extract_nodes_from_html(html, known_nodes))
+        .unwrap_or_default()
+}
 
 /// A single extracted custom node instance with its attr values.
 pub(super) struct NodeInstance {
@@ -20,48 +41,8 @@ pub(super) struct NodeInstance {
     pub(super) attrs: HashMap<String, Value>,
 }
 
-/// A JSON-format rich text value as the `ProseMirror` document it carries — the
-/// one normalization every node-attr pass reads through. The value may arrive
-/// as JSON text (the admin form) or as the document object itself (MCP, Lua
-/// tables).
-///
-/// `None` when the value is not a document: text that does not parse (or nests
-/// deeper than [`MAX_DOCUMENT_DEPTH`]), or any other JSON type. Such content
-/// cannot be checked for its nodes, so validation refuses it.
-pub(super) fn json_document(value: &Value) -> Option<Cow<'_, Value>> {
-    let doc = match value {
-        Value::String(s) => Cow::Owned(serde_json::from_str::<Value>(s).ok()?),
-        Value::Object(_) => Cow::Borrowed(value),
-        _ => return None,
-    };
-
-    (doc.is_object() && !exceeds_depth(&doc, MAX_DOCUMENT_DEPTH)).then_some(doc)
-}
-
-/// Whether `value` nests containers deeper than `remaining` levels.
-fn exceeds_depth(value: &Value, remaining: usize) -> bool {
-    match value {
-        Value::Object(map) => {
-            remaining == 0
-                || map
-                    .values()
-                    .any(|child| exceeds_depth(child, remaining - 1))
-        }
-        Value::Array(items) => {
-            remaining == 0
-                || items
-                    .iter()
-                    .any(|child| exceeds_depth(child, remaining - 1))
-        }
-        _ => false,
-    }
-}
-
 /// Extract custom node instances from a `ProseMirror` JSON document.
-pub(super) fn extract_nodes_from_json(
-    doc: &Value,
-    known_nodes: &HashMap<&str, &[FieldDefinition]>,
-) -> Vec<NodeInstance> {
+fn extract_nodes_from_json(doc: &Value, known_nodes: &KnownNodes<'_>) -> Vec<NodeInstance> {
     let mut counters: HashMap<String, usize> = HashMap::new();
     let mut instances = Vec::new();
     collect_nodes_recursive(doc, known_nodes, &mut counters, &mut instances);
@@ -70,7 +51,7 @@ pub(super) fn extract_nodes_from_json(
 
 fn collect_nodes_recursive(
     value: &Value,
-    known_nodes: &HashMap<&str, &[FieldDefinition]>,
+    known_nodes: &KnownNodes<'_>,
     counters: &mut HashMap<String, usize>,
     out: &mut Vec<NodeInstance>,
 ) {
@@ -109,10 +90,7 @@ fn collect_nodes_recursive(
 
 /// Extract custom node instances from HTML content with `<crap-node>` tags,
 /// located by the tokenizer the renderer uses.
-pub(super) fn extract_nodes_from_html(
-    html: &str,
-    known_nodes: &HashMap<&str, &[FieldDefinition]>,
-) -> Vec<NodeInstance> {
+fn extract_nodes_from_html(html: &str, known_nodes: &KnownNodes<'_>) -> Vec<NodeInstance> {
     let mut counters: HashMap<String, usize> = HashMap::new();
 
     find_crap_nodes(html)
@@ -174,66 +152,6 @@ mod tests {
         // The nested callout keeps the per-type counter going.
         assert_eq!(nodes[1].index, 1);
         assert_eq!(nodes[1].attrs.get("color"), Some(&json!("blue")));
-    }
-
-    /// Unparseable, non-document and over-deep values are not documents, so
-    /// validation refuses them instead of finding no nodes in them.
-    #[test]
-    fn json_document_refuses_what_it_cannot_read() {
-        assert!(json_document(&json!("not json")).is_none());
-        assert!(json_document(&json!(42)).is_none());
-        assert!(json_document(&json!("[1,2]")).is_none());
-
-        let deep = format!("{}{}", "[".repeat(200), "]".repeat(200));
-        let deep_doc = format!(r#"{{"type":"doc","content":{deep}}}"#);
-        assert!(json_document(&json!(deep_doc)).is_none());
-    }
-
-    #[test]
-    fn json_document_accepts_text_and_objects() {
-        let doc = json!({ "type": "doc", "content": [] });
-
-        assert_eq!(json_document(&doc).as_deref(), Some(&doc));
-        assert_eq!(
-            json_document(&json!(doc.to_string())).as_deref(),
-            Some(&doc)
-        );
-    }
-
-    /// A document of `levels` nested objects, the root included.
-    fn nested_document(levels: usize) -> Value {
-        let mut doc = json!({ "type": "doc" });
-        for _ in 1..levels {
-            doc = json!({ "type": "doc", "child": doc });
-        }
-
-        doc
-    }
-
-    /// The deepest document the parser reads as text is accepted as an object
-    /// too; one level more is refused in both forms.
-    #[test]
-    fn text_and_object_documents_share_the_depth_limit() {
-        let deepest = nested_document(127);
-        let too_deep = nested_document(128);
-
-        assert!(serde_json::from_str::<Value>(&deepest.to_string()).is_ok());
-        assert!(serde_json::from_str::<Value>(&too_deep.to_string()).is_err());
-
-        assert!(json_document(&deepest).is_some());
-        assert!(json_document(&json!(deepest.to_string())).is_some());
-        assert!(json_document(&too_deep).is_none());
-        assert!(json_document(&json!(too_deep.to_string())).is_none());
-    }
-
-    #[test]
-    fn deeply_nested_objects_are_refused() {
-        let mut doc = json!({ "type": "text" });
-        for _ in 0..200 {
-            doc = json!({ "type": "paragraph", "content": [doc] });
-        }
-
-        assert!(json_document(&doc).is_none());
     }
 
     #[test]

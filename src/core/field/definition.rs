@@ -409,17 +409,18 @@ impl FieldDefinition {
     }
 
     /// The field's display label: the explicit `admin.label` when set and
-    /// non-empty, else the field name title-cased. One source so the admin editor
-    /// and the DB-read walkers (back-references) render the same label — including
-    /// treating an explicitly-empty label as absent (falls back to the name)
-    /// rather than rendering blank.
+    /// non-empty, else the plural row label (`admin.labels.plural`, an
+    /// array/blocks setting), else the field name title-cased. One source so the
+    /// admin editor and the DB-read walkers (back-references) render the same
+    /// label — including treating an explicitly-empty label as absent (falls
+    /// back to the next one) rather than rendering blank.
     #[must_use]
     pub fn resolved_label(&self) -> String {
-        self.admin
-            .label
-            .as_ref()
+        [self.admin.label.as_ref(), self.admin.labels.plural.as_ref()]
+            .into_iter()
+            .flatten()
             .map(|ls| ls.resolve_current().to_string())
-            .filter(|s| !s.is_empty())
+            .find(|s| !s.is_empty())
             .unwrap_or_else(|| to_title_case(&self.name))
     }
 

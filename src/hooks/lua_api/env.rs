@@ -1,7 +1,7 @@
 //! Register `crap.env` — read-only env var access.
 
 use anyhow::Result;
-use mlua::{Lua, Result as LuaResult};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult};
 use std::env;
 
 use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
@@ -13,9 +13,10 @@ fn env_get(_: &Lua, #[lua(doc = "Variable name.")] key: String) -> LuaResult<Opt
     // hooks even though it shares the `CRAP_` prefix. Config `${VAR}`
     // substitution runs at load (pre-VM), so operators can store secrets
     // under this prefix and reference them in `crap.toml` while keeping them
-    // unreadable from userland Lua.
+    // unreadable from userland Lua — the sandbox's io jail refuses `/proc`,
+    // so `/proc/self/environ` is no way around this check either.
     if key.starts_with("CRAP_SECRET_") {
-        return Err(mlua::Error::RuntimeError(format!(
+        return Err(RuntimeError(format!(
             "crap.env.get: '{key}' is hidden from hooks — the CRAP_SECRET_* \
              prefix is reserved for config-only secrets"
         )));

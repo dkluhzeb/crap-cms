@@ -150,8 +150,8 @@ pub(super) fn find_orphan_columns(
 }
 
 /// Every junction table the registry implies, for collections and globals
-/// alike. A table that was never created (a has-one relationship, a definition
-/// that changed) is filtered out by the caller's existence check.
+/// alike. A table that does not exist is filtered out by the caller's
+/// existence check.
 fn junction_tables(reg: &Registry) -> Vec<String> {
     let mut tables = Vec::new();
 

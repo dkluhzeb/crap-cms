@@ -4,9 +4,10 @@
 use std::{collections::HashMap, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use reqwest::blocking::Client;
+use reqwest::{Error as ReqwestError, blocking::Client, redirect::Policy};
 use serde::Serialize;
 use tracing::info;
+use url::Url;
 
 use crate::config::EmailConfig;
 
@@ -46,8 +47,13 @@ impl WebhookEmailProvider {
             .ok_or_else(|| anyhow!("email.webhook_url is required for webhook provider"))?
             .to_string();
 
+        // Redirects are not followed: a followed 301/302 turns the POST into
+        // a GET without the body, so a moved endpoint would answer 2xx and
+        // the email be recorded as sent without ever being delivered. A 3xx
+        // is a failure (retried, then reported) instead.
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
+            .redirect(Policy::none())
             .build()
             .context("Failed to create webhook HTTP client")?;
 
@@ -80,12 +86,26 @@ impl EmailProvider for WebhookEmailProvider {
             req = req.header(key, value);
         }
 
+        // The URL may carry a token (query string, userinfo): the transport
+        // error names only its origin, since this text lands in logs and the
+        // job's error column.
         let resp = req
             .send()
-            .with_context(|| format!("Webhook email request failed: {}", self.url))?;
+            .map_err(ReqwestError::without_url)
+            .with_context(|| {
+                format!("Webhook email request failed: {}", redacted_url(&self.url))
+            })?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
+        let status = resp.status();
+
+        if status.is_redirection() {
+            bail!(
+                "Webhook email failed with status {status}: redirects are not followed — \
+                 set email.webhook_url to the endpoint's final address"
+            );
+        }
+
+        if !status.is_success() {
             let body = resp.text().unwrap_or_default();
             bail!(
                 "Webhook email failed with status {}: {}",
@@ -104,10 +124,109 @@ impl EmailProvider for WebhookEmailProvider {
     }
 }
 
+/// The origin (`scheme://host:port`) of a webhook URL — what error text may
+/// show of it. Path, query and userinfo can carry credentials.
+fn redacted_url(url: &str) -> String {
+    Url::parse(url).map_or_else(
+        |_| "<unparseable webhook URL>".to_string(),
+        |u| u.origin().ascii_serialization(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{WebhookEmailPayload, WebhookFrom};
+    use std::{
+        io::{Read as _, Write as _},
+        net::TcpListener,
+        sync::mpsc,
+        thread,
+    };
+
     use serde_json::json;
+
+    use super::*;
+
+    /// Answer one connection with `response`, reporting each request line.
+    fn one_shot_server(response: &'static str) -> (String, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..n]).to_string();
+
+                let _ = tx.send(head.lines().next().unwrap_or("").to_string());
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        (format!("http://{addr}"), rx)
+    }
+
+    fn provider(url: &str) -> WebhookEmailProvider {
+        let config = EmailConfig {
+            webhook_url: Some(url.to_string()),
+            ..EmailConfig::default()
+        };
+
+        WebhookEmailProvider::new(&config).unwrap()
+    }
+
+    /// Regression: the client followed redirects — a 301/302 turned the POST
+    /// into a body-less GET, the new URL answered 2xx and the email was
+    /// recorded as sent without being delivered. A 3xx is now a failure and
+    /// the redirect target is never requested.
+    #[test]
+    fn a_redirect_is_a_failure_not_followed() {
+        let (base, rx) = one_shot_server(
+            "HTTP/1.1 301 Moved Permanently\r\nLocation: /moved\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+
+        let err = provider(&format!("{base}/send"))
+            .send("u@example.com", "S", "<p>x</p>", None)
+            .expect_err("a redirect must fail the send");
+
+        assert!(
+            err.to_string().contains("redirects are not followed"),
+            "{err}"
+        );
+        assert!(rx.recv().unwrap().starts_with("POST /send"));
+        assert!(rx.try_recv().is_err(), "the redirect target was requested");
+    }
+
+    /// Regression: the transport error embedded the full webhook URL — a
+    /// token in its query string or userinfo reached logs and the job's
+    /// error column.
+    #[test]
+    fn transport_errors_do_not_leak_url_credentials() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let err = provider(&format!(
+            "http://user:pa55@127.0.0.1:{port}/hook/s3gment?token=S3CRET"
+        ))
+        .send("u@example.com", "S", "<p>x</p>", None)
+        .expect_err("nothing listens on the port");
+        let text = format!("{err:#}");
+
+        for secret in ["S3CRET", "pa55", "s3gment"] {
+            assert!(!text.contains(secret), "{secret} leaked: {text}");
+        }
+        assert!(text.contains(&format!("http://127.0.0.1:{port}")), "{text}");
+    }
+
+    #[test]
+    fn redacted_url_keeps_only_the_origin() {
+        assert_eq!(
+            redacted_url("https://u:p@api.example.com:8443/v1/send?key=k#f"),
+            "https://api.example.com:8443"
+        );
+        assert_eq!(redacted_url("not a url"), "<unparseable webhook URL>");
+    }
 
     #[test]
     fn payload_serializes_nested_from_and_all_fields() {

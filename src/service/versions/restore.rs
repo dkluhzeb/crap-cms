@@ -8,19 +8,20 @@ use tracing::warn;
 use crate::{
     config::LocaleConfig,
     core::{
-        Document, DocumentFields, FieldChildren, FieldDefinition, canonicalize_text_values,
-        event::EventOperation, field_children,
+        Document, DocumentFields, EventViewPlacement, FieldChildren, FieldDefinition,
+        canonicalize_text_values, event::EventOperation, field_children,
     },
     db::{
-        AccessResult, LocaleContext, query,
+        AccessResult, DbConnection, LocaleContext, query,
         query::helpers::{global_table, prefixed_name},
     },
     hooks::{AccessCheckInput, ValidationCtx},
     service::{
-        Gated, ServiceContext, ServiceError, helpers,
+        Gated, ServiceContext, ServiceError, global_access_allowed, helpers,
         hooks::{SnapshotLocales, WriteHooks},
-        invalidate_user_streams_if_auth, run_pool_write, stored_fields_for_update_rules,
-        stored_global_fields_for_update_rules,
+        invalidate_user_streams_if_auth,
+        persist::sync_search_index,
+        run_pool_write, stored_fields_for_update_rules, stored_global_fields_for_update_rules,
         versions::gate::versions_gate_decision,
         write::{
             UploadSettle, adopt_held_variants, document_file_keys, restored_file_conversions,
@@ -28,6 +29,52 @@ use crate::{
         },
     },
 };
+
+/// The status a restore writes, records and validates at.
+///
+/// A draft snapshot restores as a draft and a published one as published,
+/// rather than force-publishing every restore. Without drafts there is no
+/// unpublished state: the restored content is live the moment it is written,
+/// so it restores as `published` — and is validated at full strictness —
+/// whatever the snapshot was stamped. A `draft` version survives on such a
+/// definition when drafts were switched off after it was saved; restoring it
+/// at draft leniency put a document missing a required value in front of
+/// every reader.
+fn restore_status(has_drafts: bool, version_status: &str) -> String {
+    if has_drafts {
+        return version_status.to_string();
+    }
+
+    "published".to_string()
+}
+
+/// Lock the row a restore writes, then read where it sits across the content
+/// views going in. Taken before anything the restore builds on is read — the
+/// field-write rules judge the live row, and a restore that changes the
+/// status (a draft version over a published row, or a published version over
+/// a draft) moves the row between views, which its live event announces — so
+/// a concurrent write cannot change the row in between (Postgres; a no-op on
+/// `SQLite`, whose transaction already serializes writers). A restore targets a
+/// live row, and without drafts there is no status view to read.
+fn lock_and_read_placement(
+    conn: &dyn DbConnection,
+    table: &str,
+    id: &str,
+    has_drafts: bool,
+) -> Result<EventViewPlacement> {
+    conn.lock_row(table, id)?;
+
+    let status = if has_drafts {
+        query::get_document_status(conn, table, id)?
+    } else {
+        None
+    };
+
+    Ok(EventViewPlacement {
+        status,
+        trashed: false,
+    })
+}
 
 /// Bring a snapshot's email and text values into the canonical form every
 /// write stores. A snapshot taken before values were stored that way holds
@@ -312,11 +359,8 @@ pub(crate) fn restore_collection_version_core(
     }
 
     // Restore returns the document to its exact state at that point in time —
-    // including its publication status. A draft snapshot restores as a draft,
-    // a published one as published (rather than force-publishing every
-    // restore). For a collection without a status axis the snapshot status is
-    // always "published", so this is a no-op there.
-    let restored_status = version.status.clone();
+    // including its publication status (see `restore_status`).
+    let restored_status = restore_status(def.has_drafts(), &version.status);
     let mut snapshot = version.snapshot;
 
     warn_on_snapshot_drift(&snapshot, &def.fields, ctx.slug, version_id);
@@ -327,6 +371,8 @@ pub(crate) fn restore_collection_version_core(
     // snapshot before validation and persistence (same input-stripping model
     // `update` uses), so the partial restore leaves their stored values intact.
     // Rules judge the live row, not the snapshot being restored.
+    let prior = lock_and_read_placement(conn, ctx.slug, document_id, def.has_drafts())?;
+
     let stored = stored_fields_for_update_rules(
         conn,
         ctx.slug,
@@ -396,6 +442,9 @@ pub(crate) fn restore_collection_version_core(
         locale_config,
     )?;
 
+    // Re-sync the search index to the restored content.
+    sync_search_index(ctx, conn, document_id, locale_config)?;
+
     // The restored file's queued variants the document no longer holds.
     let conversions =
         restored_file_conversions(def, &before_files, &doc.fields, ctx.image_max_attempts);
@@ -412,8 +461,11 @@ pub(crate) fn restore_collection_version_core(
     helpers::hydrate_reported(ctx, &mut doc, restore_locale_ctx.as_ref())?;
 
     // The row as stored, before anything is shaped or stripped for the writer:
-    // the live event is built from it.
-    let row = ctx.event_row(&doc);
+    // the live event is built from it. A restore that changes the status moves
+    // the row between the published and draft views, which the event
+    // announces as a removal to the subscribers that could only see it where
+    // it was.
+    let row = ctx.event_row(&doc).map(|row| row.moved_from(Some(prior)));
 
     helpers::strip_reported(ctx, write_hooks, &mut doc, restore_locale_ctx.as_ref())?;
 
@@ -482,15 +534,8 @@ pub(crate) fn restore_global_version_core(
             .build(),
     )?;
 
-    if matches!(access, AccessResult::Denied) {
+    if !global_access_allowed(&access, ctx.slug)? {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
-    }
-
-    if matches!(access, AccessResult::Constrained(_)) {
-        return Err(ServiceError::HookError(format!(
-            "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
-            ctx.slug
-        )));
     }
 
     // Restore also requires version-history access (explicit `versions` toggle;
@@ -502,9 +547,9 @@ pub(crate) fn restore_global_version_core(
     let version = query::find_version_by_id(conn, &gtable, version_id)?
         .ok_or_else(|| ServiceError::NotFound(format!("Version '{version_id}' not found")))?;
 
-    // Restore to the snapshot's own publication status (see the collection
-    // variant above) rather than force-publishing.
-    let restored_status = version.status.clone();
+    // Restore to the snapshot's own publication status (see `restore_status`)
+    // rather than force-publishing.
+    let restored_status = restore_status(def.has_drafts(), &version.status);
     let mut snapshot = version.snapshot;
 
     warn_on_snapshot_drift(&snapshot, &def.fields, ctx.slug, version_id);
@@ -514,6 +559,8 @@ pub(crate) fn restore_global_version_core(
     // persistence so a restore can't overwrite a write-locked field's value.
     // Rules judge the live global, not the snapshot being restored.
     let restore_locale_ctx = LocaleContext::default_for(locale_config);
+    let prior = lock_and_read_placement(conn, &gtable, "default", def.has_drafts())?;
+
     let stored =
         stored_global_fields_for_update_rules(conn, ctx.slug, def, restore_locale_ctx.as_ref())?;
     write_hooks.strip_write_access_value(
@@ -557,8 +604,9 @@ pub(crate) fn restore_global_version_core(
     )?;
 
     // The global as stored, before anything is shaped or stripped for the
-    // writer: the live event is built from it.
-    let row = ctx.event_row(&doc);
+    // writer: the live event is built from it (a draft restored over the
+    // published global unpublishes it — see the collection variant).
+    let row = ctx.event_row(&doc).map(|row| row.moved_from(Some(prior)));
 
     helpers::strip_reported(ctx, write_hooks, &mut doc, restore_locale_ctx.as_ref())?;
 
@@ -572,7 +620,7 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        canonicalize_snapshot, collect_known_keys, restore_collection_version,
+        canonicalize_snapshot, collect_known_keys, restore_collection_version, restore_status,
         warn_on_snapshot_drift,
     };
     use crate::{
@@ -655,6 +703,16 @@ mod tests {
             matches!(&err, ServiceError::HookError(msg) if msg.contains("versioning")),
             "expected typed versioning gate error, got {err:?}"
         );
+    }
+
+    /// With drafts a restore keeps the snapshot's status; without them every
+    /// restore is a publish, validated at full strictness.
+    #[test]
+    fn restore_status_is_published_without_drafts() {
+        assert_eq!(restore_status(true, "draft"), "draft");
+        assert_eq!(restore_status(true, "published"), "published");
+        assert_eq!(restore_status(false, "draft"), "published");
+        assert_eq!(restore_status(false, "published"), "published");
     }
 
     #[test]

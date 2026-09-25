@@ -12,6 +12,12 @@
 //! field of a urlencoded body, compared in constant time. Both the global
 //! admin middleware and the custom-route dispatcher call it, so neither can
 //! drift into accepting a different set of requests than the other.
+//!
+//! The external auth callback routes are the one exemption
+//! ([`exempt_route`]): an identity provider's `response_mode=form_post`
+//! arrives as a cross-site POST, which never carries the `SameSite=Strict`
+//! token cookie. Login CSRF on a callback is what the OAuth `state` parameter
+//! defends against — the callback hook must check it.
 
 use axum::http::{HeaderMap, header::CONTENT_TYPE};
 use subtle::ConstantTimeEq;
@@ -21,6 +27,21 @@ pub(in crate::admin) const TOKEN_HEADER: &str = "x-csrf-token";
 
 /// Hidden field the admin layout adds to every form submit.
 pub(in crate::admin) const TOKEN_FIELD: &str = "_csrf";
+
+/// Route of the un-scoped external auth callback.
+pub(in crate::admin) const AUTH_CALLBACK_ROUTE: &str = "/admin/auth/callback/{name}";
+
+/// Route of the collection-scoped external auth callback.
+pub(in crate::admin) const AUTH_CALLBACK_SCOPED_ROUTE: &str =
+    "/admin/auth/callback/{collection}/{name}";
+
+/// Whether the route a request matched (its axum route template) is exempt
+/// from the double-submit check: only the external auth callbacks, which an
+/// identity provider may reach with a cross-site form POST. Their login-CSRF
+/// defense is the OAuth `state` round trip their hook verifies.
+pub(in crate::admin) fn exempt_route(matched: Option<&str>) -> bool {
+    matched.is_some_and(|route| route == AUTH_CALLBACK_ROUTE || route == AUTH_CALLBACK_SCOPED_ROUTE)
+}
 
 /// Whether `candidate` is the expected token. Constant-time, and an empty
 /// expectation never matches — an absent cookie must not authorise a request
@@ -80,6 +101,21 @@ pub(in crate::admin) fn request_token_matches(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only the two auth callback routes skip the check — not a sibling
+    /// route, not an unmatched request.
+    #[test]
+    fn only_the_auth_callbacks_are_exempt() {
+        assert!(exempt_route(Some("/admin/auth/callback/{name}")));
+        assert!(exempt_route(Some(
+            "/admin/auth/callback/{collection}/{name}"
+        )));
+
+        assert!(!exempt_route(Some("/admin/mfa")));
+        assert!(!exempt_route(Some("/admin/login")));
+        assert!(!exempt_route(Some("/admin/collections/{slug}")));
+        assert!(!exempt_route(None));
+    }
 
     fn headers(pairs: &[(&'static str, &str)]) -> HeaderMap {
         let mut map = HeaderMap::new();

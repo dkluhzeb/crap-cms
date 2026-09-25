@@ -5,6 +5,13 @@
 //! a backend that can ask its remote for a slice (S3 sends an HTTP `Range`
 //! header) must be able to say which slice it actually got back — the serve
 //! route needs that to answer `206` with a truthful `Content-Range`.
+//!
+//! [`ObjectMeta`] is what a backend knows about an object *without* reading
+//! its bytes (an S3 `HEAD`): enough to answer a conditional request with
+//! `304`, resolve a range to `416`/`206`, and stream the body in bounded
+//! slices.
+
+use crate::core::Builder;
 
 /// A byte range requested from a stored object, in the two forms an HTTP
 /// `Range: bytes=…` header can take.
@@ -97,6 +104,27 @@ impl RangedObject {
     pub fn whole(data: Vec<u8>) -> RangedObjectBuilder {
         RangedObjectBuilder::new(data)
     }
+
+    /// The object's validators and size as this read reported them.
+    #[must_use]
+    pub fn meta(&self) -> ObjectMeta {
+        ObjectMeta::builder()
+            .size(self.total_size)
+            .etag(self.etag.clone())
+            .last_modified(self.last_modified.clone())
+            .build()
+    }
+}
+
+/// An object's size and validators, read without its bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Builder)]
+pub struct ObjectMeta {
+    /// Total size in bytes, when the backend reports it.
+    pub size: Option<u64>,
+    /// The backend's entity tag, quotes stripped, when it has one.
+    pub etag: Option<String>,
+    /// The backend's last-modified stamp as an HTTP-date string.
+    pub last_modified: Option<String>,
 }
 
 /// Builder for [`RangedObject`].
@@ -195,6 +223,18 @@ pub fn slice_locally(data: &[u8], range: &ByteRange) -> Option<RangedObject> {
     )
 }
 
+/// The read result for a backend that fetched the whole object: all of it
+/// without a `range`, the local slice with one (`None` when the range is
+/// unsatisfiable).
+#[must_use]
+pub(super) fn whole_or_slice(data: Vec<u8>, range: Option<&ByteRange>) -> Option<RangedObject> {
+    let Some(range) = range else {
+        return Some(RangedObject::whole(data).build());
+    };
+
+    slice_locally(&data, range)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ByteRange, RangedObject, slice_locally};
@@ -235,6 +275,20 @@ mod tests {
     #[test]
     fn slicing_an_unsatisfiable_range_returns_none() {
         assert!(slice_locally(b"0123456789", &ByteRange::from_start(10)).is_none());
+    }
+
+    #[test]
+    fn a_read_reports_its_metadata() {
+        let object = RangedObject::whole(b"ab".to_vec())
+            .total_size(Some(10))
+            .etag(Some("e".into()))
+            .build();
+
+        let meta = object.meta();
+
+        assert_eq!(meta.size, Some(10));
+        assert_eq!(meta.etag.as_deref(), Some("e"));
+        assert!(meta.last_modified.is_none());
     }
 
     #[test]

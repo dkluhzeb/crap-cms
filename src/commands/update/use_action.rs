@@ -20,7 +20,7 @@ use super::{
 /// next invocation. `yes` skips the confirmation prompt that fires when
 /// the PATH binary is a regular file rather than a symlink.
 pub(super) fn run_use<C: CommandFactory>(version: &str, yes: bool, force: bool) -> Result<()> {
-    let version = normalize_tag(version);
+    let version = normalize_tag(version)?;
     let store = store::Store::default_for_user()?;
     ensure_self_managed(&store, force)?;
     store.switch_to(&version)?;

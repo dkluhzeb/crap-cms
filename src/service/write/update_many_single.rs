@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::{
     config::LocaleConfig,
     db::LocaleContext,
-    hooks::{HookContext, ValidationCtx},
+    hooks::ValidationCtx,
     service::{
         AfterChangeInput, Gated, PersistOptions, ServiceContext, WriteInput, WriteResult,
         persist_bulk_update, persist_draft_version, run_after_change_hooks,
@@ -49,13 +49,12 @@ pub(crate) fn update_many_single_in_conn(
     let is_draft = input.draft && def.has_drafts();
 
     let hook_data = input.data.clone();
-    let hook_ctx = HookContext::builder(ctx.slug, "update")
+    let hook_ctx = ctx
+        .hook_context("update")
         .data(hook_data)
         .document_id(id)
         .locale(input.locale_ctx.map(LocaleContext::access_locale))
         .draft(is_draft)
-        .user(ctx.user)
-        .ui_locale(input.ui_locale.as_deref())
         .build();
 
     // Same rule as the single-document update: a publish writes the draft's
@@ -68,8 +67,9 @@ pub(crate) fn update_many_single_in_conn(
         .soft_delete(def.soft_delete)
         .collection_required_locales(def.required_locales.as_ref())
         .user(ctx.user)
-        .ui_locale(input.ui_locale.as_deref())
+        .ui_locale(ctx.ui_locale.as_deref())
         .locale_overlay(publishing_draft.as_ref().and_then(Value::as_object))
+        .versioned_drafts(def.has_drafts())
         .build();
 
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
@@ -84,6 +84,11 @@ pub(crate) fn update_many_single_in_conn(
     // dropped once the write has landed. Read last, so a before-hook that
     // rewrote the row through its own CRUD is accounted for.
     let before_files = document_file_keys(ctx, def, id, input.locale_ctx)?;
+
+    // The status the row has going in, read as late as the files are: a
+    // publish of a draft moves it out of the draft view, which the live event
+    // announces.
+    let status_before = ctx.status_before_write(id, snapshot_only)?;
 
     // A draft save reports its snapshot with its own rows; a published write
     // reports the stored row, hydrated BEFORE after-change hooks so they see
@@ -144,14 +149,16 @@ pub(crate) fn update_many_single_in_conn(
             .draft(is_draft)
             .req_context(final_ctx.context)
             .user(ctx.user)
-            .ui_locale(input.ui_locale.as_deref())
+            .ui_locale(ctx.ui_locale.as_deref())
             .build(),
         conn,
     )?;
 
     // The row as stored, before anything is shaped or stripped for the writer:
-    // the live event is built from it.
-    let row = ctx.write_event_row(&doc, input.locale_ctx, snapshot_only)?;
+    // the live event is built from it, with the status view it moved from.
+    let row = ctx
+        .write_event_row(&doc, input.locale_ctx, snapshot_only)?
+        .map(|row| row.status_moved_from(status_before));
 
     strip_reported(ctx, write_hooks, &mut doc, input.locale_ctx)?;
 

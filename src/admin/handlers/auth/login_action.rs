@@ -12,8 +12,8 @@ use crate::{
     admin::{
         AdminState, auth_middleware,
         handlers::auth::{
-            LoginForm, SessionGrant, client_ip, create_session_token, issue_mfa_challenge,
-            login_error, session_redirect,
+            LoginForm, client_ip, create_session_token, issue_mfa_challenge, login_error,
+            refusal_error_key, session_redirect,
         },
         server::headers_to_map,
     },
@@ -24,7 +24,7 @@ use crate::{
     },
     service::{
         AppInfra, ServiceError,
-        auth::{LoginFlowRequest, LoginOutcome, LoginVerified, verify_login},
+        auth::{LoginFlowRequest, LoginOutcome, LoginVerified, SessionGrant, verify_login},
     },
 };
 
@@ -81,25 +81,22 @@ fn handle_mfa_challenge(state: &AdminState, login: &LoginVerified, form: &LoginF
     let email = login_email(&login.user, form);
 
     issue_mfa_challenge(state, &form.collection, login, &email)
-        .unwrap_or_else(|refusal| login_error(state, refusal.error_key(), &form.email))
+        .unwrap_or_else(|refusal| login_error(state, refusal_error_key(refusal), &form.email))
 }
 
 /// Build the authenticated session response (JWT + cookies + redirect).
-fn build_session_response(
-    state: &AdminState,
-    user: &Document,
-    form: &LoginForm,
-    session_version: u64,
-) -> Response {
+fn build_session_response(state: &AdminState, login: &LoginVerified, form: &LoginForm) -> Response {
+    let user = &login.user;
     let user_email = login_email(user, form);
 
     let grant = SessionGrant::builder(
-        user.id.to_string(),
+        &user.id,
         &form.collection,
-        user_email,
-        session_version,
+        &user_email,
+        login.session_version,
+        Surface::Admin,
     )
-    .build();
+    .mfa(login.mfa);
 
     let session = match create_session_token(state, grant) {
         Ok(s) => s,
@@ -213,7 +210,7 @@ pub async fn login_action(
         return handle_mfa_challenge(&state, &login, &form);
     }
 
-    build_session_response(&state, &login.user, &form, login.session_version)
+    build_session_response(&state, &login, &form)
 }
 
 #[cfg(test)]

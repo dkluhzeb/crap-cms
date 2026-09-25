@@ -24,6 +24,27 @@ pub trait LuaVmLease: Send + Sync {
     ///
     /// Propagates any error from acquiring a VM or from `f` itself.
     fn with_vm(&self, f: &mut dyn FnMut(&Lua) -> Result<()>) -> Result<()>;
+
+    /// Run `f` with a borrowed VM that stops once `timeout_secs` have
+    /// passed — for work the scheduler runs on a blocking thread it cannot
+    /// cancel (a custom email provider delivering a queued email), which
+    /// must end at its queue's timeout rather than hold the slot.
+    ///
+    /// The default runs `f` under the bounds the leased VM already carries:
+    /// a lease over the caller's own VM (a [`LocalLease`] inside a hook or a
+    /// job handler) is governed by that caller's deadline.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from acquiring a VM or from `f` itself,
+    /// including the deadline's error once it has passed.
+    fn with_vm_until(
+        &self,
+        _timeout_secs: u64,
+        f: &mut dyn FnMut(&Lua) -> Result<()>,
+    ) -> Result<()> {
+        self.with_vm(f)
+    }
 }
 
 /// A lease backed by one fixed VM, held as a **weak** handle.

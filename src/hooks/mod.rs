@@ -7,6 +7,7 @@
 //! - `init.rs` -- VM creation (`init_lua`), config-dir loading
 //!   (`load_lua_dir`), and the sandbox restrictions (`sandbox_lua`)
 //!   applied to every hook VM.
+//! - `io_jail.rs` -- the path jail the sandbox puts around Lua `io`.
 //! - `lua_api/` -- the `crap.*` API surface registered into each VM:
 //!   collections / globals / jobs CRUD, http, email, cache, fields,
 //!   richtext, json, log, version, etc. One file per `crap.<area>`.
@@ -39,12 +40,16 @@
 //!   args.
 
 mod init;
+mod io_jail;
 pub mod lifecycle;
 pub mod lua_api;
 mod startup_checks;
 
 pub use init::init_lua;
-pub(crate) use init::{install_relative_chunk_searcher, load_lua_dir, sandbox_lua};
+pub(crate) use init::{
+    execute_init_lua, install_module_loader, load_def_dir, load_source_file, sandbox_lua,
+};
+pub(crate) use io_jail::IoJail;
 pub use lifecycle::{
     AccessCheckInput, ConditionContext, DisplayConditionResult, EventAfterReadInput, HookContext,
     HookEvent, HookRunner, LuaCrudInfra, MigrationCall, ValidationCtx, VmPoolExhausted,

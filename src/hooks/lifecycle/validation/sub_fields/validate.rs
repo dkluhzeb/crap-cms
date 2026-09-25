@@ -16,6 +16,7 @@ use crate::{
         custom::{ValidateCtxSource, run_required_condition_inner, run_validate_function_inner},
         is_empty_value,
         richtext_attrs::{RichtextValidationCtx, validate_richtext_node_attrs},
+        stored::StoredDocument,
     },
 };
 
@@ -44,6 +45,8 @@ struct RowValidationCtx<'a> {
     /// The full parent document (so sub-field validators can cross-reference
     /// fields outside their row).
     document: &'a HashMap<String, Value>,
+    /// The edited document, for values a write may resubmit unchanged.
+    stored: &'a StoredDocument<'a>,
 }
 
 /// Per-sub-field call target — the field being validated and its qualified
@@ -71,6 +74,8 @@ pub(in crate::hooks::lifecycle::validation) struct SubFieldParams<'a> {
     pub id: Option<&'a str>,
     /// The full parent document.
     pub document: &'a HashMap<String, Value>,
+    /// The edited document, for values a write may resubmit unchanged.
+    pub stored: &'a StoredDocument<'a>,
 }
 
 /// Validate sub-fields within a single array/blocks row (inner, no mutex).
@@ -99,6 +104,7 @@ pub(in crate::hooks::lifecycle::validation) fn validate_sub_fields_inner(
         operation: params.operation,
         id: params.id,
         document: params.document,
+        stored: params.stored,
     };
 
     validate_children_recursive(&ctx, sub_fields, "", errors);
@@ -219,6 +225,7 @@ fn validate_group_in_row(
         operation: ctx.operation,
         id: ctx.id,
         document: ctx.document,
+        stored: ctx.stored,
     };
 
     validate_children_recursive(&group_ctx, sub_fields, "", errors);
@@ -291,6 +298,7 @@ fn validate_nested_rows(
             operation: ctx.operation,
             id: ctx.id,
             document: ctx.document,
+            stored: ctx.stored,
         };
 
         validate_sub_fields_inner(&params, sub_fields, nested_obj, errors);
@@ -347,6 +355,56 @@ fn sub_field_required(
     }
 }
 
+/// Run a row sub-field's custom Lua `validate` function, reporting its
+/// message (or an internal-error message when the function itself fails).
+fn run_custom_validate(
+    ctx: &RowValidationCtx<'_>,
+    call: &SubFieldCall<'_>,
+    value: Option<&Value>,
+    errors: &mut Vec<FieldError>,
+) {
+    let SubFieldCall { sf, qualified } = *call;
+
+    let (Some(validate), Some(val)) = (sf.validate.as_ref(), value) else {
+        return;
+    };
+
+    let validate_ref = validate.reference();
+
+    match run_validate_function_inner(
+        ctx.lua,
+        validate_ref,
+        val,
+        &ValidateCtxSource {
+            data: ctx.scope,
+            document: ctx.document,
+            collection: ctx.table,
+            field_name: &sf.name,
+            locale: ctx.locale,
+            operation: ctx.operation,
+            id: ctx.id,
+            options: validate.options(),
+        },
+    ) {
+        Ok(Some(err_msg)) => {
+            errors.push(FieldError::new(qualified.to_owned(), err_msg));
+        }
+        Ok(None) => {}
+        Err(e) => {
+            warn!("Validate function '{}' error: {}", validate_ref, e);
+
+            errors.push(
+                FieldError::with_key(
+                    qualified.to_owned(),
+                    format!("Validation failed (internal error in '{validate_ref}')"),
+                    "validation.custom_error",
+                )
+                .with_param("field", sf.name.clone()),
+            );
+        }
+    }
+}
+
 /// Validate a single leaf sub-field inside an array/blocks row container (Group, Row,
 /// Collapsible, or Tabs). Runs the required check, date format check, custom Lua
 /// validate function, and richtext node attr validation.
@@ -398,46 +456,15 @@ fn validate_leaf_sub_field(
     );
 
     // 3. Custom Lua validate function
-    if let Some(ref validate) = sf.validate
-        && let Some(val) = value
-    {
-        let validate_ref = validate.reference();
+    run_custom_validate(ctx, call, value, errors);
 
-        match run_validate_function_inner(
-            ctx.lua,
-            validate_ref,
-            val,
-            &ValidateCtxSource {
-                data: ctx.scope,
-                document: ctx.document,
-                collection: ctx.table,
-                field_name: &sf.name,
-                locale: ctx.locale,
-                operation: ctx.operation,
-                id: ctx.id,
-                options: validate.options(),
-            },
-        ) {
-            Ok(Some(err_msg)) => {
-                errors.push(FieldError::new(qualified.to_owned(), err_msg));
-            }
-            Ok(None) => {}
-            Err(e) => {
-                warn!("Validate function '{}' error: {}", validate_ref, e);
-
-                errors.push(
-                    FieldError::with_key(
-                        qualified.to_owned(),
-                        format!("Validation failed (internal error in '{validate_ref}')"),
-                        "validation.custom_error",
-                    )
-                    .with_param("field", sf.name.clone()),
-                );
-            }
-        }
-    }
-
-    // 4. Length bounds (min_length / max_length)
+    // 4. Rich text shape, then length bounds (min_length / max_length)
+    checks::check_richtext_value(
+        &checks::RichtextCheck::new(sf, qualified, value)
+            .registry(ctx.registry)
+            .stored(ctx.stored),
+        errors,
+    );
     checks::check_length_bounds(sf, qualified, value, is_empty, errors);
 
     // 5. Numeric bounds (min / max)
@@ -450,9 +477,12 @@ fn validate_leaf_sub_field(
     // 6. Email format validation
     checks::check_email_format(sf, qualified, value, is_empty, errors);
 
-    // 7. Select/radio option validation. A row's values have no column of
-    //    their own, so the declared options are all there is to judge them on.
-    checks::check_option_valid(&OptionCheck::new(sf, qualified, value, is_empty), errors);
+    // 7. Select/radio option validation — a value the row already holds stays
+    //    acceptable, exactly as at the top level.
+    checks::check_option_valid(
+        &OptionCheck::new(sf, qualified, value, is_empty).stored(ctx.stored),
+        errors,
+    );
 
     // 8. Has-many element validation (per-element length/numeric bounds, row counts)
     checks::check_has_many_elements(
@@ -489,6 +519,7 @@ fn validate_leaf_sub_field(
                 .locale(ctx.locale)
                 .operation(ctx.operation)
                 .id(ctx.id)
+                .stored(Some(ctx.stored))
                 .build(),
             content,
             qualified,

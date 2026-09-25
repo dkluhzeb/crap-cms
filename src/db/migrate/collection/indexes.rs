@@ -23,7 +23,7 @@ use crate::{
 /// this prefix, so an index built with a different prefix can never be
 /// recognized as stale (permanent orphan). One source shared by [`index_name`]
 /// and the stale-drop scan so the two can't disagree.
-fn index_prefix(slug: &str) -> String {
+pub(super) fn index_prefix(slug: &str) -> String {
     format!("idx_{slug}_")
 }
 

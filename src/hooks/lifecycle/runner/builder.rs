@@ -1,6 +1,10 @@
 //! Builder for [`HookRunner`].
 
-use std::{fs, path::Path, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Instant,
+};
 
 use anyhow::{Context as _, Result};
 use mlua::{Lua, LuaOptions, StdLib};
@@ -15,11 +19,11 @@ use crate::{
         upload,
     },
     hooks::{
-        self, HookRunner,
+        self, HookRunner, IoJail,
         lifecycle::{
             InitPhase, LuaVmInfra,
             execution::{scan_has_template_data, scan_registered_events},
-            types::{HookDepth, MaxInstructions},
+            types::HookDepth,
         },
         lua_api::{
             self, VmLabel,
@@ -29,7 +33,7 @@ use crate::{
     },
 };
 
-use super::vm_pool::{VmFactory, VmPool};
+use super::vm_pool::{VmFactory, VmPool, apply_vm_limits};
 
 /// Builder for [`HookRunner`]. Created via [`HookRunner::builder`].
 pub struct HookRunnerBuilder<'a> {
@@ -100,24 +104,18 @@ impl<'a> HookRunnerBuilder<'a> {
 
         // Factory for on-demand growth: owns everything `create_lua_vm` needs
         // so a fresh VM can be built on any blocking thread when concurrency
-        // exceeds the pre-warmed set.
-        let factory: VmFactory = {
-            let config_dir = config_dir.to_path_buf();
-            let registry = Arc::clone(&registry);
-            let config = config.clone();
-            let invalidation_transport = invalidation_transport.clone();
-            Box::new(move |idx| {
-                create_lua_vm(
-                    &config_dir,
-                    &registry,
-                    &config,
-                    idx,
-                    invalidation_transport.clone(),
-                )
-            })
+        // exceeds the pre-warmed set. The io jail is resolved once here and
+        // shared by every VM.
+        let blueprint = VmBlueprint {
+            config_dir: config_dir.to_path_buf(),
+            registry: Arc::clone(&registry),
+            config: config.clone(),
+            invalidation_transport,
+            io_jail: Arc::new(IoJail::new(config_dir, config)?),
         };
+        let factory: VmFactory = Box::new(move |idx| create_lua_vm(&blueprint, idx));
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let mut prewarmed = Vec::with_capacity(pool_size);
         for i in 0..pool_size {
             prewarmed.push(factory(i + 1)?);
@@ -151,34 +149,40 @@ impl<'a> HookRunnerBuilder<'a> {
     }
 }
 
+/// Everything a pool VM is built from — owned by the pool's factory so a VM
+/// can be built on demand on any blocking thread.
+struct VmBlueprint {
+    config_dir: PathBuf,
+    registry: Arc<Registry>,
+    config: CrapConfig,
+    invalidation_transport: Option<SharedInvalidationTransport>,
+    io_jail: Arc<IoJail>,
+}
+
 /// Create and fully initialize a single Lua VM with package paths, API, CRUD functions,
 /// collection/global/job loading, and init.lua execution.
-fn create_lua_vm(
-    config_dir: &Path,
-    registry: &Arc<Registry>,
-    config: &CrapConfig,
-    vm_index: usize,
-    invalidation_transport: Option<SharedInvalidationTransport>,
-) -> Result<Lua> {
+fn create_lua_vm(blueprint: &VmBlueprint, vm_index: usize) -> Result<Lua> {
+    let VmBlueprint {
+        config_dir,
+        registry,
+        config,
+        io_jail,
+        ..
+    } = blueprint;
+
     let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default())?;
 
-    hooks::sandbox_lua(&lua)?;
+    hooks::sandbox_lua(&lua, io_jail)?;
 
-    if config.hooks.max_memory > 0 {
-        // 32-bit overflow path falls back to 256 MiB (a sane VM memory ceiling)
-        // rather than usize::MAX, which would effectively disable the limit.
-        let memory_limit = usize::try_from(config.hooks.max_memory).unwrap_or(256 * 1024 * 1024);
-        lua.set_memory_limit(memory_limit)?;
-    }
+    apply_vm_limits(&lua, &config.hooks)?;
 
     lua.set_app_data(VmLabel(format!("vm-{vm_index}")));
 
-    setup_package_paths(&lua, config_dir)?;
-    hooks::install_relative_chunk_searcher(&lua)?;
+    hooks::install_module_loader(&lua, config_dir)?;
 
     register_apis(&lua, registry, config)?;
 
-    init_app_data(&lua, config_dir, config, registry, invalidation_transport)?;
+    init_app_data(&lua, blueprint)?;
 
     // Mark the init phase so register-only APIs (`crap.pages.register`,
     // `crap.template_data.register`, ...) accept calls. The marker is
@@ -197,24 +201,13 @@ fn create_lua_vm(
     // produce per-VM Lua state — the `M.run` handle is bound to this
     // VM and the dispatcher's later `require("jobs.foo")` must hit
     // this VM's `package.loaded` cache to find it.
-    load_def_dir(&lua, config_dir, "job")?;
+    hooks::load_def_dir(&lua, config_dir, "job")?;
 
-    execute_init_lua(&lua, config_dir, vm_index)?;
+    hooks::execute_init_lua(&lua, config_dir).context("HookRunner: failed to execute init.lua")?;
 
     lua.remove_app_data::<InitPhase>();
 
     Ok(lua)
-}
-
-/// Set up Lua package.path to include the config directory.
-fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
-    let config_str = config_dir.to_string_lossy();
-    let code =
-        format!(r#"package.path = "{config_str}/?.lua;{config_str}/?/init.lua;" .. package.path"#);
-
-    lua.load(&code)
-        .exec()
-        .context("Failed to set package paths")
 }
 
 /// Register the crap API and CRUD functions on pool Lua VMs. Pool VMs
@@ -249,17 +242,17 @@ fn register_apis(lua: &Lua, registry: &Arc<Registry>, config: &CrapConfig) -> Re
     Ok(())
 }
 
-/// Initialize hook depth tracking, the instruction limit, and the VM-stable
-/// infrastructure bundle ([`LuaVmInfra`]).
-fn init_app_data(
-    lua: &Lua,
-    config_dir: &Path,
-    config: &CrapConfig,
-    registry: &Arc<Registry>,
-    invalidation_transport: Option<SharedInvalidationTransport>,
-) -> Result<()> {
+/// Initialize hook depth tracking and the VM-stable infrastructure bundle ([`LuaVmInfra`]).
+fn init_app_data(lua: &Lua, blueprint: &VmBlueprint) -> Result<()> {
+    let VmBlueprint {
+        config_dir,
+        registry,
+        config,
+        invalidation_transport,
+        ..
+    } = blueprint;
+
     lua.set_app_data(HookDepth(0));
-    lua.set_app_data(MaxInstructions(config.hooks.max_instructions));
 
     // Inside a pool VM, a custom backend delegates to `crap._storage`
     // (set by `crap.storage.register` during this VM's init.lua). Back it
@@ -285,44 +278,10 @@ fn init_app_data(
         locale_config: config.locale.clone(),
         storage: Some(storage),
         cache,
-        invalidation_transport,
+        invalidation_transport: invalidation_transport.clone(),
         max_hook_depth: config.hooks.max_depth,
         default_deny: config.access.default_deny,
     });
-
-    Ok(())
-}
-
-/// Execute init.lua if it exists in the config directory.
-fn execute_init_lua(lua: &Lua, config_dir: &Path, vm_index: usize) -> Result<()> {
-    let init_path = config_dir.join("init.lua");
-
-    if init_path.exists() {
-        debug!("[lua:vm-{vm_index}] Executing init.lua");
-
-        let code = fs::read_to_string(&init_path)
-            .with_context(|| format!("Failed to read {}", init_path.display()))?;
-
-        lua.load(&code)
-            .set_name(crate::hooks::init::chunk_name(&init_path))
-            .exec()
-            .with_context(|| "HookRunner: failed to execute init.lua")?;
-    }
-
-    Ok(())
-}
-
-/// Load Lua definition files from `{config_dir}/{kind}s/` if the directory exists.
-/// Passes the plural directory name as the `package.loaded` cache-key
-/// prefix so `require("jobs.foo")` hits the cache populated for
-/// `<config_dir>/jobs/foo.lua`.
-fn load_def_dir(lua: &Lua, config_dir: &Path, kind: &str) -> Result<()> {
-    let dir_name = format!("{kind}s");
-    let dir = config_dir.join(&dir_name);
-
-    if dir.exists() {
-        hooks::load_lua_dir(lua, &dir, &dir_name)?;
-    }
 
     Ok(())
 }

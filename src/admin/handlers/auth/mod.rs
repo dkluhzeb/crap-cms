@@ -60,12 +60,12 @@ pub use forms::{
     ResetPasswordForm, ResetPasswordQuery, VerifyEmailQuery,
 };
 pub(super) use helpers::{
-    SessionGrant, all_disable_local, client_ip, create_session_token, extract_mfa_token,
-    extract_user_email, get_auth_collections, get_verifying_collections, is_totp_collection,
-    login_error, render_forgot_success, render_mfa, render_resend_verification, session_redirect,
-    show_forgot_password, show_resend_verification, sole_auth_collection,
+    all_disable_local, client_ip, create_session_token, extract_mfa_token, extract_user_email,
+    get_auth_collections, get_verifying_collections, login_error, render_forgot_success,
+    render_mfa, render_resend_verification, session_redirect, show_forgot_password,
+    show_resend_verification, sole_auth_collection,
 };
-pub(super) use mfa_challenge::issue_mfa_challenge;
+pub(super) use mfa_challenge::{issue_mfa_challenge, refusal_error_key};
 pub(in crate::admin) use session::{
     CSRF_COOKIE, EDITOR_LOCALE_COOKIE, MFA_PENDING_COOKIE, SESSION_COOKIE, append_cookies,
     clear_session_cookies, session_same_site,

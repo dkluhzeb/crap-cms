@@ -72,7 +72,12 @@ grpcurl -plaintext -d '{
   `draft` and `trash` — for each requested collection/global, and each event is
   delivered only to subscribers allowed the view it belongs to (a draft event
   needs `draft`, a soft-delete `trash`); row constraints and, in `full` mode,
-  field-level access apply per subscriber. See
+  field-level access apply per subscriber. A subscriber that could see a
+  document in the view it left (a publish, unpublish, status-changing restore,
+  soft delete or undelete) but not in the view it moved into receives the
+  event as a `DELETE` (a global leaving the published view as an `UPDATE`
+  carrying the empty global) — and only when its `operations` include that
+  removal operation. See
   [Access Control](overview.md#access-control).
 - Collections/globals with no visible content view are silently excluded
 - Returns `PERMISSION_DENIED` if no collections or globals are accessible

@@ -792,6 +792,8 @@ fields they care about; missing fields get sensible defaults silently.
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
@@ -823,7 +825,7 @@ struct itself is named `ConditionData`.
 
 ### TextField
 
-Text-like field. Variants: `Text`, `Email`, `Password`, `Json`.
+Text-like field. Variants: `Text`, `Email`, `Password`.
 
 Only `Text` (and `Number`) supports `has_many` — the others always
 have `has_many: None` and `tags: None`.
@@ -848,6 +850,8 @@ have `has_many: None` and `tags: None`.
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
@@ -878,6 +882,8 @@ Multi-line textarea. Always emits `rows` and `resizable`.
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
@@ -908,6 +914,8 @@ Numeric input. `step` is always emitted (default `"any"`).
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
@@ -941,11 +949,14 @@ the editor render an in-form picker).
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
 - **`language`** (string) _(optional)_ — Editor language (e.g. `"json"`, `"javascript"`).
 - **`languages`** (Option&lt;Vec&lt;string&gt;&gt;) _(optional)_ — Optional allow-list — when present, the admin UI renders a language picker and a hidden `_lang` companion input.
+- **`rows`** (Option&lt;integer&gt;) _(optional)_ — The field's `admin.rows`: the editor is sized to show that many lines. Absent for the default height.
 
 ### RichtextField
 
@@ -973,6 +984,8 @@ with `_` per the existing on-the-wire shape consumed by the
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
@@ -1054,6 +1067,8 @@ Either `date_only_value` (when `picker_appearance == "dayOnly"`) or
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
@@ -1092,6 +1107,8 @@ Boolean checkbox. `checked` is always present.
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
@@ -1122,6 +1139,8 @@ on `base` distinguishes the two; the data shape is identical.
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
@@ -1162,6 +1181,8 @@ field is `None` after the build phase and `Some` after enrichment.
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
@@ -1212,6 +1233,8 @@ Upload reference (specialised relationship to a media collection).
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
@@ -1247,6 +1270,8 @@ Read-only inverse-reference field. The `readonly` flag on
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
@@ -1288,6 +1313,8 @@ for the `Collapsible` variant — they share the exact JSON shape.
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
@@ -1320,6 +1347,8 @@ of `collapsed`.
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
@@ -1349,6 +1378,8 @@ Tabbed layout wrapper — each tab carries its own sub-fields.
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
@@ -1391,6 +1422,8 @@ fills `rows` from the document data and updates `row_count`.
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
@@ -1443,6 +1476,8 @@ the document.
 - **`max`** (Option&lt;number&gt;) _(optional)_
 - **`has_min`** (Option&lt;boolean&gt;) _(optional)_ — Companion flag for `min` — emitted alongside the bound for templates that branch on presence. Set to `Some(true)` exactly when `min` is `Some`.
 - **`has_max`** (Option&lt;boolean&gt;) _(optional)_
+- **`width`** (Option&lt;string&gt;) _(optional)_ — `"half"` or `"third"` for a named width, `"custom"` for any other CSS width. Absent for a full-width field.
+- **`width_value`** (Option&lt;string&gt;) _(optional)_ — The CSS width of a `"custom"` field (e.g. `"40%"`, `"20rem"`).
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.

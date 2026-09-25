@@ -3,7 +3,10 @@
 use crate::{
     db::AccessResult,
     hooks::AccessCheckInput,
-    service::{Def, ReadHooks, ServiceContext, ServiceError, helpers::enforce_access_constraints},
+    service::{
+        Def, ReadHooks, ServiceContext, ServiceError, access_admits_row,
+        helpers::enforce_access_constraints, reject_global_filter,
+    },
 };
 
 /// Enforce the `access.versions` gate before listing or fetching version
@@ -136,23 +139,9 @@ pub(super) fn draft_snapshots_visible(
         AccessResult::Denied => Ok(false),
         AccessResult::Constrained(_) => match &ctx.def {
             Def::Global(_) => Err(reject_global_filter(ctx.slug)),
-            _ => match enforce_access_constraints(ctx, parent_id, draft_access, "Read", false) {
-                Ok(()) => Ok(true),
-                Err(ServiceError::AccessDenied(_)) => Ok(false),
-                Err(e) => Err(e),
-            },
+            _ => access_admits_row(ctx, parent_id, draft_access, false),
         },
     }
-}
-
-/// The standard "globals don't support filter-based access" error, raised when
-/// a global's `read`/`draft` access hook returns a filter table on a version
-/// surface (a single-row global can't be row-scoped).
-pub(super) fn reject_global_filter(slug: &str) -> ServiceError {
-    ServiceError::HookError(format!(
-        "Access hook for global '{slug}' returned a filter table; globals don't support \
-         filter-based access — return true/false based on ctx.user fields instead."
-    ))
 }
 
 #[cfg(test)]

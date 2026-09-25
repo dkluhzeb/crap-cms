@@ -36,15 +36,19 @@ pub fn fts_delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::LocaleConfig;
-    use crate::db::query::fts::sync::sync_fts_table;
     use crate::db::query::fts::sync::test_helpers::*;
+    use crate::db::query::fts::{FtsIndex, sync::sync_fts_table};
 
     #[test]
     fn delete_removes_from_index() {
         let (_dir, conn) = setup_db();
         insert_post(&conn, "1", "Searchable", "");
         let def = simple_def(vec![text_field("title")]);
-        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+        sync_fts_table(
+            &conn,
+            &FtsIndex::builder("posts", &def, &LocaleConfig::default()).build(),
+        )
+        .unwrap();
 
         assert_eq!(
             fts_match_ids(&conn, "posts", "Searchable", 10)
