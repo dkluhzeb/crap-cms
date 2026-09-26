@@ -579,14 +579,15 @@ async fn richtext_shows_placeholder_while_empty() {
     server_handle.abort();
 }
 
-// ── richtext_json_is_submitted_as_loaded ─────────────────────────────────
+// ── richtext_json_is_kept_as_stored_until_edited ─────────────────────────
 
-/// Regression: the editor drops an attribute its schema does not declare when
-/// it loads a JSON document, but an unedited field submitted the stored text
-/// — which validation refuses, so the document could not be saved without
-/// touching the editor. The textarea now holds the document as loaded.
+/// Regression: loading a JSON document rewrote the textarea with the document
+/// as the editor loaded it (an attribute its schema does not declare
+/// dropped), so opening and saving a document changed content nobody edited.
+/// An untouched field now submits the value as stored — the server accepts it
+/// as held — and the first edit serializes the document as loaded.
 #[tokio::test(flavor = "multi_thread")]
-async fn richtext_json_is_submitted_as_loaded() {
+async fn richtext_json_is_kept_as_stored_until_edited() {
     let BrowserTestCtx {
         base_url,
         server_handle,
@@ -624,14 +625,27 @@ async fn richtext_json_is_submitted_as_loaded() {
     .unwrap();
     browser::wait_for_js(&page, "document.querySelector('#rt-normalized')?._view").await;
 
-    let value: String = page
-        .evaluate("() => document.querySelector('#rt-normalized textarea').value")
-        .await
-        .unwrap()
-        .into_value()
-        .unwrap();
-    assert!(!value.contains("align"), "stale attr submitted: {value}");
-    assert!(value.contains("Kept"), "{value}");
+    let textarea = "() => document.querySelector('#rt-normalized textarea').value";
+
+    let untouched: String = page.evaluate(textarea).await.unwrap().into_value().unwrap();
+    assert!(
+        untouched.contains("\"align\":\"left\""),
+        "an untouched field keeps the stored value: {untouched}"
+    );
+
+    page.evaluate(
+        "() => { const v = document.querySelector('#rt-normalized')._view; \
+         v.dispatch(v.state.tr.insertText('!', 5)); }",
+    )
+    .await
+    .unwrap();
+
+    let edited: String = page.evaluate(textarea).await.unwrap().into_value().unwrap();
+    assert!(
+        !edited.contains("align"),
+        "an edit drops the stale attr: {edited}"
+    );
+    assert!(edited.contains("Kept!"), "{edited}");
 
     server_handle.abort();
 }

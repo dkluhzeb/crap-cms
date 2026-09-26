@@ -171,7 +171,7 @@ async fn create_action_auth_collection_with_password() {
 async fn saving_a_user_without_touching_the_lock_needs_no_unlock_access() {
     let app = setup_app(vec![users_with_unlock_denied()], vec![]);
     write_access_hooks(
-        app._tmp.path(),
+        app.tmp.path(),
         "function M.deny(ctx)\n    return false\nend",
     );
     let admin_id = create_test_user(&app, "admin@test.com", "pass123");
@@ -209,7 +209,7 @@ async fn saving_a_user_without_touching_the_lock_needs_no_unlock_access() {
 async fn flipping_the_lock_without_unlock_access_is_refused_before_the_write() {
     let app = setup_app(vec![users_with_unlock_denied()], vec![]);
     write_access_hooks(
-        app._tmp.path(),
+        app.tmp.path(),
         "function M.deny(ctx)\n    return false\nend",
     );
     let admin_id = create_test_user(&app, "admin@test.com", "pass123");

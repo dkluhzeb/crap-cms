@@ -11,6 +11,7 @@ class N2fa:
     n2fa: Optional[str] = None  # wire: 2fa
     end: Optional[str] = None
     private: Optional[str] = None
+    _revision: Optional[int] = None
     collection: Optional[Literal["2fa"]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -47,6 +48,7 @@ class Media:
     focal_y: Optional[float] = None
     sizes: Optional[MediaSizes] = None
     alt: Optional[str] = None
+    _revision: Optional[int] = None
     collection: Optional[Literal["media"]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -105,6 +107,7 @@ class Posts:
     byline: Optional[str] = None
     aside: Optional[str] = None
     tab_note: Optional[str] = None
+    _revision: Optional[int] = None
     _status: Optional[Literal["draft", "published"]] = None
     _deleted_at: Optional[str] = None
     collection: Optional[Literal["posts"]] = None
@@ -150,6 +153,7 @@ class PostsLocalized:
     byline: Optional[str] = None
     aside: Optional[str] = None
     tab_note: Optional[str] = None
+    _revision: Optional[int] = None
     _status: Optional[Literal["draft", "published"]] = None
     _deleted_at: Optional[str] = None
     collection: Optional[Literal["posts"]] = None
@@ -160,6 +164,7 @@ class PostsLocalized:
 class Tags:
     id: str = ""
     name: Optional[str] = None
+    _revision: Optional[int] = None
     collection: Optional[Literal["tags"]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -170,6 +175,7 @@ class Users:
     email: Optional[str] = None
     name: Optional[str] = None
     authored: Optional[list[dict]] = None
+    _revision: Optional[int] = None
     collection: Optional[Literal["users"]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -185,6 +191,7 @@ class Settings:
     id: str = ""
     site_name: Optional[str] = None
     nav: Optional[list[SettingsNav]] = None
+    _revision: Optional[int] = None
     _status: Optional[Literal["draft", "published"]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -195,6 +202,7 @@ class SettingsLocalized:
     id: str = ""
     site_name: Optional[dict[str, Optional[str]]] = None
     nav: Optional[list[SettingsNav]] = None
+    _revision: Optional[int] = None
     _status: Optional[Literal["draft", "published"]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None

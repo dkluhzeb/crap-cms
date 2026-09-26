@@ -18,6 +18,11 @@ impl From<ServiceError> for Status {
             // Rejection depends on how many rows match (data state), not on a
             // malformed argument — so FAILED_PRECONDITION, matching `Referenced`.
             ServiceError::LimitExceeded(msg) => Status::failed_precondition(msg),
+            // A failed test-and-set: the client should restart its
+            // read-modify-write cycle — gRPC's definition of ABORTED, as
+            // opposed to FAILED_PRECONDITION's "don't retry until the state is
+            // fixed".
+            ServiceError::Conflict(conflict) => Status::aborted(conflict.to_string()),
             ServiceError::UniqueViolation(field) => {
                 // Per gRPC spec, conflict-with-existing-resource is
                 // `ALREADY_EXISTS` (code 6), not `INVALID_ARGUMENT` (3).
@@ -67,6 +72,7 @@ impl From<ServiceError> for Status {
 mod tests {
     use crate::core::{FieldError, ValidationError};
     use crate::hooks::VmPoolExhausted;
+    use crate::service::RevisionConflict;
     use anyhow::{Context as _, anyhow};
     use tonic::Code;
 
@@ -98,6 +104,21 @@ mod tests {
         let status = Status::from(se);
         assert_eq!(status.code(), Code::FailedPrecondition);
         assert!(status.message().contains("referenced by 5"));
+    }
+
+    /// A stale `expected_revision` is a failed test-and-set: ABORTED tells
+    /// the client to re-read and retry its read-modify-write, which is what
+    /// resolves it — not `FAILED_PRECONDITION`'s "fix the state first".
+    #[test]
+    fn service_error_conflict_to_aborted() {
+        let se = ServiceError::Conflict(RevisionConflict::new(3, 5));
+        let status = Status::from(se);
+        assert_eq!(status.code(), Code::Aborted);
+        let msg = status.message();
+        assert!(
+            msg.contains("revision 3") && msg.contains("revision 5"),
+            "{msg}"
+        );
     }
 
     #[test]

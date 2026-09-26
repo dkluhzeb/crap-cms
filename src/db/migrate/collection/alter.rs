@@ -23,8 +23,8 @@ use crate::{
 use super::rebuild::PendingConstraints;
 use super::soft_delete::check_no_trashed_rows;
 use super::system_columns::{
-    AUTH_COLUMNS, DRAFT_STATUS_COLUMN, MFA_COLUMNS, REF_COUNT_COLUMN, TOTP_COLUMNS,
-    VERIFY_EMAIL_COLUMNS,
+    AUTH_COLUMNS, DRAFT_STATUS_COLUMN, MFA_COLUMNS, REF_COUNT_COLUMN, REVISION_COLUMN,
+    TOTP_COLUMNS, VERIFY_EMAIL_COLUMNS,
 };
 use crate::core::collection::Auth;
 
@@ -106,6 +106,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
     add_auth_columns(ctx)?;
     add_soft_delete_columns(ctx)?;
     add_ref_count_column(ctx)?;
+    ensure_column(ctx, REVISION_COLUMN)?;
     add_timestamp_columns(ctx)?;
 
     Ok(())

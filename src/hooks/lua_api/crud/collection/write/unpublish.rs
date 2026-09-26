@@ -43,6 +43,10 @@ pub(crate) struct UnpublishOptions {
     /// with `crap.collections.update{ unpublish = true, events = ... }`.
     #[lua(optional)]
     pub(crate) events: bool,
+    /// The document revision this write is based on — the `_revision` of the
+    /// read it edits. Set, the write fails with a revision conflict when
+    /// anyone has written the document since; nil writes unconditionally.
+    pub(crate) expected_revision: Option<i64>,
 }
 
 impl Default for UnpublishOptions {
@@ -51,6 +55,7 @@ impl Default for UnpublishOptions {
             override_access: false,
             hooks: true,
             events: true,
+            expected_revision: None,
         }
     }
 }
@@ -76,6 +81,7 @@ pub(super) struct UnpublishCall<'a> {
     hooks: bool,
     #[builder(default = true)]
     events: bool,
+    expected_revision: Option<i64>,
 }
 
 /// Route an unpublish through the full service path — access check (incl.
@@ -120,8 +126,13 @@ pub(super) fn unpublish_via_service(
         .build();
 
     // Shared operation body — identical semantics on every surface.
-    let doc = Unpublish::run(&ctx, UnpublishArgs::new(call.id).events(call.events))
-        .map_err(|e| RuntimeError(format!("unpublish error: {e:#}")))?;
+    let args = UnpublishArgs::builder(call.id)
+        .events(call.events)
+        .expected_revision(call.expected_revision)
+        .build();
+
+    let doc =
+        Unpublish::run(&ctx, args).map_err(|e| RuntimeError(format!("unpublish error: {e:#}")))?;
 
     document_to_lua_table(lua, &doc)
 }
@@ -151,6 +162,7 @@ fn collections_unpublish(
             .override_access(opts.override_access)
             .hooks(opts.hooks)
             .events(opts.events)
+            .expected_revision(opts.expected_revision)
             .build(),
     )
 }

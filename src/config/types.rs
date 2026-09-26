@@ -13,9 +13,10 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::config::{
+    ErrorReport,
     auth::AuthConfig,
     cors::CorsConfig,
-    env::substitute_in_value,
+    decode::decode_config,
     features::{
         AccessConfig, CacheConfig, DepthConfig, EmailConfig, HooksConfig, JobsConfig, LiveConfig,
         LocaleConfig, LoggingConfig, McpConfig, PaginationConfig, QueryConfig, UpdateConfig,
@@ -87,6 +88,11 @@ pub struct CrapConfig {
     pub logging: LoggingConfig,
     /// `crap-cms update` settings (startup nudge).
     pub update: UpdateConfig,
+}
+
+/// The `crap.toml` of a config directory.
+fn config_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("crap.toml")
 }
 
 /// True if the config contains any non-empty secret — every secret-typed
@@ -192,13 +198,39 @@ impl CrapConfig {
         self.check_loaded().err()
     }
 
-    /// The load-time validation: the locale block, then the whole config.
-    fn check_loaded(&self) -> Result<()> {
-        self.locale
-            .validate()
-            .context("Invalid locale configuration")?;
+    /// [`load`](Self::load)'s checks with nothing written into the project:
+    /// every `crap.toml` problem is reported together, and the auth secret is
+    /// resolved without generating and persisting one (see
+    /// [`AuthConfig::resolve_secret_read_only`]). For `crap-cms check`, which
+    /// validates a project before a server ever starts on it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error listing every problem the file has, or if it can't be
+    /// read or parsed as TOML.
+    pub fn check(config_dir: &Path) -> Result<Self> {
+        let mut config = Self::read_checked(config_dir, true)?;
+        config.auth.resolve_secret_read_only(config_dir)?;
 
-        self.validate().context("Invalid configuration")
+        Ok(config)
+    }
+
+    /// The load-time validation: the locale block, then the whole config —
+    /// every problem, reported together.
+    fn check_loaded(&self) -> Result<()> {
+        let mut report = ErrorReport::new();
+        self.collect_validation(&mut report);
+
+        report.into_result().context("Invalid configuration")
+    }
+
+    /// Record every problem the load-time validation finds.
+    fn collect_validation(&self, report: &mut ErrorReport) {
+        let mut locale = ErrorReport::new();
+        self.locale.collect_problems(&mut locale);
+        report.merge_under("Invalid locale configuration", locale);
+
+        self.collect_section_problems(report);
     }
 
     /// Read and parse `crap.toml` (or the defaults) — env substitution and
@@ -212,10 +244,24 @@ impl CrapConfig {
     /// Returns an error if the file can't be read, TOML parsing fails, or env
     /// substitution references an unset variable without a default.
     pub fn parse(config_dir: &Path) -> Result<Self> {
-        let config_path = config_dir.join("crap.toml");
+        let mut report = ErrorReport::new();
+        let config = Self::parse_reporting(config_dir, &mut report)?;
+
+        report
+            .into_result()
+            .with_context(|| format!("Failed to load {}", config_path(config_dir).display()))?;
+
+        Ok(config)
+    }
+
+    /// [`parse`](Self::parse), recording each `crap.toml` section that fails
+    /// to decode in `report` (and leaving it at its default) instead of
+    /// stopping at the first.
+    fn parse_reporting(config_dir: &Path, report: &mut ErrorReport) -> Result<Self> {
+        let config_path = config_path(config_dir);
 
         let mut config = if config_path.exists() {
-            Self::parse_file(&config_path)?
+            Self::decode_file(&config_path, report)?
         } else {
             CrapConfig::default()
         };
@@ -227,42 +273,56 @@ impl CrapConfig {
         Ok(config)
     }
 
-    /// Parse one `crap.toml` with env substitution.
-    fn parse_file(config_path: &Path) -> Result<Self> {
+    /// Parse one `crap.toml` and decode it section by section, env
+    /// substitution included (see [`decode_config`]).
+    fn decode_file(config_path: &Path, report: &mut ErrorReport) -> Result<Self> {
         let contents = fs::read_to_string(config_path)
             .with_context(|| format!("Failed to read {}", config_path.display()))?;
-        // Parse TOML first (strips comments), then substitute env vars only in string values.
-        // This avoids errors from `${VAR}` patterns in comments.
-        let mut value: toml::Value = toml::from_str(&contents)
+
+        // Parse TOML first (strips comments), then substitute env vars only in
+        // string values. This avoids errors from `${VAR}` patterns in comments.
+        let table: toml::Table = toml::from_str(&contents)
             .with_context(|| format!("Failed to parse {}", config_path.display()))?;
 
-        substitute_in_value(&mut value)?;
-
-        value
-            .try_into()
-            .with_context(|| format!("Failed to deserialize {}", config_path.display()))
+        Ok(decode_config(table, report))
     }
 
     /// Read `crap.toml` (or the defaults), validating unless `validate` is
     /// false. Validation runs before the secret is resolved, so an invalid
     /// config never gets a generated secret written for it on a normal load.
     fn read(config_dir: &Path, validate: bool) -> Result<Self> {
-        let config_path = config_dir.join("crap.toml");
-        let mut config = Self::parse(config_dir)?;
-
-        if config_path.exists() {
-            if validate {
-                config.check_loaded()?;
-            }
-
-            warn_on_loose_permissions(&config_path, &config);
-        } else {
-            info!("No crap.toml found, using defaults");
-        }
+        let mut config = Self::read_checked(config_dir, validate)?;
 
         // One resolved secret for every consumer (JWT, crypto, TOTP
         // sealing, signed URLs) — see `AuthConfig::resolve_secret`.
         config.auth.resolve_secret(config_dir)?;
+
+        Ok(config)
+    }
+
+    /// Parse `crap.toml` (or the defaults) and, when `validate`, validate it —
+    /// every decode and validation problem reported together, so an operator
+    /// fixes them in one round.
+    fn read_checked(config_dir: &Path, validate: bool) -> Result<Self> {
+        let config_path = config_path(config_dir);
+        let mut report = ErrorReport::new();
+        let config = Self::parse_reporting(config_dir, &mut report)?;
+
+        if !config_path.exists() {
+            info!("No crap.toml found, using defaults");
+
+            return Ok(config);
+        }
+
+        if validate {
+            config.collect_validation(&mut report);
+        }
+
+        report
+            .into_result()
+            .with_context(|| format!("Invalid configuration in {}", config_path.display()))?;
+
+        warn_on_loose_permissions(&config_path, &config);
 
         Ok(config)
     }
@@ -355,23 +415,38 @@ impl CrapConfig {
     /// Returns an error for any fatal misconfiguration surfaced by the
     /// per-section validators.
     pub fn validate(&self) -> Result<()> {
-        self.validate_database()?;
-        self.validate_server()?;
-        self.validate_pagination()?;
-        self.validate_depth()?;
-        self.validate_jobs()?;
-        self.hooks.validate_io_roots()?;
-        self.validate_auth()?;
-        self.validate_email()?;
-        self.validate_logging()?;
-        self.validate_mcp()?;
-        self.validate_live()?;
-        self.validate_live_channel_namespace()?;
-        self.validate_redis_namespaces()?;
-        self.validate_cors()?;
-        self.validate_cache();
+        let mut report = ErrorReport::new();
+        self.collect_section_problems(&mut report);
 
-        Ok(())
+        report.into_result()
+    }
+
+    /// Run every section's validation, recording every problem of each — the
+    /// sections and their checks are independent, so one failing does not
+    /// hide the next.
+    fn collect_section_problems(&self, report: &mut ErrorReport) {
+        let checks: [fn(&Self, &mut ErrorReport); 13] = [
+            Self::validate_database,
+            Self::validate_server,
+            Self::validate_pagination,
+            Self::validate_depth,
+            Self::validate_jobs,
+            Self::validate_auth,
+            Self::validate_email,
+            Self::validate_logging,
+            Self::validate_mcp,
+            Self::validate_live,
+            Self::validate_live_channel_namespace,
+            Self::validate_redis_namespaces,
+            Self::validate_cors,
+        ];
+
+        for check in checks {
+            check(self, report);
+        }
+
+        self.hooks.collect_io_root_problems(report);
+        self.validate_cache();
     }
 
     /// Check `crap_version` against the running binary version.
@@ -624,6 +699,54 @@ dev_mode = false
 
         let err = config.validation_error().expect("the ports collide");
         assert!(format!("{err:#}").contains("must be different"), "{err:#}");
+    }
+
+    /// Regression: loading stopped at the first problem, so a config with
+    /// several needed one fix-and-restart cycle each. Independent problems —
+    /// a key no section has, and two sections failing validation — are all
+    /// reported at once.
+    #[test]
+    fn load_reports_every_independent_problem() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("crap.toml"),
+            "[server]\nadmin_port = 3000\ngrpc_port = 3000\n\
+             [database]\npool_max_size = 0\n\
+             [email]\nqueue_retries = 5\n",
+        )
+        .unwrap();
+
+        let err = format!("{:#}", CrapConfig::load(tmp.path()).unwrap_err());
+
+        assert!(err.contains("3 problems"), "{err}");
+        assert!(err.contains("must be different"), "{err}");
+        assert!(err.contains("pool_max_size"), "{err}");
+        assert!(err.contains("queue_retries"), "{err}");
+    }
+
+    /// The check a project runs before an upgrade reports the same problems
+    /// and writes nothing into the project.
+    #[test]
+    fn check_reports_problems_and_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("crap.toml"),
+            "[database]\npool_max_size = 0\n",
+        )
+        .unwrap();
+
+        let err = format!("{:#}", CrapConfig::check(tmp.path()).unwrap_err());
+        assert!(err.contains("pool_max_size"), "{err}");
+
+        fs::write(
+            tmp.path().join("crap.toml"),
+            "[server]\nadmin_port = 4000\n",
+        )
+        .unwrap();
+        let config = CrapConfig::check(tmp.path()).expect("a valid config");
+
+        assert!(!config.auth.secret.is_empty());
+        assert!(!tmp.path().join("data").exists(), "nothing is written");
     }
 
     #[test]

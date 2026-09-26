@@ -6,7 +6,6 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
-use serde_json::json;
 use tracing::error;
 
 use crate::{
@@ -20,9 +19,10 @@ use crate::{
             collections::shared::{password_field, upload_form_context},
             shared::{
                 EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
-                check_access_or_forbid, collection_base, editor_locale_ctx, enrich_field_contexts,
-                extract_editor_locale, forbidden, get_user_doc, is_non_default_locale, render_page,
-                require_collection, server_error, split_sidebar_fields,
+                check_access_or_forbid, collection_base, default_condition_data, editor_locale_ctx,
+                enrich_field_contexts, extract_editor_locale, forbidden, get_user_doc,
+                is_non_default_locale, render_page, require_collection, server_error,
+                split_sidebar_fields,
             },
         },
     },
@@ -67,10 +67,12 @@ fn prepare_create_fields(
         options: None,
     };
 
+    // A new document conditions on the values its inputs render with: the
+    // field defaults.
     apply_display_conditions(
         &mut fields,
         &def.fields,
-        &json!({}),
+        &default_condition_data(&def.fields),
         &state.infra.hook_runner,
         true,
         &cond_ctx,

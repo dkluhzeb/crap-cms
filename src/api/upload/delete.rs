@@ -7,12 +7,11 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Response,
 };
-use tokio::task;
 use tracing::error;
 
 use crate::{
     admin::{AdminState, handlers::shared::response::on_blocking_section},
-    core::{CollectionDefinition, Document, ReqContext},
+    core::{CollectionDefinition, Document, ReqContext, spawn_request_blocking},
     service::{AppInfra, ServiceContext, ServiceError, delete_document},
 };
 
@@ -72,7 +71,7 @@ pub(super) async fn delete_upload(
         user_doc: auth_user.as_ref().map(|au| au.user_doc.clone()),
     };
 
-    let result = task::spawn_blocking(move || delete_upload_blocking(&input)).await;
+    let result = spawn_request_blocking(move || delete_upload_blocking(&input)).await;
 
     match result {
         Ok(Ok(_req_context)) => json_ok(StatusCode::OK, &SuccessBody { success: true }),

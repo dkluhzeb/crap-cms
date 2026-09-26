@@ -152,11 +152,13 @@ class CrapRichtext extends HTMLElement {
       return;
     }
     // Loading drops what the editor has no place for (e.g. an attribute a
-    // custom node no longer declares), which the server refuses: submit the
-    // document as loaded, not as stored, even when it is not edited.
-    if (format === 'json' && textarea.value.trim()) {
-      textarea.value = this._serializeDoc(PM, schema, doc, format);
-    }
+    // custom node no longer declares). The textarea keeps the value AS
+    // STORED until the editor changes the document: an untouched field —
+    // and a read-only one, which is never changed — submits the stored value,
+    // which the server accepts as held, so opening and saving a document
+    // never rewrites content nobody edited. The first edit serializes the
+    // document as loaded (the dropped attribute goes with it) and marks the
+    // form dirty through `crap:change`.
     const plugins = buildPlugins(PM, schema, has, (view) =>
       this._updateToolbar(view.state, schema, has),
     );

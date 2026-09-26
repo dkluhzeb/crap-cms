@@ -175,6 +175,7 @@ fn rust_ty(ty: &FieldTy) -> String {
         // A literal set stays a plain `String`, as the proto decoder reads it.
         FieldTy::Str | FieldTy::Literal(_) => "String".to_string(),
         FieldTy::Num => "f64".to_string(),
+        FieldTy::Int => "i64".to_string(),
         FieldTy::Bool => "bool".to_string(),
         FieldTy::Json | FieldTy::Map => "serde_json::Value".to_string(),
         FieldTy::StrList => "Vec<String>".to_string(),

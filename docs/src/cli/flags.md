@@ -123,6 +123,34 @@ crap-cms work -d --queues email         # email-only worker
 crap-cms work -d --queues heavy --concurrency 2  # heavy processing
 ```
 
+### `check` — Check the configuration and definitions
+
+```bash
+crap-cms check
+```
+
+Runs every check a start runs before it touches the database: `crap.toml` is
+decoded (each section on its own, `${VAR}` substitution included) and
+validated, every definition file in `collections/`, `globals/` and `jobs/` is
+loaded, `init.lua` runs, and every boot check (hook and access refs, routes,
+relationship targets, locales, table names, …) runs over the result, and every
+generated table, column and index name is checked against the 63-byte
+identifier limit. It lists **every** problem it finds at once — every unknown
+or mistyped key and unset `${VAR}` of every section, named by its path
+(`server.admin_port: …`), every failing validation — several numbered under a
+count, and exits non-zero when there is one, `0` when the project is valid.
+
+It opens no database and writes nothing into the project: an unset
+`[auth] secret` is read from `data/.jwt_secret` when one exists, and is not
+generated or persisted otherwise. Problems in the stored data (duplicate
+values a new `unique` would reject, values that don't fit a changed field)
+only show up when a start syncs the schema.
+
+```bash
+crap-cms check                          # the project in the current directory
+/path/to/new/crap-cms -C ./site check   # a new binary against a project, before upgrading
+```
+
 ### `status` — Show project status
 
 ```bash
@@ -474,6 +502,9 @@ Modifiers are order-independent:
 | `required` | Field is required |
 | `localized` | Field has per-locale values (see [Localization](../locale/overview.md)) |
 
+`row`, `collapsible`, `tabs` and `join` fields hold no value of their own, so
+either modifier on one is an error (the interactive wizard doesn't ask).
+
 Container types take their sub-fields in parentheses directly after the type (modifiers follow the closing `)`):
 
 | Type | Syntax |
@@ -824,7 +855,7 @@ crap-cms import backup.json
 crap-cms import backup.json -c posts
 ```
 
-Import is a **raw restore**, not a write through the service layer: each document is upserted by `id` straight into its table (existing rows with the same id are overwritten), join tables are rebuilt with their exported row ids, and `_ref_count` is kept consistent — counts are settled once every document is written, so a document may reference one later in the file. Trashed documents import trashed. Email and text values are stored in canonical form, as every write stores them. Lifecycle hooks, field validation, access rules and live events do **not** run.
+Import is a **raw restore**, not a write through the service layer: each document is upserted by `id` straight into its table (existing rows with the same id are overwritten), join tables are rebuilt with their exported row ids, and `_ref_count` is kept consistent — counts are settled once every document is written, so a document may reference one later in the file. Trashed documents import trashed. A document the import creates takes the `_revision` it was exported at (so export → import → export reproduces it; no form can be open on a row that did not exist); a document it overwrites keeps its own revision and moves it one forward, so an edit form opened before the import is refused as stale — see [Concurrent Editing](../collections/concurrent-editing.md). Email and text values are stored in canonical form, as every write stores them. Lifecycle hooks, field validation, access rules and live events do **not** run.
 
 Accounts that end the import without a password can't log in until one is set; import warns when that happens. Credentials imported over an existing account revoke its sessions. An account whose TOTP secret was sealed with a different auth secret is refused, naming it: import into an installation with the same auth secret, or export without `--include-credentials`.
 
@@ -915,7 +946,7 @@ holds the exclusive instance lock of the local project only: on a PostgreSQL
 database shared by several nodes, stop every node's `serve` / `work` first —
 their running servers see an empty database the moment `fresh` commits.
 
-`fresh` refuses while a `serve`, `work` or stdio `mcp` process uses the project, and keeps them from starting until it finishes.
+`fresh` refuses while a `serve`, `work` or stdio `mcp` process uses the project (after waiting up to a second for one that is just exiting), and keeps them from starting until it finishes.
 
 Each migration runs in its own transaction, together with the bookkeeping row that marks it applied (or removes it on `down`). Its Lua CRUD writes behave like writes made on the server: after the commit the configured cache is cleared, live events reach `serve`'s subscribers (over Redis when `[live]` uses it), and the files of upload documents the migration hard-deleted are removed. A migration that fails rolls back with every file still in storage. The command therefore builds the same infrastructure as `user delete`, and a configured Redis that can't be reached fails it before any migration runs — for `fresh`, before any table is dropped.
 

@@ -224,42 +224,6 @@ fn collect_compound_indexes(
     Ok(())
 }
 
-/// Case-insensitive unique backstop for the auth identity column. The
-/// validation-layer unique check compares emails with `LOWER() = LOWER()`
-/// (matching `find_by_email`'s login lookup), but validation can be raced —
-/// two concurrent registrations differing only in case would both pass and
-/// then collide as one account at login. The expression index makes the
-/// database itself enforce one account per case-folded email. Partial
-/// (`WHERE _deleted_at IS NULL`) on soft-delete collections so deleted rows
-/// don't block re-registration.
-fn collect_auth_email_ci_index(
-    slug: &str,
-    def: &CollectionDefinition,
-    desired: &mut HashSet<String>,
-    stmts: &mut Vec<String>,
-) -> Result<()> {
-    if !def.is_auth_collection() {
-        return Ok(());
-    }
-
-    // Injected for every auth collection when absent, so it's always present;
-    // guard anyway for hand-built definitions in tests.
-    if !def.fields.iter().any(|f| f.name == "email") {
-        return Ok(());
-    }
-
-    let idx_name = index_name(slug, &["email", "ci_unique"]);
-    let partial = if def.soft_delete {
-        " WHERE _deleted_at IS NULL"
-    } else {
-        ""
-    };
-    let sql =
-        format!("CREATE UNIQUE INDEX IF NOT EXISTS {idx_name} ON {slug} (LOWER(email)){partial}");
-
-    add_index(desired, stmts, idx_name, sql)
-}
-
 /// Index the auth token columns. Reset / verification flows look a user up
 /// by `WHERE _reset_token = ?` / `WHERE _verification_token = ?`; without an
 /// index those are full table scans of the user table on every attempt.
@@ -306,7 +270,6 @@ fn desired_indexes(
     collect_unique_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
     collect_compound_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
     collect_auth_token_indexes(slug, def, &mut desired, &mut stmts)?;
-    collect_auth_email_ci_index(slug, def, &mut desired, &mut stmts)?;
 
     Ok((desired, stmts))
 }
@@ -325,18 +288,19 @@ pub(in crate::db::migrate) fn managed_index_names(
     Ok(desired_indexes(slug, def, locale_config)?.0)
 }
 
-/// Sync B-tree indexes for a collection table: field-level `index: true` and
-/// collection-level compound `indexes`. Idempotent — creates missing indexes,
-/// drops stale ones. Only manages indexes with the `idx_{slug}_` naming prefix.
-pub(super) fn sync_indexes(
+/// Drop the managed indexes of a collection's table its definition no longer
+/// asks for. Only indexes with the `idx_{slug}_` naming prefix are managed.
+///
+/// Runs with the table sync, before the conversions rewrite stored values: an
+/// index the definition dropped (a field that lost `unique`) must not reject a
+/// rewrite the definition allows.
+pub(super) fn drop_stale_indexes(
     conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    let (desired, stmts) = desired_indexes(slug, def, locale_config)?;
-
-    // Drop stale indexes (in existing but not in desired)
+    let desired = managed_index_names(slug, def, locale_config)?;
     let prefix = index_prefix(slug);
     let existing: HashSet<String> = conn.index_names(slug, &prefix)?.into_iter().collect();
 
@@ -349,7 +313,26 @@ pub(super) fn sync_indexes(
             .with_context(|| format!("Failed to drop index {name}"))?;
     }
 
-    // Create missing indexes
+    Ok(())
+}
+
+/// Create the managed indexes a collection's table is missing: field-level
+/// `index` / `unique`, collection-level compound `indexes` and the auth token
+/// indexes. Idempotent.
+///
+/// A unique index depends on the stored values, so it is created only after
+/// the conversions that rewrite them: the canonical-text pass reports values
+/// that are the same once canonical with the documents holding them, which a
+/// failing `CREATE UNIQUE INDEX` over the values as they were stored could
+/// not.
+pub(in crate::db::migrate) fn create_indexes(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    let (_, stmts) = desired_indexes(slug, def, locale_config)?;
+
     for sql in &stmts {
         conn.execute_ddl(sql, &[])
             .with_context(|| format!("Failed to create index: {sql}"))?;
@@ -358,10 +341,24 @@ pub(super) fn sync_indexes(
     Ok(())
 }
 
+/// Both halves of the index sync, back to back — what a test of one table's
+/// indexes needs.
+#[cfg(test)]
+fn sync_indexes(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    drop_stale_indexes(conn, slug, def, locale_config)?;
+    create_indexes(conn, slug, def, locale_config)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::collection::*;
+    use crate::core::normalize_email;
     use crate::core::{FieldDefinition, FieldType};
     use crate::db::migrate::collection::create::create_collection_table;
     use crate::db::migrate::collection::sync_collection_table;
@@ -472,15 +469,8 @@ mod tests {
         assert!(!indexes.contains("idx_users__verification_token"));
     }
 
-    /// Regression (backstop): the app-level unique check compares emails
-    /// case-insensitively, but nothing at the DB level enforced it — two
-    /// concurrent registrations differing only in case could both land. The
-    /// `LOWER(email)` unique index makes the database reject the second.
-    #[test]
-    fn sync_indexes_auth_email_ci_unique_rejects_case_variant_duplicate() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
-
+    /// An auth collection whose `email` column holds canonical addresses.
+    fn users_def() -> CollectionDefinition {
         let mut def = simple_collection(
             "users",
             vec![
@@ -491,28 +481,69 @@ mod tests {
             ],
         );
         def.auth = Some(Auth::new(true));
+
+        def
+    }
+
+    /// Every write stores an email in its canonical form, so the email field's
+    /// own unique index is the database's backstop against two accounts for
+    /// one address — compared exactly the way the application compares it.
+    /// Regression: a separate `LOWER(email)` index folded case by the
+    /// database's rules instead, which need not agree with the canonical form
+    /// (Postgres folds by the database's locale, `SQLite` only ASCII).
+    #[test]
+    fn auth_email_uniqueness_is_the_canonical_form() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = users_def();
         create_collection_table(&conn, "users", &def, &no_locale()).unwrap();
         sync_indexes(&conn, "users", &def, &no_locale()).unwrap();
 
         let indexes = get_indexes(&conn, "users");
+        assert!(indexes.contains("idx_users_email_unique"), "{indexes:?}");
         assert!(
-            indexes.contains("idx_users_email_ci_unique"),
-            "auth collection should get the case-insensitive email backstop; got {indexes:?}"
+            !indexes.contains("idx_users_email_ci_unique"),
+            "{indexes:?}"
         );
 
+        let insert = |id: &str, email: &str| {
+            conn.execute(
+                "INSERT INTO users (id, email) VALUES (?1, ?2)",
+                &[
+                    DbValue::Text(id.to_string()),
+                    DbValue::Text(normalize_email(email)),
+                ],
+            )
+        };
+
+        insert("u1", "Victim@x.com").unwrap();
+        insert("u2", "\u{c4}RGER@x.com").unwrap();
+        insert("u3", "stra\u{df}e@x.com").unwrap();
+
+        for (id, dup) in [("u4", "victim@X.COM"), ("u5", "a\u{308}rger@x.com")] {
+            assert!(insert(id, dup).is_err(), "{dup:?} is the same account");
+        }
+
+        insert("u6", "strasse@x.com").expect("a different canonical address is a new account");
+    }
+
+    /// The case-folding email index an earlier build created is dropped as
+    /// stale.
+    #[test]
+    fn the_case_folding_email_index_is_dropped() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = users_def();
+        create_collection_table(&conn, "users", &def, &no_locale()).unwrap();
         conn.execute(
-            "INSERT INTO users (id, email) VALUES ('u1', 'Victim@x.com')",
+            "CREATE UNIQUE INDEX idx_users_email_ci_unique ON users (LOWER(email))",
             &[],
         )
         .unwrap();
-        let dup = conn.execute(
-            "INSERT INTO users (id, email) VALUES ('u2', 'victim@x.com')",
-            &[],
-        );
-        assert!(
-            dup.is_err(),
-            "case-variant duplicate email must be rejected by the DB backstop"
-        );
+
+        sync_indexes(&conn, "users", &def, &no_locale()).unwrap();
+
+        assert!(!get_indexes(&conn, "users").contains("idx_users_email_ci_unique"));
     }
 
     #[test]
@@ -796,6 +827,7 @@ mod tests {
             ],
         );
         sync_collection_table(&conn, "posts", &unique, &no_locale()).unwrap();
+        create_indexes(&conn, "posts", &unique, &no_locale()).unwrap();
 
         let indexes = get_indexes(&conn, "posts");
         assert!(

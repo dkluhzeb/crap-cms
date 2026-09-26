@@ -17,6 +17,8 @@ pub(in crate::typegen) enum FieldTy {
     Str,
     /// A single float (`Number`).
     Num,
+    /// A single integer — the `_revision` system key a read document carries.
+    Int,
     /// A boolean (`Checkbox`).
     Bool,
     /// Arbitrary JSON with no shape (`Json`) — `interface{}` / `Any` /
@@ -136,7 +138,7 @@ pub(in crate::typegen) struct Document<'a> {
     /// `password`. Empty for the `locale = "all"` read shape.
     pub input: Vec<Field<'a>>,
     /// Stored keys a read document carries besides its fields (`_status`,
-    /// `_deleted_at`) — always optional, never part of the input.
+    /// `_deleted_at`, `_revision`) — always optional, never part of the input.
     pub system: Vec<Field<'a>>,
     /// The `collection` key a copy of this document carries when it is
     /// populated into a relationship, typed as the one-value literal of its

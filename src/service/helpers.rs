@@ -18,6 +18,7 @@ use crate::{
     service::{
         AfterChangeInput, FieldReadStrip, ReadStripArgs, ServiceContext, ServiceError,
         hooks::WriteHooks,
+        reported_view::{keep_only_outcome, reported_view_open},
     },
 };
 
@@ -69,12 +70,16 @@ pub(crate) fn shape_reported(ctx: &ServiceContext, doc: &mut Document) {
 }
 
 /// Shape the document a write reports as a read returns it ([`shape_reported`]),
-/// then strip what the caller may not read: read-denied fields, judged in the
-/// write's locale (the default locale without one), and hidden fields.
+/// then strip what the caller may not read, judged in the write's locale (the
+/// default locale without one): a caller who may not see the document in the
+/// content view it now sits in (published, draft, trash) gets only its id and
+/// the write's outcome ([`reported_view_open`]); otherwise the read-denied and
+/// hidden fields are stripped.
 ///
 /// # Errors
 ///
-/// Returns an error when the context has no definition.
+/// Returns an error when the context has no definition, or an access hook
+/// fails.
 pub(crate) fn strip_reported(
     ctx: &ServiceContext,
     write_hooks: &dyn WriteHooks,
@@ -86,6 +91,12 @@ pub(crate) fn strip_reported(
     let locale = locale_ctx
         .or(default.as_ref())
         .map(LocaleContext::access_locale);
+
+    if !reported_view_open(write_hooks, ctx, doc, locale)? {
+        keep_only_outcome(doc);
+
+        return Ok(());
+    }
 
     shape_reported(ctx, doc);
 
@@ -599,7 +610,7 @@ mod tests {
     fn access_admits_row_judges_a_filter_table_against_the_row() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE posts (id TEXT PRIMARY KEY, owner TEXT, created_at TEXT, updated_at TEXT);
+            "CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, owner TEXT, created_at TEXT, updated_at TEXT);
             INSERT INTO posts (id, owner) VALUES ('p1', 'u1');",
         )
         .unwrap();

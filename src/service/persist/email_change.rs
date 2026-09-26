@@ -89,6 +89,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE users (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 email TEXT,
                 name TEXT,
                 _password_hash TEXT,

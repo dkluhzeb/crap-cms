@@ -6,6 +6,8 @@ use std::sync::LazyLock;
 use anyhow::{Context as _, Result};
 use regex::Regex;
 
+use crate::config::ErrorReport;
+
 /// A placeholder to expand (`inner`), or one escaped with a second `$` that
 /// stays in the value literally, minus the escaping `$` (`escaped`).
 static ENV_VAR_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -14,24 +16,44 @@ static ENV_VAR_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Recursively walk a TOML `Value` tree and substitute `${VAR}` / `${VAR:-default}`
 /// in all `String` nodes. Tables and arrays are descended into; other types are untouched.
-pub(crate) fn substitute_in_value(value: &mut toml::Value) -> Result<()> {
+///
+/// Every placeholder that can't be expanded is recorded in `report` under the
+/// value's dotted `path`, and the walk goes on, so every unset variable is
+/// reported at once. A value that can't be expanded is taken out — a table
+/// key, or the whole array holding it — so decoding what is left reports no
+/// second problem for it. Returns whether `value` itself expanded.
+pub(crate) fn substitute_in_value(
+    value: &mut toml::Value,
+    path: &str,
+    report: &mut ErrorReport,
+) -> bool {
     match value {
-        toml::Value::String(s) => {
-            *s = substitute_env_vars(s)?;
-        }
-        toml::Value::Array(arr) => {
-            for item in arr.iter_mut() {
-                substitute_in_value(item)?;
+        toml::Value::String(s) => match substitute_env_vars(s) {
+            Ok(expanded) => {
+                *s = expanded;
+                true
             }
-        }
+            Err(e) => {
+                report.push(&e.context(path.to_string()));
+                false
+            }
+        },
+        toml::Value::Array(arr) => arr.iter_mut().enumerate().fold(true, |all, (index, item)| {
+            substitute_in_value(item, &format!("{path}[{index}]"), report) && all
+        }),
         toml::Value::Table(tbl) => {
-            for (_key, val) in tbl.iter_mut() {
-                substitute_in_value(val)?;
-            }
+            let mut all = true;
+
+            tbl.retain(|key, val| {
+                let expanded = substitute_in_value(val, &format!("{path}.{key}"), report);
+                all &= expanded;
+                expanded
+            });
+
+            all
         }
-        _ => {} // Integer, Float, Boolean, Datetime — no substitution
+        _ => true, // Integer, Float, Boolean, Datetime — no substitution
     }
-    Ok(())
 }
 
 /// Replace `${VAR}` and `${VAR:-default}` placeholders with environment variable values.
@@ -270,7 +292,9 @@ mod tests {
 
         unsafe { set_env("CRAP_TEST_SIV", "replaced") };
         let mut val = toml::Value::String("${CRAP_TEST_SIV}".to_string());
-        substitute_in_value(&mut val).unwrap();
+        let mut report = ErrorReport::new();
+        substitute_in_value(&mut val, "server.host", &mut report);
+        assert!(report.is_empty());
         assert_eq!(val.as_str().unwrap(), "replaced");
         unsafe { remove_env("CRAP_TEST_SIV") };
     }
@@ -287,7 +311,9 @@ mod tests {
         );
         tbl.insert("num".to_string(), toml::Value::Integer(42));
         let mut val = toml::Value::Table(tbl);
-        substitute_in_value(&mut val).unwrap();
+        let mut report = ErrorReport::new();
+        substitute_in_value(&mut val, "server", &mut report);
+        assert!(report.is_empty());
         assert_eq!(val.get("key").unwrap().as_str().unwrap(), "value2");
         assert_eq!(val.get("num").unwrap().as_integer().unwrap(), 42);
         unsafe { remove_env("CRAP_TEST_SIV2") };
@@ -302,7 +328,9 @@ mod tests {
             toml::Value::String("${CRAP_TEST_SIV3}".to_string()),
             toml::Value::Boolean(true),
         ]);
-        substitute_in_value(&mut val).unwrap();
+        let mut report = ErrorReport::new();
+        substitute_in_value(&mut val, "cors.allowed_origins", &mut report);
+        assert!(report.is_empty());
         assert_eq!(val.as_array().unwrap()[0].as_str().unwrap(), "item");
         assert!(val.as_array().unwrap()[1].as_bool().unwrap());
         unsafe { remove_env("CRAP_TEST_SIV3") };
@@ -310,16 +338,51 @@ mod tests {
 
     #[test]
     fn substitute_in_value_non_string_untouched() {
+        let mut report = ErrorReport::new();
         let mut val = toml::Value::Integer(99);
-        substitute_in_value(&mut val).unwrap();
+        substitute_in_value(&mut val, "a", &mut report);
         assert_eq!(val.as_integer().unwrap(), 99);
 
         let mut val = toml::Value::Float(2.5);
-        substitute_in_value(&mut val).unwrap();
+        substitute_in_value(&mut val, "a", &mut report);
         assert!((val.as_float().unwrap() - 2.5).abs() < f64::EPSILON);
 
         let mut val = toml::Value::Boolean(true);
-        substitute_in_value(&mut val).unwrap();
+        substitute_in_value(&mut val, "a", &mut report);
         assert!(val.as_bool().unwrap());
+        assert!(report.is_empty());
+    }
+
+    /// Regression: substitution stopped at the first unset variable, so a
+    /// second one surfaced only after the first was set. Every one is
+    /// reported, by the path of the value holding it.
+    #[test]
+    fn every_unset_variable_is_reported_by_path() {
+        let _guard = env_lock();
+
+        unsafe { remove_env("CRAP_TEST_UNSET_A") };
+        unsafe { remove_env("CRAP_TEST_UNSET_B") };
+
+        let mut val: toml::Value = toml::from_str(
+            "url = \"${CRAP_TEST_UNSET_A}\"\nhosts = [\"ok\", \"${CRAP_TEST_UNSET_B}\"]\n",
+        )
+        .unwrap();
+        let mut report = ErrorReport::new();
+        assert!(!substitute_in_value(&mut val, "database", &mut report));
+        assert!(
+            val.get("url").is_none() && val.get("hosts").is_none(),
+            "{val:?}"
+        );
+
+        let text = report.into_result().unwrap_err().to_string();
+        assert!(text.starts_with("2 problems:"), "{text}");
+        assert!(
+            text.contains("database.url: Environment variable 'CRAP_TEST_UNSET_A'"),
+            "{text}"
+        );
+        assert!(
+            text.contains("database.hosts[1]: Environment variable 'CRAP_TEST_UNSET_B'"),
+            "{text}"
+        );
     }
 }

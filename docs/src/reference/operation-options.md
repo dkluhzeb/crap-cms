@@ -83,6 +83,7 @@ field definitions.
 | `hooks` | boolean |  | Lua | Run per-document lifecycle hooks (default: true) |
 | `unpublish` | boolean |  | gRPC, Lua | Transition a published document back to draft without changing field data |
 | `events` | boolean |  | gRPC, MCP, Lua | Emit a live-update event for this change (default: true) |
+| `expected_revision` | integer |  | gRPC, MCP, Lua | Optimistic-locking precondition: the document's _revision as last read. When it has been written since, the write is refused with a revision conflict and nothing changes; omit to write unconditionally |
 
 ### `validate`
 
@@ -117,6 +118,7 @@ field definitions.
 | `id` | id (string) | yes | gRPC, MCP, Lua |  |
 | `hooks` | boolean |  | Lua | Run per-document lifecycle hooks (default: true) |
 | `events` | boolean |  | gRPC, MCP, Lua | Emit a live-update event for this change (default: true) |
+| `expected_revision` | integer |  | MCP, Lua | Optimistic-locking precondition: the document's _revision as last read. When it has been written since, the write is refused with a revision conflict and nothing changes; omit to write unconditionally |
 
 ### `create_many`
 
@@ -188,6 +190,7 @@ field definitions.
 | `draft` | boolean |  | gRPC, MCP, Lua | Write as a draft version (default: false) |
 | `hooks` | boolean |  | Lua | Run per-document lifecycle hooks (default: true) |
 | `events` | boolean |  | gRPC, MCP, Lua | Emit a live-update event for this change (default: true) |
+| `expected_revision` | integer |  | gRPC, MCP, Lua | Optimistic-locking precondition: the document's _revision as last read. When it has been written since, the write is refused with a revision conflict and nothing changes; omit to write unconditionally |
 
 ### `validate_global`
 

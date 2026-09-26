@@ -120,5 +120,6 @@ pub(super) fn enrich_richtext_value(ctx: &mut Value, reg: &Registry) {
 /// tests (no access configured) behave as before.
 pub(super) use crate::admin::test_state::{
     test_admin_state as make_test_state, test_admin_state_with_deny as make_test_state_with_deny,
+    test_admin_state_with_hooks as make_test_state_with_hooks,
     test_admin_state_with_registry as make_test_state_with_registry,
 };

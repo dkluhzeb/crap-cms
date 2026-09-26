@@ -102,8 +102,11 @@ pub(crate) fn create_document_gated(
     // The admission prefix the `validate` dry-run runs too: canonicalize the
     // incoming data to the nested group shape (every surface and the whole
     // pipeline sees one shape; the DB edge flattens back to columns), strip
-    // untrusted upload metadata, and refuse a non-default locale.
-    admit_create_input(def, &mut input)?;
+    // untrusted upload metadata, and decide the input's refusal (a non-default
+    // locale) — raised only past the access gate, so a caller without access
+    // learns nothing about the schema from it. Its non-object groups are
+    // refused only past the field-level write strip.
+    let admission = admit_create_input(def, &mut input);
 
     check_create_access(
         ctx,
@@ -112,6 +115,8 @@ pub(crate) fn create_document_gated(
         &input.data,
         input.locale_ctx.map(LocaleContext::access_locale),
     )?;
+
+    let (_, groups) = admission.admit()?;
 
     // Authoritative password-policy enforcement — one chokepoint for every
     // surface and every create path (single AND `create_many`); falls back to
@@ -139,6 +144,9 @@ pub(crate) fn create_document_gated(
         ctx.user,
         input.locale_ctx.map(LocaleContext::access_locale),
     );
+
+    // A non-object group the strip left is refused; one it dropped is silent.
+    groups.refuse_unstripped(&input.data)?;
 
     let hook_ctx = ctx
         .hook_context("create")

@@ -62,15 +62,9 @@ fn resolve_global_doc(
             && let Some(mut doc) =
                 ops::snapshot_read_document("default", &version.snapshot, &def.fields, locale_ctx)?
         {
-            // The row is the authority on `_status` — snapshots can carry a
-            // stale value (see the collection overlay in `db::ops`). A
-            // draft-only global must read as "draft".
-            if let Some(row_status) =
-                query::versions::get_document_status(conn, &gtable, "default")?
-            {
-                doc.fields
-                    .insert("_status".to_string(), Value::String(row_status));
-            }
+            // The row is the authority on `_status` and `_revision` (see
+            // `ops::stamp_row_state`). A draft-only global must read as "draft".
+            ops::stamp_row_state(conn, &gtable, "default", &mut doc)?;
 
             return Ok(Some(doc));
         }
@@ -250,6 +244,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE _global_settings (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 _status TEXT DEFAULT 'published',
                 created_at TEXT,
@@ -316,6 +311,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE _global_settings (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 _status TEXT DEFAULT 'published',
                 created_at TEXT,
@@ -416,6 +412,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE _global_settings (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 _status TEXT DEFAULT 'published',
                 created_at TEXT,
@@ -477,6 +474,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE _global_settings (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title__en TEXT,
                 title__de TEXT,
                 _status TEXT DEFAULT 'published',
@@ -539,9 +537,9 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE _global_settings (
-                id TEXT PRIMARY KEY, featured TEXT, created_at TEXT, updated_at TEXT
+                id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, featured TEXT, created_at TEXT, updated_at TEXT
             );
-            CREATE TABLE tags (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
+            CREATE TABLE tags (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT);
             INSERT INTO _global_settings (id, featured) VALUES ('default', 't1');
             INSERT INTO tags (id, name) VALUES ('t1', 'Rust');",
         )

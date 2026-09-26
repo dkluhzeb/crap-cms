@@ -294,6 +294,12 @@ pub static PROTO_MESSAGES: &[ProtoMessage] = &[
                 tag: 7,
                 doc: "Emit a live-update event for the updated document. Default: true.\nSet false for a quiet write.",
             },
+            ProtoField {
+                name: "expected_revision",
+                ty: "optional int64",
+                tag: 8,
+                doc: "Optimistic-locking precondition: the document's `_revision` as the caller\nlast read it. When the document has been written since, the update is\nrefused with ABORTED and nothing changes — re-read and retry, or resend\nwith the current revision to overwrite. Absent = unconditional write.\nAlso applies when `unpublish` is set.",
+            },
         ],
     },
     ProtoMessage {
@@ -647,6 +653,12 @@ pub static PROTO_MESSAGES: &[ProtoMessage] = &[
                 ty: "optional bool",
                 tag: 5,
                 doc: "Save as an unpublished draft (drafts-enabled globals only). Default:\nfalse (publishes). Parity with the MCP/Lua/admin global update.",
+            },
+            ProtoField {
+                name: "expected_revision",
+                ty: "optional int64",
+                tag: 6,
+                doc: "Optimistic-locking precondition: the global's `_revision` as the caller\nlast read it. When the global has been written since, the update is\nrefused with ABORTED and nothing changes. Absent = unconditional write.",
             },
         ],
     },

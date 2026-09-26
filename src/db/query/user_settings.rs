@@ -22,6 +22,43 @@ pub fn get_user_settings(conn: &dyn DbConnection, user_id: &str) -> Result<Optio
         .transpose()
 }
 
+/// Read a user's settings JSON blob for a read-modify-write, locking its row
+/// until the transaction ends so two concurrent saves of different settings
+/// cannot both start from the same blob and drop each other's change.
+///
+/// A row must exist to be locked, so a user without one gets an empty blob
+/// first (two first saves then serialize on that row too). Must run inside a
+/// write transaction. `SQLite`'s `IMMEDIATE` transaction serializes writers
+/// already; Postgres takes the row lock.
+///
+/// # Errors
+///
+/// Returns a backend error if the INSERT or SELECT fails.
+pub fn get_user_settings_locked(conn: &dyn DbConnection, user_id: &str) -> Result<String> {
+    let p1 = conn.placeholder(1);
+    let params = [DbValue::Text(user_id.to_string())];
+
+    conn.execute(
+        &format!(
+            "INSERT INTO _crap_user_settings (user_id, settings) VALUES ({p1}, '{{}}') \
+             ON CONFLICT(user_id) DO NOTHING"
+        ),
+        &params,
+    )
+    .with_context(|| format!("Failed to create settings for user {user_id}"))?;
+
+    let lock = if conn.is_postgres() {
+        " FOR UPDATE"
+    } else {
+        ""
+    };
+    let sql = format!("SELECT settings FROM _crap_user_settings WHERE user_id = {p1}{lock}");
+
+    conn.query_one(&sql, &params)?
+        .context("the settings row was just created")?
+        .get_string("settings")
+}
+
 /// Set user settings JSON blob (UPSERT).
 ///
 /// # Errors
@@ -102,6 +139,26 @@ mod tests {
         set_user_settings(&conn, "user1", r#"{"b":2}"#).unwrap();
         let result = get_user_settings(&conn, "user1").unwrap();
         assert_eq!(result.as_deref(), Some(r#"{"b":2}"#));
+    }
+
+    /// A user without settings gets an empty blob to lock; a stored blob is
+    /// read as it is.
+    #[test]
+    fn locked_read_creates_the_missing_row_and_reads_a_stored_one() {
+        let (_dir, conn) = setup_conn();
+        setup_table(&conn);
+
+        assert_eq!(get_user_settings_locked(&conn, "user1").unwrap(), "{}");
+        assert_eq!(
+            get_user_settings(&conn, "user1").unwrap().as_deref(),
+            Some("{}")
+        );
+
+        set_user_settings(&conn, "user1", r#"{"a":1}"#).unwrap();
+        assert_eq!(
+            get_user_settings_locked(&conn, "user1").unwrap(),
+            r#"{"a":1}"#
+        );
     }
 
     #[test]

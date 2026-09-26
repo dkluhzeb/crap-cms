@@ -305,7 +305,7 @@ mod tests {
             .unwrap();
         conn.execute_batch(
             "CREATE TABLE users (
-                id TEXT PRIMARY KEY, email TEXT UNIQUE, name TEXT,
+                id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, email TEXT UNIQUE, name TEXT,
                 _reset_token TEXT, _reset_token_exp INTEGER,
                 _verification_token TEXT, _verification_token_exp INTEGER,
                 _verified INTEGER DEFAULT 0,

@@ -749,3 +749,48 @@ async fn admin_layout_settings_render() {
     let add = html::text_of(&doc, "button[data-action=\"add-array-row\"]");
     assert!(add.contains("Slide"), "singular add label: {add}");
 }
+
+// ── enter_in_a_drafts_form_saves_a_draft ─────────────────────────────────
+
+/// The first submit button in the form's tree order: the button an Enter in
+/// a single-line input activates (the form's default button).
+fn default_button_action(body: &str) -> Option<String> {
+    let doc = html::parse(body);
+    let buttons = html::select_all(&doc, "#edit-form button[type=\"submit\"]");
+
+    buttons
+        .first()
+        .map(|b| b.value().attr("value").unwrap_or_default().to_string())
+}
+
+/// Regression: an Enter in a single-line input activates the form's first
+/// submit button, which on a drafts-enabled form is Publish — pressing Enter
+/// while editing a draft published it. The default button saves a draft; a
+/// form without drafts keeps its one save button.
+#[tokio::test]
+async fn enter_in_a_drafts_form_saves_a_draft() {
+    let mut drafts = CollectionDefinition::new("drafts");
+    drafts.fields = make_all_field_types_def().fields;
+    drafts.versions = Some(VersionsConfig::new(true, 10));
+
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![drafts, make_all_field_types_def(), make_users_def()],
+        vec![],
+        "enter@test.com",
+        "pass123",
+    );
+
+    let body = get_create_form(&app, "drafts", &cookie).await;
+    assert_eq!(
+        default_button_action(&body).as_deref(),
+        Some("save_draft"),
+        "Enter saves a draft on a drafts form"
+    );
+
+    let body = get_create_form(&app, "articles", &cookie).await;
+    assert_eq!(
+        default_button_action(&body).as_deref(),
+        Some(""),
+        "a form without drafts submits through its save button"
+    );
+}

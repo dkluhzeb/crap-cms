@@ -79,6 +79,7 @@ pub(crate) struct CountingConn<'a> {
     locks: RefCell<Vec<(String, String)>>,
     reads_at_lock: RefCell<Vec<usize>>,
     executed: RefCell<Vec<String>>,
+    statements: RefCell<Vec<String>>,
 }
 
 impl<'a> CountingConn<'a> {
@@ -89,7 +90,13 @@ impl<'a> CountingConn<'a> {
             locks: RefCell::new(Vec::new()),
             reads_at_lock: RefCell::new(Vec::new()),
             executed: RefCell::new(Vec::new()),
+            statements: RefCell::new(Vec::new()),
         }
+    }
+
+    /// The SQL of every read and `execute` call, in the order they ran.
+    pub(crate) fn statements(&self) -> Vec<String> {
+        self.statements.borrow().clone()
     }
 
     /// The SQL of every `execute` call, in order.
@@ -117,6 +124,7 @@ impl<'a> CountingConn<'a> {
 impl DbConnection for CountingConn<'_> {
     fn execute(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
         self.executed.borrow_mut().push(sql.to_string());
+        self.statements.borrow_mut().push(sql.to_string());
         self.inner.execute(sql, params)
     }
 
@@ -126,11 +134,13 @@ impl DbConnection for CountingConn<'_> {
 
     fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>> {
         self.reads.set(self.reads.get() + 1);
+        self.statements.borrow_mut().push(sql.to_string());
         self.inner.query_all(sql, params)
     }
 
     fn query_one(&self, sql: &str, params: &[DbValue]) -> Result<Option<DbRow>> {
         self.reads.set(self.reads.get() + 1);
+        self.statements.borrow_mut().push(sql.to_string());
         self.inner.query_one(sql, params)
     }
 

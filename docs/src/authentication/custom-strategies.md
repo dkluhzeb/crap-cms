@@ -133,7 +133,7 @@ The **login path** (admin form POST, gRPC `Login`) is separate: the submitted em
 
 Each strategy is bound to its own activation signal — cross-collection accidental authentication is structurally impossible.
 
-**Side effects are transactional.** The `authenticate` function runs inside a transaction that commits only when it returns a user; on `nil` or an error every write it made rolls back. See [Transaction Access](../hooks/transaction-access.md) for the rationale and the designated homes for failed-attempt bookkeeping.
+**Side effects are transactional.** The `authenticate` function runs inside a transaction that commits only when it returns a user; on `nil` or an error every write it made rolls back. On the admin, the transaction also rolls back when the request's `[server] request_timeout` passed before it could commit — a request answered `408` changed nothing (the same holds for auth-callback and `mfa_deliver` hooks). See [Transaction Access](../hooks/transaction-access.md) for the rationale and the designated homes for failed-attempt bookkeeping.
 
 ## Disabling Password Login
 

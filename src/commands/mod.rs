@@ -6,7 +6,7 @@
 //! - **Single-action subcommand → flat file.** `crap-cms fmt`,
 //!   `crap-cms init`, `crap-cms work`, etc. live in
 //!   `fmt.rs`, `init.rs`, `work.rs`. Currently flat:
-//!   `fmt`, `images`, `init`, `jobs`, `logs`, `mcp`, `trash`,
+//!   `check`, `fmt`, `images`, `init`, `jobs`, `logs`, `mcp`, `trash`,
 //!   `typegen`, `work`.
 //! - **Multi-action subcommand → folder.** `db/`, `user/`,
 //!   `make/`, `serve/`, `update/`, `templates/`, `bench/`,
@@ -57,6 +57,7 @@
 //! caller outside that subdir appears.
 
 pub mod bench;
+pub mod check;
 pub mod db;
 pub mod export;
 pub mod fmt;

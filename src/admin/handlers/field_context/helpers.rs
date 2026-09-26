@@ -481,8 +481,9 @@ fn apply_conditions_to_level(
 /// classifier (`non_repeating_children_mut`), so conditions on fields nested in
 /// a group/collapsible/row/tabs evaluate against the same form data. The
 /// classifier is the single, compile-forced source for "which children share
-/// this scope" — array/blocks ROWS (per-row scope) classify as `None` and are a
-/// separate feature. Pairing the child `FieldContext`s with their
+/// this scope" — array/blocks ROWS (per-row scope) classify as `None`: a
+/// condition on a field inside a row is refused at load
+/// (`validate_row_conditions`), so there is nothing to evaluate there. Pairing the child `FieldContext`s with their
 /// `FieldDefinition`s is the one place the def side is selected.
 fn recurse_into_children(
     fc: &mut FieldContext,

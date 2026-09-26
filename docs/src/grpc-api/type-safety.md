@@ -404,8 +404,10 @@ other:
   **optional** and nullable (a draft may lack required values, field read
   access and `select` leave keys out, and an empty value reads as `null` —
   `?: T | null` in TypeScript), the timestamps, and the stored keys the
-  collection has: `_status` (drafts; `"draft" | "published"` in TypeScript and
-  Python, a plain string in Rust and Go), `_deleted_at` (soft delete) and
+  collection has: `_revision` (every document — an integer; Go names the
+  member `DocumentRevision`), `_status` (drafts; `"draft" | "published"` in
+  TypeScript and Python, a plain string in Rust and Go; Go `DraftStatus`),
+  `_deleted_at` (soft delete) and
   `<name>_tz` (timezone dates). A `hidden` field is never declared — every read
   strips it, nested ones included.
 

@@ -10,7 +10,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::{Value, from_slice};
-use tokio::task;
 
 use super::{
     auth::check_mcp_auth,
@@ -18,6 +17,7 @@ use super::{
 };
 use crate::{
     admin::AdminState,
+    core::spawn_request_blocking,
     mcp::{
         INTERNAL_ERROR, JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpServer, PARSE_ERROR,
         batch::{Payload, classify, handle_batch},
@@ -65,7 +65,7 @@ async fn parse_rpc_body(request: Request<Body>, max_body_bytes: u64) -> Result<P
 /// nothing to send. `initialize` may not appear in a batch (MCP spec), so no
 /// session is opened here.
 async fn respond_to_batch(server: McpServer, members: Vec<Value>) -> Response {
-    let Ok(out) = task::spawn_blocking(move || handle_batch(&server, members)).await else {
+    let Ok(out) = spawn_request_blocking(move || handle_batch(&server, members)).await else {
         return Json(JsonRpcResponse::error(
             None,
             INTERNAL_ERROR,
@@ -94,7 +94,7 @@ async fn respond_to_single(
     let request_id = rpc_request.id.clone();
     let is_initialize = rpc_request.method == "initialize";
 
-    let Ok((server, response)) = task::spawn_blocking(move || {
+    let Ok((server, response)) = spawn_request_blocking(move || {
         let response = server.handle_message(rpc_request);
         (server, response)
     })

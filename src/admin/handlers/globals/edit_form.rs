@@ -7,7 +7,7 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{
     admin::{
@@ -17,14 +17,15 @@ use crate::{
             field::FieldContext, page::globals::GlobalEditPage,
         },
         handlers::shared::{
-            EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
-            compute_denied_read_fields, editor_locale_ctx, editor_read_ctx, enrich_field_contexts,
-            extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
-            flatten_document_values, get_user_doc, is_non_default_locale, paths, render_page,
-            require_global, service_error_to_admin_response, split_sidebar_fields,
+            EnrichOptions, FormReadDenials, HxNav, PageRequest, apply_display_conditions,
+            build_field_contexts, compute_denied_read_fields, condition_data, editor_locale_ctx,
+            editor_read_ctx, enrich_field_contexts, extract_doc_status, extract_editor_locale,
+            fetch_version_sidebar_data, flatten_document_values, get_user_doc,
+            is_non_default_locale, paths, readable_form_fields, render_page, require_global,
+            service_error_to_admin_response, split_sidebar_fields,
         },
     },
-    core::{AuthUser, Claims, DocumentFields, FieldDenial, collection::GlobalDefinition},
+    core::{AuthUser, Claims, DocumentFields, collection::GlobalDefinition},
     hooks::ConditionContext,
     service::{
         RunnerReadHooks, ServiceContext,
@@ -38,22 +39,23 @@ fn prepare_edit_fields(
     def: &GlobalDefinition,
     doc_fields: &DocumentFields,
     editor_locale: Option<&str>,
-    denied_read_fields: &[FieldDenial],
+    denied_read_fields: &FormReadDenials,
     auth_user: Option<&Extension<AuthUser>>,
 ) -> (Vec<FieldContext>, Vec<FieldContext>) {
     // The service read (`get_global_document`) already stripped read-denied
-    // *values* (data-aware); `denied_read_fields` is used below only to drop the
-    // denied fields' input contexts.
+    // *values* (data-aware); the form renders no input at all for a field the
+    // viewer may not read, at any depth.
     let visible_fields = doc_fields.clone();
+    let form_fields = readable_form_fields(&def.fields, &denied_read_fields.flat);
 
-    let values = flatten_document_values(&visible_fields, &def.fields);
+    let values = flatten_document_values(&visible_fields, &form_fields);
     let non_default_locale = is_non_default_locale(state, editor_locale);
 
     // `admin.hidden` means "not in the admin form, value kept" — the same
     // promise the collection forms make, and the one the submit-side
     // normalizers rely on when they read an absent key as an edit.
     let mut fields = build_field_contexts(
-        &def.fields,
+        &form_fields,
         &values,
         &HashMap::new(),
         true,
@@ -63,7 +65,7 @@ fn prepare_edit_fields(
     let enrich_locale_ctx = editor_locale_ctx(&state.config.locale, editor_locale);
     enrich_field_contexts(
         &mut fields,
-        &def.fields,
+        &form_fields,
         &visible_fields,
         state,
         &EnrichOptions::builder(&HashMap::new())
@@ -74,15 +76,9 @@ fn prepare_edit_fields(
             .build(),
     );
 
-    // Drop top-level denied field contexts so no empty input renders for them.
-    if !denied_read_fields.is_empty() {
-        fields.retain(|fc| {
-            let name = fc.base().name.as_str();
-            !denied_read_fields.iter().any(|d| d.display_path() == name)
-        });
-    }
+    // Each row renders the sub-fields its viewer may read in that row.
+    denied_read_fields.rows.prune(&mut fields);
 
-    let form_data_json = json!(visible_fields);
     let cond_ctx = ConditionContext {
         collection: &def.slug,
         operation: "update",
@@ -93,8 +89,8 @@ fn prepare_edit_fields(
     };
     apply_display_conditions(
         &mut fields,
-        &def.fields,
-        &form_data_json,
+        &form_fields,
+        &condition_data(&def.fields, &visible_fields),
         &state.infra.hook_runner,
         true,
         &cond_ctx,
@@ -241,6 +237,7 @@ pub async fn edit_form(
         restore_url_prefix: paths::global(&slug),
         versions_url: paths::global_versions(&slug),
         doc_status,
+        revision: document.revision(),
     };
 
     render_page(

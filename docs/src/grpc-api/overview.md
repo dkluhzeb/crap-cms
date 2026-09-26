@@ -70,7 +70,7 @@ grpc_timeout = "30s"
 
 Because the operation is atomic, a very large match-set holds the database write-lock for the whole operation. Set `[server] bulk_max_documents` to a positive value to cap how many documents a single bulk op may match (default `0` = no limit); a request matching more than the cap is rejected (gRPC `FAILED_PRECONDITION`) and changes nothing. See [crap.toml](../configuration/crap-toml.md).
 
-Database constraint failures map by kind, on both backends: a unique-constraint violation is `ALREADY_EXISTS`, a foreign-key violation (a write naming a row that does not exist, or a delete a foreign key still points at) is `FAILED_PRECONDITION`, and a transient failure (the pool timed out, the connection dropped, the database is busy) is `UNAVAILABLE`.
+Database constraint failures map by kind, on both backends: a unique-constraint violation is `ALREADY_EXISTS`, a foreign-key violation (a write naming a row that does not exist, or a delete a foreign key still points at) is `FAILED_PRECONDITION`, and a transient failure (the pool timed out, the connection dropped, the database is busy) is `UNAVAILABLE`. An update refused by its `expected_revision` precondition — the document was written since the caller read it — is `ABORTED`: re-read and retry (see [Concurrent Editing](../collections/concurrent-editing.md)).
 
 ## Server Reflection
 

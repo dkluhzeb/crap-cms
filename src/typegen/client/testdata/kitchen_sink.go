@@ -38,6 +38,7 @@ type N2fa struct {
 	N2fa      *string `json:"2fa,omitempty"`
 	End       *string `json:"end,omitempty"`
 	Private   *string `json:"private,omitempty"`
+	DocumentRevision *int64 `json:"_revision,omitempty"`
 	Collection *string `json:"collection,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
@@ -79,6 +80,7 @@ type Media struct {
 	FocalY    *float64 `json:"focal_y,omitempty"`
 	Sizes     *MediaSizes `json:"sizes,omitempty"`
 	Alt       *string `json:"alt,omitempty"`
+	DocumentRevision *int64 `json:"_revision,omitempty"`
 	Collection *string `json:"collection,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
@@ -141,6 +143,7 @@ type Posts struct {
 	Byline    *string `json:"byline,omitempty"`
 	Aside     *string `json:"aside,omitempty"`
 	TabNote   *string `json:"tab_note,omitempty"`
+	DocumentRevision *int64 `json:"_revision,omitempty"`
 	DraftStatus *string `json:"_status,omitempty"`
 	DeletedAt *string `json:"_deleted_at,omitempty"`
 	Collection *string `json:"collection,omitempty"`
@@ -187,6 +190,7 @@ type PostsLocalized struct {
 	Byline    *string `json:"byline,omitempty"`
 	Aside     *string `json:"aside,omitempty"`
 	TabNote   *string `json:"tab_note,omitempty"`
+	DocumentRevision *int64 `json:"_revision,omitempty"`
 	DraftStatus *string `json:"_status,omitempty"`
 	DeletedAt *string `json:"_deleted_at,omitempty"`
 	Collection *string `json:"collection,omitempty"`
@@ -198,6 +202,7 @@ type PostsLocalized struct {
 type Tags struct {
 	ID        string  `json:"id"`
 	Name      *string `json:"name,omitempty"`
+	DocumentRevision *int64 `json:"_revision,omitempty"`
 	Collection *string `json:"collection,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
@@ -209,6 +214,7 @@ type Users struct {
 	Email     *string `json:"email,omitempty"`
 	Name      *string `json:"name,omitempty"`
 	Authored  []map[string]interface{} `json:"authored,omitempty"`
+	DocumentRevision *int64 `json:"_revision,omitempty"`
 	Collection *string `json:"collection,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
@@ -226,6 +232,7 @@ type Settings struct {
 	ID        string  `json:"id"`
 	SiteName  *string `json:"site_name,omitempty"`
 	Nav       []SettingsNav `json:"nav,omitempty"`
+	DocumentRevision *int64 `json:"_revision,omitempty"`
 	DraftStatus *string `json:"_status,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
@@ -236,6 +243,7 @@ type SettingsLocalized struct {
 	ID        string  `json:"id"`
 	SiteName  map[string]*string `json:"site_name,omitempty"`
 	Nav       []SettingsNav `json:"nav,omitempty"`
+	DocumentRevision *int64 `json:"_revision,omitempty"`
 	DraftStatus *string `json:"_status,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`

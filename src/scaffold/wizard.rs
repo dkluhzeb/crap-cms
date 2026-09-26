@@ -5,7 +5,7 @@ use dialoguer::{Confirm, Input, Select};
 
 use crate::cli::{self, crap_theme};
 use crate::scaffold::collection::{
-    BlockStub, CONTAINER_TYPES, FieldStub, TabStub, VALID_FIELD_TYPES,
+    BlockStub, CONTAINER_TYPES, FieldStub, TabStub, VALID_FIELD_TYPES, holds_value,
 };
 use crate::scaffold::to_title_case;
 
@@ -72,13 +72,17 @@ fn field_loop(locales_enabled: bool, breadcrumb: &[String]) -> anyhow::Result<Ve
             .context("Failed to read field type")?;
         let field_type = VALID_FIELD_TYPES[type_idx];
 
-        let required = Confirm::with_theme(&crap_theme())
-            .with_prompt(format!("{indent}Required?"))
-            .default(false)
-            .interact()
-            .context("Failed to read required flag")?;
+        // A wrapper or a join holds no value: neither flag applies to it.
+        let has_value = holds_value(field_type);
 
-        let localized = if locales_enabled {
+        let required = has_value
+            && Confirm::with_theme(&crap_theme())
+                .with_prompt(format!("{indent}Required?"))
+                .default(false)
+                .interact()
+                .context("Failed to read required flag")?;
+
+        let localized = if locales_enabled && has_value {
             Confirm::with_theme(&crap_theme())
                 .with_prompt(format!("{indent}Localized?"))
                 .default(false)

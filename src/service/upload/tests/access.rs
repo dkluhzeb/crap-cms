@@ -88,6 +88,7 @@ fn update_input<'a>(
         upload_max_file_size: MAX_FILE_SIZE,
         image_max_attempts: FALLBACK_MAX_ATTEMPTS,
         form_echoes_locked_fields: false,
+        expected_revision: None,
     }
 }
 

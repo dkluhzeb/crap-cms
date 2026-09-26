@@ -642,6 +642,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE scores (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 name TEXT,
                 points INTEGER,
                 created_at TEXT,
@@ -765,6 +766,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE ratings (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 label TEXT,
                 score REAL,
                 created_at TEXT,

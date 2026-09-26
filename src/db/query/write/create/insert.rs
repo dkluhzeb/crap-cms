@@ -94,6 +94,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE events (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 name TEXT
             )",
         );

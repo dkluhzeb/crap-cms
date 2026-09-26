@@ -83,44 +83,54 @@ pub(crate) fn locale_locked_field_names(
     fields: &[FieldDefinition],
     locale_ctx: Option<&LocaleContext>,
 ) -> HashSet<String> {
-    let mut locked = HashSet::new();
     if !is_non_default_single_locale(locale_ctx) {
-        return locked;
+        return HashSet::new();
     }
 
+    shared_field_columns(fields)
+}
+
+/// The columns of every shared (non-localized) field: the one value every
+/// locale reads and only a default-locale write may change, with its
+/// companions (`{field}_tz`, `{field}_lang`). Each field is classified the way
+/// its live write classifies it:
+/// - scalar column (`has_parent_column`): inheritance-aware — a field inside a
+///   localized Group is localized, like `collect_leaf_update` /
+///   `is_locale_locked_write`.
+/// - join-backed (array / blocks / has-many): own-flag-only, like
+///   `save_join_data_inner` (`resolve_join_locale` ignores a localized parent
+///   Group, so a shared join field is never per-locale).
+pub(crate) fn shared_field_columns(fields: &[FieldDefinition]) -> HashSet<String> {
+    let mut shared = HashSet::new();
+
     let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, inherited| {
-        // Classify the field the SAME way its live write path does, so the
-        // draft snapshot's drop-set matches exactly:
-        // - scalar column (`has_parent_column`): inheritance-aware, like
-        //   `collect_leaf_update` / `is_locale_locked_write`.
-        // - join-backed (array / blocks / has-many): own-flag-only, like
-        //   `save_join_data_inner` (`resolve_join_locale` ignores a localized
-        //   parent Group, so a shared join field is never per-locale).
-        let field_locked = if field.has_parent_column() {
-            is_locale_locked_write(field, locale_ctx, inherited)
+        let is_shared = if field.has_parent_column() {
+            !(field.localized || inherited)
         } else {
             !field.localized
         };
 
-        if field_locked {
-            let name = prefixed_name(prefix, &field.name);
-
-            // A scalar's companion columns (`{field}_tz`, `{field}_lang`) are
-            // part of its value. The live write skips the whole field under a
-            // non-default locale, so the snapshot drop-set must drop the
-            // companions too — otherwise a non-default-locale edit of one
-            // survives into the snapshot and clobbers the canonical value on
-            // restore.
-            if field.has_parent_column() {
-                locked.extend(field.companion_columns(&name));
-            }
-
-            locked.insert(name);
+        if !is_shared {
+            return Ok(());
         }
+
+        let name = prefixed_name(prefix, &field.name);
+
+        // A scalar's companion columns are part of its value. The live write
+        // skips the whole field under a non-default locale, so the snapshot
+        // drop-set must drop the companions too — otherwise a
+        // non-default-locale edit of one survives into the snapshot and
+        // clobbers the canonical value on restore.
+        if field.has_parent_column() {
+            shared.extend(field.companion_columns(&name));
+        }
+
+        shared.insert(name);
+
         Ok(())
     });
 
-    locked
+    shared
 }
 
 #[cfg(test)]
@@ -321,6 +331,30 @@ mod tests {
             config: make_locale_config(),
         };
         assert!(locale_locked_field_names(&fields, Some(&en)).is_empty());
+    }
+
+    /// The shared columns are classified as the live write classifies them,
+    /// whatever the locale: a scalar inside a localized group is localized, a
+    /// join field only by its own flag.
+    #[test]
+    fn shared_field_columns_classify_like_the_live_write() {
+        let mut group = make_localized_field("seo", FieldType::Group);
+        group.fields = vec![make_field("title", FieldType::Text)];
+        let mut rows = make_field("rows", FieldType::Array);
+        rows.fields = vec![make_field("label", FieldType::Text)];
+        let fields = vec![
+            make_field("slug", FieldType::Text),
+            make_localized_field("body", FieldType::Text),
+            group,
+            rows,
+        ];
+
+        let shared = shared_field_columns(&fields);
+
+        assert!(shared.contains("slug"));
+        assert!(shared.contains("rows"));
+        assert!(!shared.contains("body"));
+        assert!(!shared.contains("seo__title"), "{shared:?}");
     }
 
     /// Regression: a shared timezone-enabled Date locks BOTH the `start_date`

@@ -40,6 +40,15 @@ fn get_num_opt(doc: &Document, name: &str) -> Option<f64> {
         })
 }
 
+fn get_int_opt(doc: &Document, name: &str) -> Option<i64> {
+    doc.fields.as_ref()
+        .and_then(|f| f.fields.get(name))
+        .and_then(|v| match &v.kind {
+            Some(Kind::IntValue(n)) => Some(*n),
+            _ => None,
+        })
+}
+
 fn get_bool_opt(doc: &Document, name: &str) -> Option<bool> {
     doc.fields.as_ref()
         .and_then(|f| f.fields.get(name))
@@ -191,6 +200,7 @@ impl N2fa {
             n2fa: get_str_opt(doc, "2fa"),
             end: get_str_opt(doc, "end"),
             private: get_str_opt(doc, "private"),
+            _revision: get_int_opt(doc, "_revision"),
             created_at: doc.created_at.clone(),
             updated_at: doc.updated_at.clone(),
         }
@@ -252,6 +262,7 @@ impl Media {
             focal_y: get_num_opt(doc, "focal_y"),
             sizes: doc.fields.as_ref().and_then(|f| f.fields.get("sizes")).and_then(|v| match &v.kind { Some(Kind::StructValue(s)) => Some(MediaSizes::from_struct(s)), _ => None, }),
             alt: get_str_opt(doc, "alt"),
+            _revision: get_int_opt(doc, "_revision"),
             created_at: doc.created_at.clone(),
             updated_at: doc.updated_at.clone(),
         }
@@ -332,6 +343,7 @@ impl Posts {
             byline: get_str_opt(doc, "byline"),
             aside: get_str_opt(doc, "aside"),
             tab_note: get_str_opt(doc, "tab_note"),
+            _revision: get_int_opt(doc, "_revision"),
             _status: get_str_opt(doc, "_status"),
             _deleted_at: get_str_opt(doc, "_deleted_at"),
             created_at: doc.created_at.clone(),
@@ -351,6 +363,7 @@ impl Tags {
         Self {
             id: doc.id.clone(),
             name: get_str_opt(doc, "name"),
+            _revision: get_int_opt(doc, "_revision"),
             created_at: doc.created_at.clone(),
             updated_at: doc.updated_at.clone(),
         }
@@ -370,6 +383,7 @@ impl Users {
             email: get_str_opt(doc, "email"),
             name: get_str_opt(doc, "name"),
             authored: get_json_list(doc, "authored"),
+            _revision: get_int_opt(doc, "_revision"),
             created_at: doc.created_at.clone(),
             updated_at: doc.updated_at.clone(),
         }
@@ -398,6 +412,7 @@ impl Settings {
             id: doc.id.clone(),
             site_name: get_str_opt(doc, "site_name"),
             nav: doc.fields.as_ref().and_then(|f| f.fields.get("nav")).and_then(|v| match &v.kind { Some(Kind::ListValue(list)) => Some(list.values.iter().filter_map(|v| match &v.kind {Some(Kind::StructValue(s)) => Some(SettingsNav::from_struct(s)),_ => None,}).collect::<Vec<_>>()), _ => None, }),
+            _revision: get_int_opt(doc, "_revision"),
             _status: get_str_opt(doc, "_status"),
             created_at: doc.created_at.clone(),
             updated_at: doc.updated_at.clone(),

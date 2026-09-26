@@ -570,7 +570,7 @@ fn a_restore_reports_the_restored_document() {
     let id = seed(&h);
     write(&h, &id, "en", slides(&["first"]), false);
     write(&h, &id, "en", slides(&["second"]), false);
-    unpublish_document(&service_ctx(&h), &id).expect("unpublish");
+    unpublish_document(&service_ctx(&h), &id, None).expect("unpublish");
 
     // Newest first: the unpublish, the second write, then the first.
     let conn = h.pool.get().unwrap();
@@ -600,7 +600,7 @@ fn unpublish_reports_the_default_locales_rows() {
     write(&h, &id, "en", slides(&["english"]), false);
     write(&h, &id, "de", slides(&["deutsch"]), false);
 
-    let doc = unpublish_document(&service_ctx(&h), &id).expect("unpublish");
+    let doc = unpublish_document(&service_ctx(&h), &id, None).expect("unpublish");
 
     assert_eq!(captions(&doc), vec!["english".to_string()]);
 }

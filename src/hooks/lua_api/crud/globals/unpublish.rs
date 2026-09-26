@@ -36,6 +36,10 @@ pub(crate) struct GlobalUnpublishOptions {
     /// with `crap.collections.unpublish` and `crap.globals.update`.
     #[lua(optional)]
     pub(crate) events: bool,
+    /// The global's revision this write is based on — the `_revision` of the
+    /// read it edits. Set, the write fails with a revision conflict when
+    /// anyone has written the global since; nil writes unconditionally.
+    pub(crate) expected_revision: Option<i64>,
 }
 
 impl Default for GlobalUnpublishOptions {
@@ -44,6 +48,7 @@ impl Default for GlobalUnpublishOptions {
             override_access: false,
             hooks: true,
             events: true,
+            expected_revision: None,
         }
     }
 }
@@ -102,9 +107,7 @@ fn globals_unpublish(
         .build();
 
     // Shared operation body — identical semantics on every surface.
-    let args = UnpublishGlobalArgs {
-        events: opts.events,
-    };
+    let args = UnpublishGlobalArgs::new(opts.events, opts.expected_revision);
     let doc = UnpublishGlobal::run(&ctx, args)
         .map_err(|e| RuntimeError(format!("unpublish global error: {e:#}")))?;
 

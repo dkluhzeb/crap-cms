@@ -3,7 +3,7 @@ use std::sync::Arc;
 use handlebars::{Handlebars, Helper, HelperDef, RenderContext, RenderError, ScopedJson};
 use serde_json::{Map, Value};
 
-use crate::admin::Translations;
+use crate::admin::{Translations, templates::helpers::json::markup_json};
 
 /// Translation keys consumed by `static/components/` JavaScript via the
 /// `i18n.js` `t(key)` helper. The server emits the resolved translations
@@ -30,6 +30,8 @@ const ADMIN_JS_KEYS: &[&str] = &[
     "unsaved_changes",
     "leave",
     "stay",
+    "unpublish_unsaved_changes",
+    "discard_and_unpublish",
     "stay_logged_in",
     "log_out",
     "minute",
@@ -149,8 +151,8 @@ const ADMIN_JS_KEYS: &[&str] = &[
 /// </script>
 /// ```
 ///
-/// The returned string is JSON-safe, with `</` escaped to `<\/` to
-/// prevent `</script>` breakouts (mirroring `JsonHelper`). Used with
+/// The returned string is escaped by [`markup_json`] (the `JsonHelper`
+/// policy), so it cannot close a `</script>` element. Used with
 /// the triple-stash so handlebars does not HTML-escape the output.
 pub(super) struct AdminI18nHelper {
     pub(super) translations: Arc<Translations>,
@@ -176,49 +178,20 @@ impl HelperDef for AdminI18nHelper {
             map.insert((*key).to_string(), Value::String(value));
         }
 
-        let json_str = serde_json::to_string(&Value::Object(map)).unwrap_or_default();
-        // Mirror `JsonHelper` exactly: `</` so the payload can't close a
-        // <script> element, AND `'` so the same payload stays inert if an
-        // overlay ever moves it into a single-quoted attribute (both are
-        // valid JSON escapes that parsers decode back).
-        let json_str = json_str.replace("</", r"<\/").replace('\'', r"\u0027");
-
-        Ok(ScopedJson::Derived(Value::String(json_str)))
+        // The same escaping every raw-JSON producer uses: inert in a
+        // <script> element and in a single-quoted attribute alike.
+        Ok(ScopedJson::Derived(Value::String(markup_json(
+            &Value::Object(map),
+        ))))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    /// Mirrors `json_escapes_single_quotes_for_html_attributes` on
-    /// `JsonHelper` — the two raw-JSON-into-markup producers must share
-    /// one escaping policy: a translation value
-    /// containing `'` or `</script>` stays inert in both a script
-    /// element and a single-quoted attribute.
-    #[test]
-    fn admin_i18n_escapes_mirror_the_json_helper() {
-        let payload = serde_json::json!({ "k": "it's </script> tricky" });
-        let json_str = serde_json::to_string(&payload).unwrap();
-        let escaped = json_str.replace("</", r"<\/").replace('\'', r"\u0027");
-
-        assert!(
-            !escaped.contains("</"),
-            "script-close must be broken: {escaped}"
-        );
-        assert!(
-            !escaped.contains('\''),
-            "single quotes must be escaped: {escaped}"
-        );
-        let back: serde_json::Value = serde_json::from_str(&escaped).unwrap();
-        assert_eq!(
-            back["k"], "it's </script> tricky",
-            "escapes must be valid JSON"
-        );
-    }
-
     use super::ADMIN_JS_KEYS;
     use std::{collections::HashMap, fs, path::Path};
 
-    use serde_json::{Value, json};
+    use serde_json::{Value, from_str, json};
 
     use crate::admin::templates::helpers::test_helpers::test_hbs_with_translations;
 
@@ -302,7 +275,7 @@ mod tests {
     #[test]
     fn every_js_translation_key_ships_and_resolves() {
         let english: HashMap<String, String> =
-            serde_json::from_str(include_str!("../../../../translations/en.json"))
+            from_str(include_str!("../../../../translations/en.json"))
                 .expect("en.json is a flat string map");
 
         for (file, source) in component_sources() {
@@ -330,7 +303,7 @@ mod tests {
             .unwrap();
 
         let rendered = hbs.render("t", &json!({"_locale": "en"})).unwrap();
-        let parsed: Value = serde_json::from_str(&rendered).expect("must be valid JSON");
+        let parsed: Value = from_str(&rendered).expect("must be valid JSON");
         let obj = parsed.as_object().expect("must be an object");
 
         // Spot-check: one core key resolves to its English translation,
@@ -350,7 +323,7 @@ mod tests {
             .unwrap();
 
         let de = hbs.render("t", &json!({"_locale": "de"})).unwrap();
-        let parsed: Value = serde_json::from_str(&de).expect("must be valid JSON");
+        let parsed: Value = from_str(&de).expect("must be valid JSON");
 
         assert_eq!(
             parsed.get("save").and_then(|v| v.as_str()),
@@ -367,7 +340,7 @@ mod tests {
             .unwrap();
 
         let rendered = hbs.render("t", &json!({"_locale": "en"})).unwrap();
-        let parsed: Value = serde_json::from_str(&rendered).expect("must be valid JSON");
+        let parsed: Value = from_str(&rendered).expect("must be valid JSON");
         let obj = parsed.as_object().unwrap();
 
         for key in ADMIN_JS_KEYS {

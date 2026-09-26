@@ -49,8 +49,12 @@ while every read hides it. The refusal is a validation error on the field
 holding the reference — `validation.reference_unavailable`, keyed like every
 field error (`author`, `seo__author`, `items[0][author]`) — on every surface; a
 reference no field of the write carries (a version restore) fails with
-`cannot reference {collection}/{id}: no such document`. References a document
-already holds are kept when it is saved again, and `crap-cms import` keeps an
+`cannot reference {collection}/{id}: no such document`. A new reference to a
+live document the writer may not read is refused with the same error, so the
+answer never tells a hidden document's existence — and a writer cannot make a
+document it may not see undeletable by referencing it (see
+[Referencing a Document](../fields/relationship.md#referencing-a-document)).
+References a document already holds are kept when it is saved again, and `crap-cms import` keeps an
 exported reference to a document the export carries trashed.
 
 ## Admin UI

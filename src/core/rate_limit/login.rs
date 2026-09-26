@@ -121,6 +121,9 @@ impl LoginRateLimiter {
 
     /// Check if a key is currently blocked (too many recent failures).
     ///
+    /// A read-only probe (for tests and diagnostics): an attempt must be gated
+    /// by [`Self::check_and_block`], which checks and counts in one step.
+    ///
     /// Fails CLOSED: when the backend can't be reached (e.g. a Redis outage),
     /// the key is treated as blocked. Failing open here would silently
     /// disable brute-force protection for exactly as long as the outage —
@@ -186,6 +189,10 @@ impl LoginRateLimiter {
     }
 
     /// Record a failed attempt for the given key.
+    ///
+    /// Test-only: a production attempt is counted by [`Self::check_and_block`]
+    /// in the same step as its check — a separate record reopens the race.
+    #[cfg(test)]
     pub fn record_failure(&self, key: &str) {
         let pkey = self.prefixed_key(key);
 

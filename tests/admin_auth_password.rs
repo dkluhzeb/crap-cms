@@ -151,6 +151,7 @@ async fn reset_password_expired_token() {
 
     let resp = app
         .router
+        .clone()
         .oneshot(
             Request::post("/admin/reset-password")
                 .header("content-type", "application/x-www-form-urlencoded")
@@ -165,29 +166,27 @@ async fn reset_password_expired_token() {
         .await
         .unwrap();
 
-    let status = resp.status();
+    assert_eq!(resp.status(), StatusCode::OK, "the form re-renders");
+    let body = body_string(resp.into_body()).await;
     assert!(
-        status == StatusCode::OK
-            || status == StatusCode::SEE_OTHER
-            || status == StatusCode::FOUND
-            || status == StatusCode::UNPROCESSABLE_ENTITY,
-        "Expected 200, redirect, or 422 for expired token, got {status}"
+        body.contains("Reset link has expired"),
+        "an expired link must read as expired: {}",
+        &body[..body.len().min(400)]
     );
 
-    if status != StatusCode::SEE_OTHER && status != StatusCode::FOUND {
-        let body = body_string(resp.into_body()).await;
-        let body_lower = body.to_lowercase();
-        assert!(
-            body_lower.is_empty()
-                || body_lower.contains("expired")
-                || body_lower.contains("invalid")
-                || body_lower.contains("error")
-                || body_lower.contains("token")
-                || body_lower.contains("reset"),
-            "Response should indicate expired/invalid token, got: {}",
-            &body[..body.len().min(200)]
-        );
-    }
+    // Regression: the admin reset committed whatever a refused attempt had
+    // written, while gRPC rolled it back. A refused attempt writes nothing on
+    // either surface: the (expired) token row is untouched.
+    assert!(reset_token_stored(&app, expired_token));
+}
+
+/// Whether `token` is still stored on a `users` row, expired or not.
+fn reset_token_stored(app: &TestApp, token: &str) -> bool {
+    let conn = app.pool.get().unwrap();
+
+    query::find_by_reset_token(&conn, &make_users_def(), token, None)
+        .unwrap()
+        .is_some()
 }
 
 #[tokio::test]
@@ -225,6 +224,7 @@ async fn reset_password_valid_flow() {
 
     let resp = app
         .router
+        .clone()
         .oneshot(
             Request::post("/admin/reset-password")
                 .header("content-type", "application/x-www-form-urlencoded")
@@ -250,6 +250,10 @@ async fn reset_password_valid_flow() {
             "Should redirect to login with success, got {loc}"
         );
     }
+    assert!(
+        !reset_token_stored(&app, valid_token),
+        "a used reset token must be consumed"
+    );
 }
 
 #[tokio::test]

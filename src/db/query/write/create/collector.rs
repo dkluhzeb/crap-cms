@@ -98,6 +98,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 meta__color TEXT,
                 meta__size TEXT,
@@ -135,6 +136,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 notes TEXT,
                 footer TEXT,
                 created_at TEXT,
@@ -167,6 +169,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 body TEXT,
                 slug TEXT,
                 created_at TEXT,
@@ -205,6 +208,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 social__github TEXT,
                 social__twitter TEXT,
                 body TEXT,
@@ -253,6 +257,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 og__image TEXT,
                 canonical TEXT,
                 created_at TEXT,
@@ -296,6 +301,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 meta__title TEXT,
                 meta__slug TEXT,
                 created_at TEXT,
@@ -332,6 +338,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 settings__theme TEXT,
                 settings__cache_ttl TEXT,
                 created_at TEXT,
@@ -376,6 +383,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 outer__inner__deep TEXT,
                 created_at TEXT,
                 updated_at TEXT

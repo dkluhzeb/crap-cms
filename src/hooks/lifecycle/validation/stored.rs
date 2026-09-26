@@ -13,7 +13,7 @@ use crate::{
     db::query::{StoredRow, find_pending_draft_fields, find_stored_fields},
 };
 
-use super::ValidationCtx;
+use super::{HeldSource, ValidationCtx};
 
 /// The edited document's stored values, read once and only when a check asks.
 ///
@@ -93,19 +93,38 @@ impl<'a> StoredDocument<'a> {
         };
 
         let mut sources = Vec::new();
-        sources.extend(logged(
-            self.ctx.table,
-            find_stored_fields(self.ctx.conn, &row),
+        sources.extend(self.admitted(
+            HeldSource::StoredRow,
+            logged(self.ctx.table, find_stored_fields(self.ctx.conn, &row)),
         ));
 
         if self.ctx.versioned_drafts {
-            sources.extend(logged(
-                self.ctx.table,
-                find_pending_draft_fields(self.ctx.conn, &row),
+            sources.extend(self.admitted(
+                HeldSource::PendingDraft,
+                logged(
+                    self.ctx.table,
+                    find_pending_draft_fields(self.ctx.conn, &row),
+                ),
             ));
         }
 
         sources
+    }
+
+    /// `fields` as the writer may lean on them ([`HeldValueGate`]): stripped of
+    /// what the writer may not read, or dropped when it may not see `source`.
+    fn admitted(
+        &self,
+        source: HeldSource,
+        fields: Option<DocumentFields>,
+    ) -> Option<DocumentFields> {
+        let mut fields = fields?;
+
+        let Some(gate) = self.ctx.held_gate else {
+            return Some(fields);
+        };
+
+        gate.admit(source, &mut fields).then_some(fields)
     }
 }
 

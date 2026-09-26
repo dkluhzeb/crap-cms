@@ -11,7 +11,7 @@ use std::{borrow::Cow, collections::HashSet, slice::from_ref};
 
 use crate::{
     core::{
-        CollectionDefinition, FieldChildren, FieldDefinition, FieldType, Registry,
+        CollectionDefinition, FieldChildren, FieldDefinition, FieldType, REVISION_COLUMN, Registry,
         collection::GlobalDefinition,
         field_children, flatten_array_sub_fields,
         upload::{read_shape_fields, readable_fields, writable_fields, write_shape_fields},
@@ -280,7 +280,14 @@ fn collection_tag(slug: &str) -> Field<'static> {
 
 /// The stored keys a read document carries besides its fields.
 fn system_fields(drafts: bool, soft_delete: bool) -> Vec<Field<'static>> {
-    let mut fields = Vec::new();
+    // Every document carries its revision: what an update sends back as its
+    // `expected_revision`.
+    let mut fields = vec![Field {
+        name: Cow::Borrowed(REVISION_COLUMN),
+        ty: FieldTy::Int,
+        optional: true,
+        nullable: false,
+    }];
 
     if drafts {
         fields.push(Field {

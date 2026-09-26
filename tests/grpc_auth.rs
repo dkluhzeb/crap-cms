@@ -33,7 +33,10 @@ use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
 use crap_cms::core::rate_limit::IP_RESET_PASSWORD_KEYSPACE;
 use crap_cms::core::{HookRef, Registry};
-use crap_cms::db::{DbConnection, DbValue, migrate, pool, query::MfaCode};
+use crap_cms::db::{
+    DbConnection, DbValue, migrate, pool,
+    query::{self, MfaCode, TokenGrant},
+};
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service::{
     AppInfra,
@@ -1260,6 +1263,90 @@ async fn reset_password_invalid_token() {
     assert_eq!(err.code(), tonic::Code::Unauthenticated);
 }
 
+/// A `users` account (`email`, password `oldpassword`) holding reset token
+/// `token`, expiring `ttl` seconds from now.
+async fn user_with_reset_token(ts: &TestSetup, email: &str, token: &str, ttl: i64) {
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "users".to_string(),
+            data: Some(make_struct(&[
+                ("email", email),
+                ("password", "oldpassword"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    let conn = ts.pool.get().unwrap();
+    let exp = chrono::Utc::now().timestamp() + ttl;
+    query::set_reset_token(
+        &conn,
+        &TokenGrant::builder("users", &doc.id, token, exp).build(),
+    )
+    .unwrap();
+}
+
+/// Whether `token` is still stored on a `users` row, expired or not.
+fn reset_token_stored(ts: &TestSetup, token: &str) -> bool {
+    let conn = ts.pool.get().unwrap();
+
+    query::find_by_reset_token(&conn, &make_users_def(), token, None)
+        .unwrap()
+        .is_some()
+}
+
+async fn reset_with(ts: &TestSetup, token: &str) -> Result<(), tonic::Status> {
+    ts.service
+        .reset_password(Request::new(content::ResetPasswordRequest {
+            collection: "users".to_string(),
+            token: token.to_string(),
+            new_password: "newpassword123".to_string(),
+        }))
+        .await
+        .map(|_| ())
+}
+
+/// A valid token resets the password (the new one logs in) and is consumed.
+#[tokio::test]
+async fn reset_password_with_a_valid_token() {
+    let ts = setup_service(vec![make_users_def()], vec![]);
+    user_with_reset_token(&ts, "valid@example.com", "live-token", 600).await;
+
+    reset_with(&ts, "live-token").await.expect("reset succeeds");
+
+    assert!(!reset_token_stored(&ts, "live-token"));
+    ts.service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "valid@example.com".to_string(),
+            password: "newpassword123".to_string(),
+        }))
+        .await
+        .expect("the new password logs in");
+}
+
+/// Regression: the gRPC and admin resets had different transaction
+/// semantics on a refusal. An expired token is refused as expired, on both
+/// surfaces, and the refused attempt writes nothing.
+#[tokio::test]
+async fn reset_password_with_an_expired_token_writes_nothing() {
+    let ts = setup_service(vec![make_users_def()], vec![]);
+    user_with_reset_token(&ts, "late@example.com", "dead-token", -10).await;
+
+    let err = reset_with(&ts, "dead-token").await.unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+    assert!(err.message().contains("expired"), "{}", err.message());
+    assert!(reset_token_stored(&ts, "dead-token"));
+}
+
 // ── Email Verification ────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -1364,6 +1451,7 @@ async fn update_password_via_grpc() {
             locale: None,
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -2543,6 +2631,7 @@ async fn changing_the_email_requires_re_verification() {
             locale: None,
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .expect("update the address");

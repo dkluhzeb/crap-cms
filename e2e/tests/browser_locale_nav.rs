@@ -14,7 +14,10 @@
 
 use crap_cms::{
     config::{CrapConfig, LocaleConfig},
-    core::{collection::*, field::LocalizedString},
+    core::{
+        collection::*,
+        field::{FieldDefinition, FieldType, LocalizedString},
+    },
 };
 use crap_cms_e2e::{browser, helpers::*};
 
@@ -168,6 +171,100 @@ async fn ui_locale_dropdown_opens_on_toggle() {
         .into_value()
         .unwrap_or(false);
     assert!(opened, "dropdown should be open after clicking toggle");
+
+    server_handle.abort();
+}
+
+// ── the_editor_locale_waits_for_the_unsaved_changes_answer ──────────────
+//
+// Regression: the editor locale picker wrote its cookie and THEN reloaded,
+// so the unsaved-changes prompt came after the switch was already recorded
+// — "Stay" kept the old-locale form on screen with the cookie pointing at
+// the new locale, and the save redirected into the other locale. The cookie
+// is written only once the editor chose to leave.
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_editor_locale_waits_for_the_unsaved_changes_answer() {
+    let mut def = make_def();
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text)
+            .localized(true)
+            .build(),
+    ];
+
+    let config = make_locale_config();
+    let (base_url, server_handle, app) =
+        browser::spawn_server_with_config(vec![def, make_users_def()], vec![], config).await;
+    let user_id = create_test_user(&app, "bln9@test.com", "pass123");
+    let _ = make_auth_cookie(&app, &user_id, "bln9@test.com");
+
+    let (browser, _browser_handle) = browser::launch_browser().await;
+    let page = browser.new_page("about:blank").await.unwrap();
+    browser::browser_login(&page, &base_url, "bln9@test.com", "pass123").await;
+
+    page.goto(format!("{base_url}/admin/collections/posts/create"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('crap-dirty-form')?._armed === true \
+             && !!document.querySelector('crap-locale-picker')"
+        )
+        .await,
+        "the edit form and the locale picker are ready"
+    );
+
+    page.evaluate(
+        "() => { \
+           const el = document.querySelector('[name=\"title\"]'); \
+           el.value = 'Unsaved'; \
+           el.dispatchEvent(new Event('input', { bubbles: true })); \
+           document.querySelector('crap-locale-picker')._onValue('de'); \
+         }",
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('crap-confirm-dialog')?.shadowRoot?.querySelector('dialog')?.open === true"
+        )
+        .await,
+        "the unsaved-changes question is asked"
+    );
+
+    let cookie_while_asking: String = page
+        .evaluate("() => document.cookie")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap_or_default();
+    assert!(
+        !cookie_while_asking.contains("crap_editor_locale=de"),
+        "the locale is not switched before the answer: {cookie_while_asking}"
+    );
+
+    page.evaluate(
+        "() => document.querySelector('crap-confirm-dialog').shadowRoot.querySelector('.cancel').click()",
+    )
+    .await
+    .unwrap();
+
+    let cookie_after_stay: String = page
+        .evaluate("() => document.cookie")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap_or_default();
+    assert!(
+        !cookie_after_stay.contains("crap_editor_locale=de"),
+        "\"Stay\" keeps the locale: {cookie_after_stay}"
+    );
 
     server_handle.abort();
 }

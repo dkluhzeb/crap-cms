@@ -136,6 +136,7 @@ fn py_ty(ty: &FieldTy) -> String {
     match ty {
         FieldTy::Str => "str".to_string(),
         FieldTy::Num => "float".to_string(),
+        FieldTy::Int => "int".to_string(),
         FieldTy::Bool => "bool".to_string(),
         FieldTy::Json => "Any".to_string(),
         FieldTy::Map => "dict".to_string(),

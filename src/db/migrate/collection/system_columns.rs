@@ -13,6 +13,11 @@ pub(super) const DRAFT_STATUS_COLUMN: &str = "_status TEXT NOT NULL DEFAULT 'pub
 /// The incoming-reference counter present on every collection.
 pub(super) const REF_COUNT_COLUMN: &str = "_ref_count INTEGER NOT NULL DEFAULT 0";
 
+/// The optimistic-locking revision counter present on every collection and
+/// global table. Every write that changes the document bumps it; an existing
+/// row gains it at `0` through the column default.
+pub(in crate::db::migrate) const REVISION_COLUMN: &str = "_revision INTEGER NOT NULL DEFAULT 0";
+
 /// Core auth columns present on every auth collection.
 pub(super) const AUTH_COLUMNS: &[&str] = &[
     "_password_hash TEXT",

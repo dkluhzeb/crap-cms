@@ -3,6 +3,8 @@
 //! of a join field reads its children this way, so one query serves a whole
 //! page of parents while no parent lists more than the join's limit.
 
+use std::ops::Range;
+
 use anyhow::{Context as _, Result};
 
 use super::runner::{apply_soft_delete, build_select_named, map_rows};
@@ -15,16 +17,25 @@ use crate::db::{DbConnection, DbValue, FindQuery, LocaleContext};
 /// The row-number column the window adds; `_`-prefixed, so no field can own it.
 const ROW_NUMBER: &str = "_group_row";
 
-/// Which column documents are grouped by, and how many each group keeps.
+/// Which column documents are grouped by, and which of each group's rows are
+/// kept: the 0-based positions `rows` in the group's sort order.
 pub struct GroupLimit<'a> {
     pub column: &'a str,
-    pub per_group: i64,
+    pub rows: Range<i64>,
 }
 
 impl<'a> GroupLimit<'a> {
+    /// The first `per_group` rows of each group.
     #[must_use]
     pub fn new(column: &'a str, per_group: i64) -> Self {
-        Self { column, per_group }
+        Self::window(column, 0..per_group)
+    }
+
+    /// The rows at positions `rows` of each group — a later window lets a
+    /// caller read on where a group's first rows did not give it enough.
+    #[must_use]
+    pub fn window(column: &'a str, rows: Range<i64>) -> Self {
+        Self { column, rows }
     }
 }
 
@@ -42,9 +53,9 @@ pub struct GroupedFind<'a> {
     pub locale_ctx: Option<&'a LocaleContext>,
 }
 
-/// Find the documents matching the query's filters, keeping at most
-/// `group.per_group` for each distinct value of `group.column` — the first ones
-/// in the query's sort order (the collection default when it names none).
+/// Find the documents matching the query's filters, keeping for each distinct
+/// value of `group.column` the rows at positions `group.rows` in the query's
+/// sort order (the collection default when it names none).
 /// Within a group the result keeps that order; groups come back interleaved.
 ///
 /// The query's filters, sort, `select` and `include_deleted` apply as in
@@ -62,12 +73,18 @@ pub fn find_grouped(conn: &dyn DbConnection, find: &GroupedFind<'_>) -> Result<V
     let mut params: Vec<DbValue> = Vec::new();
     let (inner, names) = grouped_select(conn, find, &mut params)?;
 
-    let limit = conn.placeholder(params.len() + 1);
-    params.push(DbValue::Integer(find.group.per_group.max(0)));
+    // ROW_NUMBER is 1-based: positions `start..end` are row numbers
+    // `start + 1 ..= end`.
+    let rows = &find.group.rows;
+    let after = conn.placeholder(params.len() + 1);
+    params.push(DbValue::Integer(rows.start.max(0)));
+    let through = conn.placeholder(params.len() + 1);
+    params.push(DbValue::Integer(rows.end.max(0)));
 
     let columns: Vec<String> = names.iter().map(|n| quote_ident(n)).collect();
     let sql = format!(
-        "SELECT {} FROM ({inner}) AS \"_grouped\" WHERE {ROW_NUMBER} <= {limit} ORDER BY {ROW_NUMBER}",
+        "SELECT {} FROM ({inner}) AS \"_grouped\" \
+         WHERE {ROW_NUMBER} > {after} AND {ROW_NUMBER} <= {through} ORDER BY {ROW_NUMBER}",
         columns.join(", ")
     );
 
@@ -165,6 +182,26 @@ mod tests {
             docs.iter().all(|d| d.fields.get(ROW_NUMBER).is_none()),
             "the row number is not a document field"
         );
+    }
+
+    /// A later window reads on where the first rows of each group stopped,
+    /// in the same order, and comes back short for a group it exhausts.
+    #[test]
+    fn a_window_keeps_the_rows_at_its_positions_of_each_group() {
+        let (_tmp, pool) = seeded();
+        let conn = pool.get().unwrap();
+        let def = test_def();
+
+        let query = FindQuery::builder()
+            .order_by(Some("title".to_string()))
+            .build();
+
+        let find =
+            GroupedFind::builder("posts", &def, &query, GroupLimit::window("status", 1..3)).build();
+        let docs = find_grouped(&conn, &find).unwrap();
+
+        assert_eq!(titles(&docs, "a"), vec!["b", "c"]);
+        assert_eq!(titles(&docs, "b"), vec!["z"], "group b has only two rows");
     }
 
     #[test]

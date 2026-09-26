@@ -25,6 +25,7 @@ pub(super) mod test_helpers {
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 created_at TEXT,
                 updated_at TEXT

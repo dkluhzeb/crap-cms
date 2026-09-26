@@ -182,7 +182,17 @@ fn check_view(
     ctx: &ReadAccessCtx<'_>,
     access: Option<&HookRef>,
 ) -> Result<AccessResult, ServiceError> {
-    let result = hooks.check_access(
+    check_view_by(&|input| hooks.check_access(input), ctx, access)
+}
+
+/// [`check_view`] through any access-check call — a read's hooks, or a
+/// write's when it judges whether its caller may see the document it wrote.
+pub(crate) fn check_view_by(
+    check: &dyn Fn(&AccessCheckInput<'_>) -> anyhow::Result<AccessResult>,
+    ctx: &ReadAccessCtx<'_>,
+    access: Option<&HookRef>,
+) -> Result<AccessResult, ServiceError> {
+    let result = check(
         &AccessCheckInput::builder(ctx.operation, ctx.slug)
             .access(access)
             .user(ctx.user)

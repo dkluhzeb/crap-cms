@@ -557,7 +557,7 @@ async fn upload_api_delete_does_not_reveal_existence_under_a_filter_rule() {
     media.access.delete = Some("hooks.access.no_match".into());
     let app = setup_app(vec![make_users_def(), media], vec![]);
     write_access_hooks(
-        app._tmp.path(),
+        app.tmp.path(),
         "function M.no_match(ctx)\n    return { filename = \"never-matches\" }\nend",
     );
     let user_id = create_test_user(&app, "uploader@test.com", "secret123");
@@ -726,7 +726,7 @@ async fn upload_update_fails_before_storing_when_old_doc_read_errors() {
     conn.execute("DROP TABLE media_gallery", &[]).unwrap();
     drop(conn);
 
-    let uploads_dir = app._tmp.path().join("uploads");
+    let uploads_dir = app.tmp.path().join("uploads");
     let before = count_files(&uploads_dir);
 
     let (content_type, body) =

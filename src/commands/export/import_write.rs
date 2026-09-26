@@ -179,10 +179,20 @@ fn write_document(
             .with_context(|| format!("Document {id} in '{slug}' holds a NUL character"));
     }
 
-    let row = collect_import_columns(&doc, target, id)?;
+    let existing = query::read_revision(tx, slug, id)?;
+
+    let mut row = collect_import_columns(&doc, target, id)?;
+    if existing.is_none() {
+        row.carry_revision(doc_obj);
+    }
 
     upsert_row(tx, slug, id, &row)?;
     write_join_rows(tx, target, id, &row)?;
+
+    // An imported document changed under any form already open on it.
+    if existing.is_some() {
+        query::advance_revision(tx, slug, id, None)?;
+    }
 
     if tx.supports_fts() {
         let index = FtsIndex::builder(slug, def, target.locale)
@@ -354,6 +364,37 @@ mod tests {
             query::ref_count::get_ref_count(&conn2, "media", "m1").unwrap(),
             Some(0)
         );
+    }
+
+    /// Regression: an import advanced every document's revision, so a document
+    /// the import created came back one revision past its export and an
+    /// export → import → export round trip changed it. A created document
+    /// takes the revision it was exported at; an overwritten one moves one
+    /// forward from its own, so a form open on it is refused.
+    #[test]
+    fn a_created_document_keeps_its_revision_and_an_overwritten_one_advances() {
+        let (_tmp, db_pool, posts_def) = setup_media_posts();
+        let mut conn = db_pool.get().unwrap();
+
+        let tx = conn.transaction().unwrap();
+        import_doc(
+            &tx,
+            "posts",
+            &posts_def,
+            &json!({ "id": "p1", "_revision": 7 }),
+        );
+        tx.commit().unwrap();
+        assert_eq!(query::read_revision(&conn, "posts", "p1").unwrap(), Some(7));
+
+        let tx = conn.transaction().unwrap();
+        import_doc(
+            &tx,
+            "posts",
+            &posts_def,
+            &json!({ "id": "p1", "_revision": 0 }),
+        );
+        tx.commit().unwrap();
+        assert_eq!(query::read_revision(&conn, "posts", "p1").unwrap(), Some(8));
     }
 
     /// Regression: reference counts were applied per document, so a document

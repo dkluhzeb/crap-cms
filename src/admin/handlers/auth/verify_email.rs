@@ -7,7 +7,6 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Redirect},
 };
-use tokio::task;
 use tracing::error;
 
 use crate::core::collection::Auth;
@@ -19,10 +18,10 @@ use crate::{
             shared::paths,
         },
     },
-    core::rate_limit::IP_VERIFY_EMAIL_KEYSPACE,
+    core::{rate_limit::IP_VERIFY_EMAIL_KEYSPACE, spawn_request_blocking},
     service::{
-        AppInfra, ServiceContext,
-        auth::consume_verification_token as service_consume_verification_token,
+        AppInfra, ServiceContext, ServiceError,
+        auth::consume_verification_token as service_consume_verification_token, commit_admitted,
     },
 };
 
@@ -53,7 +52,8 @@ fn consume_verification_token(infra: &AppInfra, token: &str) -> Result<bool, Err
             .build();
 
         if service_consume_verification_token(&ctx, token)? {
-            tx.commit()?;
+            commit_admitted(tx).map_err(ServiceError::into_anyhow)?;
+
             return Ok(true);
         }
     }
@@ -90,7 +90,7 @@ pub async fn verify_email(
     let infra = Arc::clone(&state.infra);
     let token = query.token;
 
-    let result = task::spawn_blocking(move || consume_verification_token(&infra, &token)).await;
+    let result = spawn_request_blocking(move || consume_verification_token(&infra, &token)).await;
 
     match result {
         Ok(Ok(true)) => Redirect::to(&paths::login_with_success("success_email_verified")),

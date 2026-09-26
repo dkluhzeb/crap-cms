@@ -9,7 +9,7 @@ use crate::{
     config::LocaleConfig,
     core::{
         Document, DocumentFields, EventViewPlacement, FieldChildren, FieldDefinition,
-        canonicalize_text_values, event::EventOperation, field_children,
+        canonicalize_text_values, document::VersionSnapshot, event::EventOperation, field_children,
     },
     db::{
         AccessResult, DbConnection, LocaleContext, query,
@@ -17,15 +17,16 @@ use crate::{
     },
     hooks::{AccessCheckInput, ValidationCtx},
     service::{
-        Gated, ServiceContext, ServiceError, global_access_allowed, helpers,
+        Gated, ServiceContext, ServiceError, SnapshotReadKeep, StoredByLocale,
+        global_access_allowed, helpers,
         hooks::{SnapshotLocales, WriteHooks},
         invalidate_user_streams_if_auth,
         persist::sync_search_index,
         run_pool_write, stored_fields_for_update_rules, stored_global_fields_for_update_rules,
         versions::gate::versions_gate_decision,
         write::{
-            UploadSettle, adopt_held_variants, document_file_keys, restored_file_conversions,
-            settle_upload_write,
+            StoredLoader, UploadSettle, adopt_held_variants, claim_revision, document_file_keys,
+            restored_file_conversions, settle_upload_write,
         },
     },
 };
@@ -56,6 +57,10 @@ fn restore_status(has_drafts: bool, version_status: &str) -> String {
 /// a concurrent write cannot change the row in between (Postgres; a no-op on
 /// `SQLite`, whose transaction already serializes writers). A restore targets a
 /// live row, and without drafts there is no status view to read.
+///
+/// A restore rewrites the document, so it also moves the row's revision
+/// forward: an editor who loaded the document before the restore is refused
+/// when they save over it.
 fn lock_and_read_placement(
     conn: &dyn DbConnection,
     table: &str,
@@ -63,6 +68,7 @@ fn lock_and_read_placement(
     has_drafts: bool,
 ) -> Result<EventViewPlacement> {
     conn.lock_row(table, id)?;
+    claim_revision(conn, table, id, None)?;
 
     let status = if has_drafts {
         query::get_document_status(conn, table, id)?
@@ -84,6 +90,45 @@ fn canonicalize_snapshot(snapshot: &mut Value, fields: &[FieldDefinition]) {
     if let Some(obj) = snapshot.as_object_mut() {
         canonicalize_text_values(obj, fields);
     }
+}
+
+/// Take every value the restorer cannot read out of the snapshot, so the
+/// restore leaves it at its current value: a write never changes a value its
+/// writer cannot read, and a restore is a write. The restore is partial for
+/// such a writer, exactly as it is for a field they may not write. Each locale
+/// the restore writes is judged against the document as that locale stores it
+/// (`load`), a shared value at the restore's own locale.
+///
+/// # Errors
+///
+/// Returns the error a stored-document read returns, or an error if a
+/// configured locale code has no column form.
+fn keep_unreadable_current(
+    ctx: &ServiceContext,
+    snapshot: &mut Value,
+    locale_ctx: Option<&LocaleContext>,
+    load: &StoredLoader<'_>,
+) -> Result<()> {
+    let fields = ctx.fields()?;
+    let write_hooks = ctx.write_hooks()?;
+
+    // A system write reads everything, so it keeps nothing.
+    if write_hooks.overrides_access() {
+        return Ok(());
+    }
+
+    let by_locale = StoredByLocale::load(fields, locale_ctx, load)?;
+
+    write_hooks.keep_unreadable_value(
+        fields,
+        snapshot,
+        &SnapshotReadKeep::builder(&by_locale, ctx.slug)
+            .user(ctx.user)
+            .locale_ctx(locale_ctx)
+            .build(),
+    )?;
+
+    Ok(())
 }
 
 /// Convert a snapshot JSON object into a `DocumentFields` suitable
@@ -286,18 +331,16 @@ fn check_restore_versions_gate(
     versions_gate_decision(&access, ctx.slug)
 }
 
-/// Core logic for collection version restore on an existing connection/transaction.
-/// Returns the stored row the restore event is built from alongside the
-/// document.
-pub(crate) fn restore_collection_version_core(
+/// Admit a restore of `version_id` onto `document_id`: the caller may update
+/// the document (row constraints included) and read its version history, and
+/// the version belongs to that document. Returns the version.
+fn authorize_restore(
     ctx: &ServiceContext,
+    conn: &dyn DbConnection,
+    write_hooks: &dyn WriteHooks,
     document_id: &str,
     version_id: &str,
-    locale_config: &LocaleConfig,
-) -> Result<Gated<Document>> {
-    let conn = ctx.resolve_conn()?;
-    let conn = conn.as_ref();
-    let write_hooks = ctx.write_hooks()?;
+) -> Result<VersionSnapshot> {
     let def = ctx.collection_def()?;
 
     let access = write_hooks.check_access(
@@ -333,30 +376,56 @@ pub(crate) fn restore_collection_version_core(
         )));
     }
 
-    // The default-locale context, reused below for the trashed-target guard and
-    // the completeness-aware validation.
-    let restore_locale_ctx = LocaleContext::default_for(locale_config);
+    Ok(version)
+}
+
+/// Refuse a restore onto a trashed or missing document.
+fn ensure_live_target(
+    ctx: &ServiceContext,
+    conn: &dyn DbConnection,
+    document_id: &str,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<()> {
+    let def = ctx.collection_def()?;
 
     // A restore must target a LIVE document. Restoring onto a soft-deleted
     // (trashed) row would silently rewrite its fields and record new version
     // history while the row stays invisible in the trash view — an update op
     // must not apply to a trashed target. `find_by_id` excludes trashed rows,
     // so a missing row here means the target is trashed or gone → NotFound
-    // (the same fail-closed shape as the cross-document guard above).
-    if def.soft_delete
-        && query::find_by_id(
-            conn,
-            ctx.slug,
-            def,
-            document_id,
-            restore_locale_ctx.as_ref(),
-        )?
-        .is_none()
+    // (the same fail-closed shape as the cross-document guard in
+    // `authorize_restore`).
+    if def.soft_delete && query::find_by_id(conn, ctx.slug, def, document_id, locale_ctx)?.is_none()
     {
         return Err(ServiceError::NotFound(format!(
             "Document '{document_id}' not found"
         )));
     }
+
+    Ok(())
+}
+
+/// Core logic for collection version restore on an existing connection/transaction.
+/// Returns the stored row the restore event is built from alongside the
+/// document.
+pub(crate) fn restore_collection_version_core(
+    ctx: &ServiceContext,
+    document_id: &str,
+    version_id: &str,
+    locale_config: &LocaleConfig,
+) -> Result<Gated<Document>> {
+    let conn = ctx.resolve_conn()?;
+    let conn = conn.as_ref();
+    let write_hooks = ctx.write_hooks()?;
+    let def = ctx.collection_def()?;
+
+    let version = authorize_restore(ctx, conn, write_hooks, document_id, version_id)?;
+
+    // The default-locale context, reused below for the trashed-target guard and
+    // the completeness-aware validation.
+    let restore_locale_ctx = LocaleContext::default_for(locale_config);
+
+    ensure_live_target(ctx, conn, document_id, restore_locale_ctx.as_ref())?;
 
     // Restore returns the document to its exact state at that point in time —
     // including its publication status (see `restore_status`).
@@ -393,6 +462,11 @@ pub(crate) fn restore_collection_version_core(
         ctx.user,
         SnapshotLocales::for_write(restore_locale_ctx.as_ref()),
     );
+
+    let load = |locale_ctx: Option<&LocaleContext>| {
+        stored_fields_for_update_rules(conn, ctx.slug, def, document_id, locale_ctx)
+    };
+    keep_unreadable_current(ctx, &mut snapshot, restore_locale_ctx.as_ref(), &load)?;
 
     canonicalize_snapshot(&mut snapshot, &def.fields);
 
@@ -578,6 +652,11 @@ pub(crate) fn restore_global_version_core(
         ctx.user,
         SnapshotLocales::for_write(restore_locale_ctx.as_ref()),
     );
+
+    let load = |locale_ctx: Option<&LocaleContext>| {
+        stored_global_fields_for_update_rules(conn, ctx.slug, def, locale_ctx)
+    };
+    keep_unreadable_current(ctx, &mut snapshot, restore_locale_ctx.as_ref(), &load)?;
 
     canonicalize_snapshot(&mut snapshot, &def.fields);
 

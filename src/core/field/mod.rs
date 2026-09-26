@@ -23,7 +23,7 @@ pub use definition::{
 pub use field_type::FieldType;
 pub use localized_string::{
     LocalizedString, current_label_locale, default_label_locale, in_label_locale,
-    set_default_label_locale, spawn_blocking_in_label_locale, with_label_locale,
+    set_default_label_locale, with_label_locale,
 };
 pub use references::reference_items;
 pub use relationship::{DEFAULT_JOIN_LIMIT, JoinConfig, RelationshipConfig};

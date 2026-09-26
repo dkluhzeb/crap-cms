@@ -1,5 +1,7 @@
 //! Field-type catalogues used by the parser, writer, and wizard.
 
+use crate::core::FieldType;
+
 /// Valid field types for collection definitions.
 pub const VALID_FIELD_TYPES: &[&str] = &[
     "text",
@@ -27,10 +29,19 @@ pub const VALID_FIELD_TYPES: &[&str] = &[
 /// Container field types that support nested subfields.
 pub const CONTAINER_TYPES: &[&str] = &["group", "array", "row", "collapsible"];
 
+/// Whether a field of `field_type` holds a value of its own, so `required`
+/// and `localized` can apply to it. A layout wrapper (its children sit at its
+/// level) and a join (a virtual list) hold none, and the schema loader refuses
+/// both flags on them.
+pub fn holds_value(field_type: &str) -> bool {
+    let ft = FieldType::parse_lossy(field_type);
+
+    !ft.is_layout_wrapper() && ft != FieldType::Join
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::FieldType;
 
     #[test]
     fn container_types_are_a_subset_of_valid_types() {
@@ -40,6 +51,18 @@ mod tests {
                 "container '{c}' missing from VALID_FIELD_TYPES"
             );
         }
+    }
+
+    /// The wrappers and the join hold no value; every other type does.
+    #[test]
+    fn only_wrappers_and_joins_hold_no_value() {
+        let valueless: Vec<&str> = VALID_FIELD_TYPES
+            .iter()
+            .copied()
+            .filter(|t| !holds_value(t))
+            .collect();
+
+        assert_eq!(valueless, ["row", "collapsible", "tabs", "join"]);
     }
 
     #[test]

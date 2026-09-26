@@ -6,9 +6,9 @@
 //!
 //! Two flavours of submodule:
 //!
-//! - **Leaf modules** (`accept`, `auth`, `client_ip`, `collection`, `condition`, `document`,
-//!   `document_fields`, `document_id`, `field`, `job`, `live_slots`, `registry`,
-//!   `req_context`, `slug`, `text`, `timezone`, `tls`, `validate`) -- one or two
+//! - **Leaf modules** (`accept`, `auth`, `client_ip`, `collection`, `commit_gate`, `condition`,
+//!   `document`, `document_fields`, `document_id`, `field`, `job`, `live_slots`, `registry`,
+//!   `req_context`, `request_scope`, `slug`, `text`, `timezone`, `tls`, `validate`) -- one or two
 //!   tightly-coupled types each. Their public types are re-exported
 //!   flat at `crate::core::*`; external callers use the short path.
 //!   Builders stay one level deeper, accessed via `Type::builder()`.
@@ -44,6 +44,7 @@ pub mod cache;
 pub mod client_ip;
 pub mod collection;
 pub mod column;
+pub mod commit_gate;
 pub mod condition;
 pub mod document;
 pub mod document_fields;
@@ -69,6 +70,7 @@ pub mod rate_limit;
 pub mod redis_client;
 pub mod registry;
 pub mod req_context;
+pub mod request_scope;
 pub mod richtext;
 pub mod slug;
 pub mod text;
@@ -95,7 +97,13 @@ pub use collection::{
     Access, CollectionDefinition, GlobalDefinition, Hooks, IndexDefinition, Labels, LiveMode,
     LiveSetting, VersionsConfig,
 };
-pub use column::{AUTO_COLUMNS, RESERVED_FIELD_NAMES, is_reserved_field_name, is_system_column};
+pub use column::{
+    AUTO_COLUMNS, RESERVED_FIELD_NAMES, REVISION_COLUMN, is_reserved_field_name, is_system_column,
+};
+pub use commit_gate::{
+    CommitGate, RequestDeadlinePassed, admit_request_commit, current_commit_gate, in_commit_gate,
+    outside_commit_gate, request_deadline, with_commit_gate,
+};
 pub use condition::{ConditionExpr, ConditionOp, ConditionRow};
 pub use document::Document;
 pub use document_fields::DocumentFields;
@@ -106,8 +114,7 @@ pub use field::{
     FieldHooks, FieldTab, FieldType, FieldWidth, JoinConfig, LocalizedString, McpFieldConfig,
     PickerAppearance, RelationshipConfig, RequiredLocales, SelectOption, ValidateFunction,
     current_label_locale, default_label_locale, in_label_locale, reference_items,
-    set_default_label_locale, spawn_blocking_in_label_locale, to_title_case,
-    validate_template_name, with_label_locale,
+    set_default_label_locale, to_title_case, validate_template_name, with_label_locale,
 };
 pub(crate) use field::{Companion, LANG_SUFFIX, TZ_SUFFIX};
 pub use field_denial::{DenialSeg, FieldDenial, JsonRoot};
@@ -127,6 +134,7 @@ pub use parse::{
 pub(crate) use registry::RegistryRead;
 pub use registry::{Registry, SharedRegistry, StrategyEntry};
 pub use req_context::ReqContext;
+pub use request_scope::spawn_request_blocking;
 pub use richtext::RichtextNodeDef;
 pub use slug::Slug;
 pub use text::{

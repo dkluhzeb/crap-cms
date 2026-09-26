@@ -176,9 +176,11 @@ impl HookRunner {
     ///
     /// Its reads run on `conn` — the login's connection, or the request's own
     /// read connection for a per-request strategy — until it writes: its
-    /// first write opens a transaction on a write-pool connection (so a
-    /// strategy that only looks its user up never takes one, and none is held
-    /// across its network I/O before it writes), which every later call
+    /// first write opens a transaction on a write-pool connection — or, on a
+    /// pool that serves reads and writes from one set of connections
+    /// (Postgres), on `conn` itself, so the request never holds two — (a
+    /// strategy that only looks its user up never takes a write connection,
+    /// and none is held across its network I/O before it writes), which every later call
     /// shares and which COMMITS only when it authenticates someone. A
     /// failed or erroring attempt rolls back — strategy attempts are
     /// attacker-controlled (unauthenticated input), so persistent writes

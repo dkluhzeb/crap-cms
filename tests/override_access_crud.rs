@@ -399,7 +399,7 @@ fn create_override_access_false_editor_allowed() {
     let conn = pool.get().unwrap();
     let result = runner.eval_lua_with_conn(
         r#"
-        local doc = crap.collections.create("items", { title = "Editor Post" }, { override_access = false })
+        local doc = crap.collections.create("items", { title = "Editor Post", owner = "editor-1" }, { override_access = false })
         return doc.title
         "#,
         &conn,
@@ -407,6 +407,28 @@ fn create_override_access_false_editor_allowed() {
     ).unwrap();
 
     assert_eq!(result, "Editor Post");
+}
+
+/// A create the writer may make but whose result their read rule hides (the
+/// item has no owner, and editors read only their own) answers with the id
+/// alone: the write goes through, the response shows nothing the writer
+/// could not read.
+#[test]
+fn create_override_access_false_unreadable_result_returns_the_id_only() {
+    let (_tmp, pool, _registry, runner) = setup();
+    let editor = make_user("editor-1", "editor");
+
+    let conn = pool.get().unwrap();
+    let result = runner.eval_lua_with_conn(
+        r#"
+        local doc = crap.collections.create("items", { title = "Unowned" }, { override_access = false })
+        return tostring(doc.id ~= nil) .. "|" .. tostring(doc.title)
+        "#,
+        &conn,
+        Some(&editor),
+    ).unwrap();
+
+    assert_eq!(result, "true|nil");
 }
 
 #[test]

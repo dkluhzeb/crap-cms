@@ -12,7 +12,7 @@ use crate::{
         AdminState,
         handlers::shared::{
             EvaluateConditionsRequest, check_access_or_forbid, evaluate_condition_results,
-            get_user_doc,
+            get_user_doc, global_form_fields,
         },
     },
     core::{GlobalDefinition, auth::AuthUser},
@@ -55,13 +55,18 @@ pub(crate) async fn evaluate_conditions(
     auth_user: Option<Extension<AuthUser>>,
     Json(req): Json<EvaluateConditionsRequest>,
 ) -> impl IntoResponse {
-    let Some(def) = state.infra.registry.get_global(&slug) else {
+    let Some(def) = state.infra.registry.get_global(&slug).cloned() else {
         return (StatusCode::NOT_FOUND, Json(json!({}))).into_response();
     };
 
-    if !read_allowed(&state, def, auth_user.as_ref(), &slug) {
+    if !read_allowed(&state, &def, auth_user.as_ref(), &slug) {
         return (StatusCode::FORBIDDEN, Json(json!({}))).into_response();
     }
+
+    // The fields the form rendered for its viewer, judged like its submission
+    // is: a field the viewer may not read reads as absent, not unchecked.
+    let form_fields =
+        global_form_fields(&state, &def, auth_user.as_ref(), req.locale.as_deref()).await;
 
     let cond_ctx = ConditionContext {
         collection: &slug,
@@ -70,12 +75,12 @@ pub(crate) async fn evaluate_conditions(
         ui_locale: auth_user
             .as_ref()
             .map(|Extension(au)| au.ui_locale.as_str()),
-        locale: None,
+        locale: req.locale.as_deref(),
         options: None,
     };
 
     let results =
-        evaluate_condition_results(&state.infra.hook_runner, &def.fields, &req, &cond_ctx);
+        evaluate_condition_results(&state.infra.hook_runner, &form_fields, &req, &cond_ctx);
 
     Json(Value::Object(results)).into_response()
 }

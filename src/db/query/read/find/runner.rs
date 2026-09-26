@@ -10,12 +10,14 @@ use super::sort::{apply_order_by, resolve_sort};
 use crate::core::CollectionDefinition;
 use crate::core::Document;
 use crate::db::query::filter::{build_where_clause, lookup_column_field_type};
-use crate::db::query::read::{decode_row, select::apply_select_filter};
+use crate::db::query::read::{
+    decode_row,
+    select::{apply_select_filter, document_select_named},
+};
 use crate::db::query::{
     column_read_expr,
     fts::{self, FtsSearch},
-    get_column_names, get_locale_select_columns_full,
-    helpers::{append_soft_delete_filter, append_sql_condition, quote_ident},
+    helpers::{append_soft_delete_filter, append_sql_condition},
     validate_query_fields,
 };
 use crate::db::{DbConnection, DbRow, DbValue, FindQuery, LocaleContext};
@@ -98,15 +100,15 @@ pub fn find(
     map_rows(conn, &rows, locale_ctx, def, using_before)
 }
 
-/// Find only the **IDs** of documents matching `query`'s filters — no sort,
-/// cursor, limit, or nested hydration.
+/// Find only the **IDs** of documents matching `query`'s filters, in id
+/// order — no caller sort, cursor, limit, or nested hydration.
 ///
 /// Reuses the exact same filter/FTS/soft-delete logic as [`find`] (so deep
 /// filters on array/block/relationship sub-fields still match via their
 /// EXISTS subqueries), but selects a single `id` column and skips the
 /// per-document join-table hydration that [`find`] performs. Used by bulk
-/// update to collect the match-set upfront without materializing every
-/// matching document in memory.
+/// update and delete to collect the match-set upfront without materializing
+/// every matching document in memory.
 ///
 /// # Errors
 ///
@@ -146,6 +148,11 @@ pub fn find_ids(
 
     apply_soft_delete(def, query, &mut sql, &mut has_where);
 
+    // One order for every caller: the bulk ops lock each document in this
+    // order, so two of them over overlapping sets never lock the same rows
+    // in opposite orders (a Postgres deadlock).
+    sql.push_str(" ORDER BY id");
+
     let rows = conn
         .query_all(&sql, &params)
         .with_context(|| format!("Failed to execute id query on '{slug}'"))?;
@@ -169,20 +176,7 @@ pub(super) fn build_select_named(
     query: &FindQuery,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<(Vec<String>, Vec<String>)> {
-    let (select_exprs, result_names) = match locale_ctx {
-        Some(ctx) if ctx.config.is_enabled() => get_locale_select_columns_full(
-            &def.fields,
-            def.timestamps,
-            def.soft_delete,
-            def.has_drafts(),
-            ctx,
-        )?,
-        _ => {
-            let names = get_column_names(def);
-            let quoted = names.iter().map(|n| quote_ident(n)).collect();
-            (quoted, names)
-        }
-    };
+    let (select_exprs, result_names) = document_select_named(def, locale_ctx)?;
 
     Ok(apply_select_filter(
         select_exprs,

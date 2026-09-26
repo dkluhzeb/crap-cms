@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::db::query::sanitize_locale;
+use crate::{config::ErrorReport, db::query::sanitize_locale};
 
 /// Internationalization / locale configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
@@ -74,24 +74,39 @@ impl LocaleConfig {
     ///
     /// Returns an error if any locale code contains disallowed characters.
     pub fn validate(&self) -> Result<()> {
-        Self::validate_locale_code(&self.default_locale)?;
+        let mut report = ErrorReport::new();
+        self.collect_problems(&mut report);
 
-        for locale in &self.locales {
-            Self::validate_locale_code(locale)?;
+        report.into_result()
+    }
+
+    /// Record every problem [`validate`](Self::validate) finds: each invalid
+    /// code, then — once every code is valid — colliding locales and a
+    /// default locale missing from the list.
+    pub(crate) fn collect_problems(&self, report: &mut ErrorReport) {
+        // The default locale is usually listed too; each code is judged once.
+        let default_unlisted =
+            (!self.locales.contains(&self.default_locale)).then_some(&self.default_locale);
+        let codes = default_unlisted.into_iter().chain(&self.locales);
+        let mut valid = true;
+
+        for code in codes {
+            valid &= report.check(Self::validate_locale_code(code)).is_some();
         }
 
-        self.reject_colliding_locales()?;
+        if !valid {
+            return;
+        }
+
+        report.check(self.reject_colliding_locales());
 
         // When locales are enabled, the default locale must be in the list
         if !self.locales.is_empty() && !self.locales.contains(&self.default_locale) {
-            bail!(
+            report.push_message(format!(
                 "default_locale '{}' must be included in the locales list {:?}",
-                self.default_locale,
-                self.locales
-            );
+                self.default_locale, self.locales
+            ));
         }
-
-        Ok(())
     }
 
     /// Reject two locales that would share a column.
@@ -374,5 +389,21 @@ mod tests {
             fallback: true,
         };
         assert!(config.validate().is_ok());
+    }
+
+    /// Regression: validation stopped at the first bad locale code. Every
+    /// invalid code is reported.
+    #[test]
+    fn every_invalid_locale_code_is_reported() {
+        let config = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "d e".to_string(), "f;r".to_string()],
+            fallback: true,
+        };
+
+        let err = config.validate().unwrap_err().to_string();
+
+        assert!(err.starts_with("2 problems:"), "{err}");
+        assert!(err.contains("d e") && err.contains("f;r"), "{err}");
     }
 }

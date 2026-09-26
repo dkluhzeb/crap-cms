@@ -151,18 +151,23 @@ fn precheck_write_access(
 ) -> Result<()> {
     let def = ctx.collection_def()?;
 
-    match id {
-        Some(id) => {
-            admit_update_input(ctx, def, id, &mut probe)?;
-        }
-        None => admit_create_input(def, &mut probe)?,
-    }
-
-    let Some(write_hooks) = ctx.write_hooks else {
-        return judge_in_rolled_back_tx(ctx, id, &probe);
+    let admission = match id {
+        Some(id) => admit_update_input(ctx, def, id, &mut probe)?,
+        None => admit_create_input(def, &mut probe),
     };
 
-    judge_write_access(ctx, write_hooks, id, &probe)
+    match ctx.write_hooks {
+        Some(write_hooks) => judge_write_access(ctx, write_hooks, id, &probe)?,
+        None => judge_in_rolled_back_tx(ctx, id, &probe)?,
+    }
+
+    // The input's refusal, raised only past the access gate (see `Admission`).
+    // Its non-object groups are refused by the write itself, past its
+    // field-level write strip — a group the caller may not write is dropped
+    // there, not refused here.
+    admission.admit()?;
+
+    Ok(())
 }
 
 /// The collection's upload config.
@@ -298,6 +303,9 @@ pub struct UpdateUploadInput<'a> {
     /// spelled such a field out deliberately, so the write still rejects it
     /// rather than silently discarding the value.
     pub form_echoes_locked_fields: bool,
+    /// The document revision the caller last read — see
+    /// [`WriteInput::expected_revision`].
+    pub expected_revision: Option<i64>,
 }
 
 /// The builder of an upload write on `data`: the request's locale and draft
@@ -459,7 +467,8 @@ pub fn update_upload(
     );
     let write = upload_write(data, input.locale_ctx, input.draft)
         .password(input.password.as_deref())
-        .upload_conversions(conversions);
+        .upload_conversions(conversions)
+        .expected_revision(input.expected_revision);
     let (doc, req_context) = update_document(ctx, input.id, write.build())?;
 
     if let Some(stored) = stored {

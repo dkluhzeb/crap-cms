@@ -131,15 +131,21 @@ crap.fields.relationship({
 
 ## Referencing a Document
 
-A write may only add a reference to a document that exists and is not in the
-trash; a missing and a trashed target are refused alike, so the answer says
-nothing about a document the writer cannot see. The refusal is a validation
+A write may only add a reference to a document that exists, is not in the
+trash, and that the writer may read — through the target collection's `read`
+view (published documents, with its row constraint) or its `draft` view
+(`access.draft`, else `access.update`, for a draft). A missing, a trashed and
+an unreadable target are refused alike, so the answer says nothing about a
+document the writer cannot see. The refusal is a validation
 error on the field holding the reference (`validation.reference_unavailable`,
 keyed like every field error — `author`, `seo__author`, `items[0][author]`);
 a reference no field of the write carries (a version restore) fails with
 `cannot reference {collection}/{id}: no such document`. A reference a write
 keeps unchanged is not judged again — a document whose target was trashed
-later still saves.
+later, or became unreadable to its writer, still saves. A write that overrides
+access (Lua CRUD with `override_access`) judges no read access, and a version
+restore — which brings back the document's own earlier references — is judged
+only for missing and trashed targets.
 
 ## Changing `has_many`
 

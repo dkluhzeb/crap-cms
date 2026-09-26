@@ -24,7 +24,7 @@ use crate::{
         },
     },
     core::{
-        AuthUser, CollectionDefinition, Document, SharedStorage, spawn_blocking_in_label_locale,
+        AuthUser, CollectionDefinition, Document, SharedStorage, spawn_request_blocking,
         upload::UploadedFile,
     },
     db::LocaleContext,
@@ -149,7 +149,7 @@ async fn spawn_create(
         input,
     };
 
-    spawn_blocking_in_label_locale(move || create_document_blocking(args)).await
+    spawn_request_blocking(move || create_document_blocking(args)).await
 }
 
 /// POST /admin/collections/{slug} — create a new item
@@ -241,7 +241,9 @@ pub async fn create_action(
                 err: e,
                 doc_id: None,
                 auth_user: auth_user.as_ref(),
-                meta: SubmittedMeta::new(submitted_locale.as_deref(), None),
+                meta: SubmittedMeta::builder()
+                    .locale(submitted_locale.as_deref())
+                    .build(),
                 hx,
             })
             .await

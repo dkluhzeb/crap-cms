@@ -13,7 +13,7 @@ use crate::{
             task_join_error_response,
         },
     },
-    core::{AuthUser, CollectionDefinition, Document, spawn_blocking_in_label_locale},
+    core::{AuthUser, CollectionDefinition, Document, spawn_request_blocking},
     db::{
         DbConnection,
         query::{FindQuery, LocaleContext},
@@ -294,7 +294,7 @@ pub(super) async fn fetch_list_items(
         user_sorted: inputs.sort.is_some(),
     };
 
-    match spawn_blocking_in_label_locale(move || fetch_list_documents(args)).await {
+    match spawn_request_blocking(move || fetch_list_documents(args)).await {
         Ok(Ok(fetched)) => Ok(fetched),
         Ok(Err(e)) => Err(list_error_response(state, e, inputs.is_trash)),
         Err(e) => Err(task_join_error_response(state, &e)),

@@ -6,7 +6,7 @@ use chrono::NaiveDate;
 use mlua::{Table, Value};
 
 use crate::{
-    core::{FieldDefinition, FieldDefinitionBuilder, FieldType, PickerAppearance},
+    core::{FieldDefinition, FieldDefinitionBuilder, PickerAppearance},
     hooks::lua_api::parse::{
         fields::constraints::Constraints,
         helpers::{get_bool, get_optional_hook_ref},
@@ -15,43 +15,11 @@ use crate::{
 
 use super::{ParsedFieldParts, configs::parse_required_locales};
 
-/// A `Join` is a virtual, read-only reverse-relationship with no stored value,
-/// so `required` / `localized` / `required_locales` are meaningless on it.
-/// Reject them at load instead of silently ignoring them (the previous
-/// behavior, which also let a `localized + required` Join wedge non-draft writes
-/// — the validation walkers now skip Join as defense-in-depth, but the config is
-/// still nonsensical).
-fn reject_meaningless_join_flags(
-    field_tbl: &Table,
-    field_type: &FieldType,
-    name: &str,
-) -> Result<()> {
-    if *field_type != FieldType::Join {
-        return Ok(());
-    }
-
-    for key in ["required", "localized"] {
-        if get_bool(field_tbl, key, false)? {
-            bail!(
-                "join field '{name}': '{key}' is meaningless — a Join is a virtual, \
-                 read-only reverse-relationship with no stored value"
-            );
-        }
-    }
-    if parse_required_locales(field_tbl)?.is_some() {
-        bail!("join field '{name}': 'required_locales' is meaningless on a virtual Join field");
-    }
-
-    Ok(())
-}
-
 /// Phase 2 — fold parsed parts into a [`FieldDefinition`] via the builder.
 pub(super) fn assemble_field_definition(
     field_tbl: &Table,
     parts: ParsedFieldParts,
 ) -> Result<FieldDefinition> {
-    reject_meaningless_join_flags(field_tbl, &parts.field_type, &parts.name)?;
-
     let mut fd_builder = FieldDefinition::builder(&parts.name, parts.field_type)
         .required(get_bool(field_tbl, "required", false)?)
         .unique(get_bool(field_tbl, "unique", false)?)

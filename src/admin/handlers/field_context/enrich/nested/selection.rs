@@ -279,6 +279,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE media (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 alt TEXT,
                 caption TEXT,
                 filename TEXT,
@@ -341,6 +342,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE media (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 alt TEXT,
                 caption TEXT,
                 filename TEXT,
@@ -399,6 +401,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE users (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 name TEXT,
                 created_at TEXT,
                 updated_at TEXT
@@ -449,6 +452,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE users (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 name TEXT,
                 created_at TEXT,
                 updated_at TEXT
@@ -498,6 +502,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE tags (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 label TEXT,
                 created_at TEXT,
                 updated_at TEXT
@@ -554,6 +559,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE media (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 filename TEXT,
                 mime_type TEXT,
                 url TEXT,
@@ -623,6 +629,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE media (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 filename TEXT,
                 mime_type TEXT,
                 url TEXT,

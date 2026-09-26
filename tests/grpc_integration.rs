@@ -352,6 +352,7 @@ async fn update_document() {
             locale: None,
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap()
@@ -791,6 +792,7 @@ async fn get_global_populates_relationships_to_depth() {
             data: Some(make_struct(&[("featured", &post_id)])),
             locale: None,
             draft: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -839,6 +841,7 @@ async fn update_global_and_read_back() {
             data: Some(make_struct(&[("site_name", "My CMS")])),
             locale: None,
             draft: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();

@@ -19,6 +19,7 @@ use crate::db::query::helpers::{join_table, prefixed_name, walk_leaf_fields};
 
 use super::array::sync_array_table;
 use super::blocks::sync_blocks_table;
+use super::locale_rows::sync_locale_rows;
 use super::relationship::sync_relationship_table;
 
 /// Which per-type sync helper a planned join table dispatches to.
@@ -139,13 +140,17 @@ fn run_join_table_ddl(
 }
 
 /// Sync one planned join table, then report what it holds and the definition
-/// no longer does.
+/// no longer does. Its rows are brought to what the field keeps per locale
+/// first: the DDL may re-key the table by what they are unique under now.
 fn execute_join_table_plan(
     conn: &dyn DbConnection,
     collection_slug: &str,
     plan: &JoinTablePlan<'_>,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
+    let table = join_table(collection_slug, &plan.full_name);
+    sync_locale_rows(conn, &table, plan.has_locale_col, locale_config)?;
+
     run_join_table_ddl(conn, collection_slug, plan, locale_config)?;
 
     warn_orphan_join_columns(conn, collection_slug, plan)

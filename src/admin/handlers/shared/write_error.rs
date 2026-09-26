@@ -19,6 +19,13 @@ const BUSY_KEY: &str = "error_busy";
 /// image-processing slot was taken.
 const IMAGES_BUSY_KEY: &str = "error_busy_images";
 
+/// Translation key of the toast for an unpublish refused by a revision
+/// conflict.
+const UNPUBLISH_CONFLICT_KEY: &str = "revision_conflict_unpublish";
+
+/// The form action that unpublishes instead of saving.
+const UNPUBLISH_ACTION: &str = "unpublish";
+
 /// What the toast of a failed write says.
 #[derive(Debug, PartialEq, Eq)]
 enum WriteFailure {
@@ -88,6 +95,30 @@ pub(in crate::admin::handlers) fn write_error_response(
     }
 
     error_toast(status, state.translations.get(ui_locale, key))
+}
+
+/// Whether a save refused by a revision conflict re-renders its form with the
+/// conflict notice, keeping the submitted values for a reload or an overwrite.
+///
+/// Not for an unpublish: it posts only the form's meta inputs, never its field
+/// values (the editor already chose to discard them), so a re-render from what
+/// it posted would show every field blank — and saving that form would blank
+/// the document. It gets [`unpublish_conflict_response`] instead.
+pub(in crate::admin::handlers) fn conflict_keeps_form(action: &str) -> bool {
+    action != UNPUBLISH_ACTION
+}
+
+/// The response to an unpublish refused by a revision conflict: a `409` toast
+/// asking the editor to reload and unpublish again. An error status is never
+/// swapped by htmx, so the page stays as it was.
+pub(in crate::admin::handlers) fn unpublish_conflict_response(
+    state: &AdminState,
+    ui_locale: &str,
+) -> Response {
+    error_toast(
+        StatusCode::CONFLICT,
+        state.translations.get(ui_locale, UNPUBLISH_CONFLICT_KEY),
+    )
 }
 
 #[cfg(test)]
@@ -169,6 +200,26 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert!(toast.contains("busy"), "got: {toast}");
         assert!(!toast.contains("images"), "got: {toast}");
+    }
+
+    /// Regression: an unpublish posts no field values, so re-rendering its
+    /// form after a revision conflict showed every field blank — and a save
+    /// from that page blanked the document. Only a save keeps its form.
+    #[test]
+    fn only_a_save_keeps_its_form_on_a_revision_conflict() {
+        assert!(conflict_keeps_form(""));
+        assert!(conflict_keeps_form("save_draft"));
+        assert!(!conflict_keeps_form("unpublish"));
+    }
+
+    /// A refused unpublish is a translated `409` toast, never swapped in.
+    #[test]
+    fn a_refused_unpublish_is_a_conflict_toast() {
+        let resp = unpublish_conflict_response(&test_admin_state(), "en");
+
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let toast = toast_of(&resp);
+        assert!(toast.contains("unpublish again"), "{toast}");
     }
 
     /// The toasts are translated into the user's UI locale.

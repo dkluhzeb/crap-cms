@@ -14,7 +14,8 @@ use crate::db::query::helpers::quote_ident;
 /// string into a numeric column errors, so an un-reconciled upgrade leaves the
 /// row unsavable. `SQLite` needs no reconcile (its REAL affinity reads the JSON
 /// text back fine) and a column already TEXT is a no-op. Shared by the
-/// collection and global alter paths so both drift the same way.
+/// collection, global and array join-table alter paths so all three drift the
+/// same way.
 pub(in crate::db::migrate) fn reconcile_scalar_list_column(
     conn: &dyn DbConnection,
     table: &str,
@@ -148,6 +149,7 @@ mod tests {
             "_locale",
             "_block_type",
             "_ref_count",
+            "_revision",
             "_deleted_at",
         ] {
             assert!(is_system_column(col), "{col} must count as a system column");

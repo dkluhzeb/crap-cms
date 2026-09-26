@@ -3,9 +3,31 @@
 use serde_json::{Map, Value};
 
 use crate::{
-    core::{Document, RequiredLocales, registry::Registry},
+    core::{Document, DocumentFields, RequiredLocales, registry::Registry},
     db::{DbConnection, LocaleContext},
 };
+
+/// A source of the edited document's stored values a write may resubmit
+/// unchanged (see [`HeldValueGate`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeldSource {
+    /// The stored row.
+    StoredRow,
+    /// The pending draft kept as a version snapshot.
+    PendingDraft,
+}
+
+/// Decides what of the edited document's stored values the writer may lean
+/// on. A value a check would now refuse (a retired option, a rich text node
+/// the field no longer enables) is accepted when the document already holds
+/// it — but that acceptance says the document holds it, so it may count only
+/// where the writer could read it: the source's content view, and each field's
+/// read access. Implemented by the service layer, which knows the writer.
+pub trait HeldValueGate {
+    /// Whether the writer may see `source` at all; when it may, `fields` (that
+    /// source's values) are stripped of what the writer may not read.
+    fn admit(&self, source: HeldSource, fields: &mut DocumentFields) -> bool;
+}
 
 /// Context for field validation, bundling database and request parameters.
 pub struct ValidationCtx<'a> {
@@ -44,6 +66,9 @@ pub struct ValidationCtx<'a> {
     /// holds then counts as held, like one the stored row holds — the edit
     /// form shows the draft. `false` reads the stored row alone.
     pub versioned_drafts: bool,
+    /// What of the stored sources the writer may lean on; `None` leans on
+    /// every source unfiltered (a caller judging no writer).
+    pub held_gate: Option<&'a dyn HeldValueGate>,
 }
 
 impl<'a> ValidationCtx<'a> {
@@ -67,6 +92,7 @@ pub struct ValidationCtxBuilder<'a> {
     ui_locale: Option<&'a str>,
     locale_overlay: Option<&'a Map<String, Value>>,
     versioned_drafts: bool,
+    held_gate: Option<&'a dyn HeldValueGate>,
 }
 
 impl<'a> ValidationCtxBuilder<'a> {
@@ -84,7 +110,15 @@ impl<'a> ValidationCtxBuilder<'a> {
             ui_locale: None,
             locale_overlay: None,
             versioned_drafts: false,
+            held_gate: None,
         }
+    }
+
+    /// Set what of the stored sources the writer may lean on — see
+    /// [`ValidationCtx::held_gate`].
+    pub fn held_gate(mut self, held_gate: Option<&'a dyn HeldValueGate>) -> Self {
+        self.held_gate = held_gate;
+        self
     }
 
     /// Set whether the edited document keeps its drafts as version snapshots —
@@ -156,6 +190,7 @@ impl<'a> ValidationCtxBuilder<'a> {
             ui_locale: self.ui_locale,
             locale_overlay: self.locale_overlay,
             versioned_drafts: self.versioned_drafts,
+            held_gate: self.held_gate,
         }
     }
 }

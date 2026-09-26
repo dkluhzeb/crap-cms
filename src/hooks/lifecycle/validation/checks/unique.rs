@@ -1,5 +1,5 @@
 use crate::{
-    core::{FieldDefinition, FieldType, validate::FieldError},
+    core::{FieldDefinition, validate::FieldError},
     db::{
         DbValue,
         query::{self, FieldEqCount},
@@ -31,20 +31,15 @@ pub(crate) fn check_unique(
         return;
     };
 
-    // Email identity fields are compared case-insensitively so uniqueness
-    // matches the login lookup, which compares addresses in their lowercased
-    // stored form. Without this, `Victim@x.com` and `victim@x.com` both pass
-    // uniqueness, then collide as one account at login. Scoped to the `Email`
-    // field *type* — a definition-level signal, not a name heuristic — so
-    // case-sensitive unique fields (slugs, codes) are unaffected.
-    let case_insensitive = matches!(field.field_type, FieldType::Email);
-
+    // An email's stored form is canonical (trimmed, lowercased, NFC-composed),
+    // so an exact comparison treats `Victim@x.com` and `victim@x.com` as the
+    // one address the login lookup finds — and agrees with the email field's
+    // unique index, where SQL case folding need not.
     match query::count_where_field_eq(
         ctx.conn,
         &FieldEqCount::builder(ctx.table, col_name, stored)
             .exclude_id(ctx.exclude_id)
             .soft_delete(ctx.soft_delete)
-            .case_insensitive(case_insensitive)
             .build(),
     ) {
         Ok(count) if count > 0 => {
@@ -446,16 +441,19 @@ mod tests {
     }
 
     /// Regression (cross-surface harmonization): a unique `Email` field must be
-    /// checked case-insensitively, matching the login lookup, which compares
-    /// the lowercased stored form. Otherwise `Victim@x.com` and `victim@x.com`
-    /// both pass uniqueness and then collide as one account.
+    /// checked in the canonical form the login lookup compares. Otherwise
+    /// `Victim@x.com` and `victim@x.com` both pass uniqueness and then collide
+    /// as one account. The stored address is canonical, so the typed one is
+    /// compared in that form — non-ASCII capitals and a decomposed accent
+    /// included, which SQL case folding would not reliably fold.
     #[test]
     fn test_validate_unique_email_field_is_case_insensitive() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT);
-             INSERT INTO test (id, email) VALUES ('existing', 'Victim@X.com');",
+             INSERT INTO test (id, email) VALUES ('existing', 'victim@x.com'),
+                                                 ('other', '\u{e4}rger@x.com');",
         )
         .unwrap();
         let fields = vec![
@@ -464,20 +462,21 @@ mod tests {
                 .build(),
         ];
 
-        // A differently-cased spelling of the existing address must be rejected.
-        let mut data = DocumentFields::new();
-        data.insert("email".to_string(), json!("victim@x.com"));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        assert!(
-            result.is_err(),
-            "a case-variant of an existing email must fail the unique check"
-        );
-        assert!(result.unwrap_err().errors[0].message.contains("unique"));
+        for variant in ["Victim@X.com", "\u{c4}RGER@x.com", "A\u{308}rger@x.com"] {
+            let mut data = DocumentFields::new();
+            data.insert("email".to_string(), json!(variant));
+            let result = validate_fields_inner(
+                &lua,
+                &fields,
+                &data,
+                &ValidationCtx::builder(&conn, "test").build(),
+            );
+            assert!(
+                result.is_err(),
+                "{variant:?} spells an existing address and must fail the unique check"
+            );
+            assert!(result.unwrap_err().errors[0].message.contains("unique"));
+        }
     }
 
     /// Companion: a non-`Email` unique field stays case-SENSITIVE — a

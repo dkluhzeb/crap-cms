@@ -12,11 +12,30 @@
 //!    or retyped key in the example is a red test;
 //! 3. scalar defaults shown in the tables match the actual `Default` impls.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fs, path::Path};
 
 use crap_cms::config::{ConfigKeys, CrapConfig};
 
 const DOC: &str = include_str!("../docs/src/configuration/crap-toml.md");
+
+/// Every file of the `config/validate/` module, concatenated in name order —
+/// read from disk so a newly split-out section file is scanned too.
+fn validate_sources() -> String {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/config/validate");
+
+    let mut paths: Vec<_> = fs::read_dir(&dir)
+        .expect("read config/validate")
+        .map(|entry| entry.expect("dir entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .collect();
+    paths.sort();
+
+    paths
+        .iter()
+        .map(|path| fs::read_to_string(path).expect("read validate source"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 /// Extract the key names (first table column) of the section under the
 /// `[heading]` sub-heading.
@@ -374,10 +393,10 @@ fn keys_read_by_rules(source: &str, section_prefix: Option<&str>) -> BTreeSet<(S
 /// after the Lua files), so they are pinned to the same section.
 #[test]
 fn validation_section_names_every_validated_key() {
-    const VALIDATE: &str = include_str!("../src/config/validate.rs");
     const LOCALE: &str = include_str!("../src/config/features/locale.rs");
 
-    let mut validated = keys_read_by_rules(VALIDATE, None);
+    let validate = validate_sources();
+    let mut validated = keys_read_by_rules(&validate, None);
     validated.extend(keys_read_by_rules(LOCALE, Some("locale")));
 
     // Positive controls: the scanner sees rules in both files, warnings
@@ -625,14 +644,14 @@ const NOT_NUMERIC: &[&str] = &[
 /// detonates at runtime (`channel_capacity = 0` panicked tokio, zero
 /// scheduler intervals busy-looped, `default_limit > max_limit`
 /// silently clamped everything). Each was fixed with a startup check in
-/// `config/validate.rs` — but nothing forced the NEXT numeric knob to
+/// `config/validate/` — but nothing forced the NEXT numeric knob to
 /// get one. This pin does: every config key whose name matches the
-/// numeric-knob patterns must either appear in `validate.rs` or in the
+/// numeric-knob patterns must either appear in `config/validate/` or in the
 /// reviewed exemption list below (with the reason validation isn't
 /// needed).
 #[test]
 fn every_numeric_knob_is_validated_or_exempt() {
-    let doc_validate = include_str!("../src/config/validate.rs");
+    let doc_validate = validate_sources();
 
     let mut unhandled = Vec::new();
     for (heading, keys) in section_map() {
@@ -652,7 +671,7 @@ fn every_numeric_knob_is_validated_or_exempt() {
 
     assert!(
         unhandled.is_empty(),
-        "numeric config knob(s) with neither a validate.rs check nor a \
+        "numeric config knob(s) with neither a config/validate/ check nor a \
          reviewed exemption — decide which and record it:\n  {}",
         unhandled.join("\n  ")
     );

@@ -20,7 +20,6 @@ use axum::{
     },
     response::{IntoResponse, Response},
 };
-use tokio::task;
 use tracing::{error, warn};
 
 use crate::{
@@ -37,7 +36,7 @@ use crate::{
             session_cookie_token,
         },
     },
-    core::Document,
+    core::{Document, spawn_request_blocking},
     hooks::lifecycle::{LuaCrudInfra, RouteHandlerInput},
     service::auth::Resolution,
 };
@@ -434,7 +433,7 @@ pub async fn dispatch_custom_route(
         raw,
     };
 
-    match task::spawn_blocking(move || run_dispatch_blocking(job)).await {
+    match spawn_request_blocking(move || run_dispatch_blocking(job)).await {
         Ok(Ok(DispatchOutcome::Response(resp))) => response_to_axum(resp),
         Ok(Ok(DispatchOutcome::Forbidden)) => StatusCode::FORBIDDEN.into_response(),
         // A busy or exhausted pool — while resolving the caller or running the

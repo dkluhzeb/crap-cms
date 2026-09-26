@@ -10,8 +10,8 @@ use crate::{
 type Result<T> = std::result::Result<T, ServiceError>;
 
 /// The delete's live event, read on the delete's own connection (inside its
-/// transaction, after the before-hooks and the hard delete's ref-count row
-/// lock) so it is exactly the row the delete acts on. `None` when the delete
+/// transaction, on the row locked at the start of the delete, after the
+/// before-hooks) so it is exactly the row the delete acts on. `None` when the delete
 /// publishes no event — nothing is read then.
 fn read_event(
     ctx: &ServiceContext,

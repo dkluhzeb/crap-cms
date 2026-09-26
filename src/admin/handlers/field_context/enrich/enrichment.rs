@@ -767,7 +767,7 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE users (
-                id TEXT PRIMARY KEY, name TEXT,
+                id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT,
                 _status TEXT DEFAULT 'published', created_at TEXT, updated_at TEXT
             );
             INSERT INTO users (id, name) VALUES ('u1', 'Alice');",

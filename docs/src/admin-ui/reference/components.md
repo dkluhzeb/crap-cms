@@ -286,6 +286,7 @@ folder to override.
 | `partials/status-badge.hbs` | `<span class="badge badge--{status}">{status}</span>`         |
 | `partials/error-page.hbs`   | Full 404/403/500-style error card                             |
 | `partials/warning-card.hbs` | `<div class="card card--warning">` with title and slotted body |
+| `partials/revision-conflict.hbs` | The notice over an edit form whose save was refused because someone else saved the document meanwhile: reload / overwrite actions (see [Concurrent Editing](../../collections/concurrent-editing.md)) |
 | `partials/loading-indicator.hbs` | HTMX `hx-indicator` target with `inline` and `sidebar` variants |
 | `partials/form-actions.hbs` | `<div class="form__actions">` chrome + cancel link, action buttons via slot |
 | `partials/breadcrumb.hbs`   | Crumbs trail                                                  |

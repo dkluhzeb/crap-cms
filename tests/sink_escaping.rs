@@ -53,14 +53,14 @@ const SINK_INVENTORY: &[(&str, &str, &str)] = &[
         r#".replace('\'', r"\u0027")"#,
     ),
     (
-        "JSON i18n island in <script> (second raw-JSON producer — must mirror json.rs)",
-        "src/admin/templates/helpers/admin_i18n.rs",
-        r#".replace("</", r"<\/")"#,
+        "JSON embedded in attributes the parser entity-decodes ({{{json}}} helper)",
+        "src/admin/templates/helpers/json.rs",
+        r#".replace('&', r"\u0026")"#,
     ),
     (
-        "JSON i18n island in an attribute (second raw-JSON producer — must mirror json.rs)",
+        "JSON i18n island (second raw-JSON producer — shares the json.rs escaper)",
         "src/admin/templates/helpers/admin_i18n.rs",
-        r#".replace('\'', r"\u0027")"#,
+        "markup_json(",
     ),
     (
         "SQL string literals in DDL DEFAULT clauses (placeholders can't bind DDL)",

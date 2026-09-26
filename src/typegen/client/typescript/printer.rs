@@ -352,8 +352,9 @@ mod tests {
         assert!(!out.contains("`draft: true`"), "{out}");
     }
 
-    /// A read document carries the stored system keys its collection has, and
-    /// a timezone date's `<name>_tz` companion (also accepted as input).
+    /// A read document carries the stored system keys its collection has —
+    /// its revision always — and a timezone date's `<name>_tz` companion (also
+    /// accepted as input).
     #[test]
     fn typescript_read_document_has_system_keys() {
         let mut col = make_col(
@@ -375,11 +376,13 @@ mod tests {
             "{doc}"
         );
         assert!(doc.contains("  _deleted_at?: string | null;"), "{doc}");
+        assert!(doc.contains("  _revision?: number | null;"), "{doc}");
         assert!(doc.contains("  starts_tz?: string | null;"), "{doc}");
 
         let data = interface_block(&out, "export interface EventsData {");
         assert!(data.contains("  starts_tz?: string | null;"), "{data}");
         assert!(!data.contains("_status"), "{data}");
+        assert!(!data.contains("_revision"), "{data}");
     }
 
     /// Under `locale = "all"` a localized code field's language pick is a

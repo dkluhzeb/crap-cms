@@ -16,6 +16,7 @@
  */
 
 import { t } from './_internal/i18n.js';
+import { confirmLeave } from './_internal/leave.js';
 import { CrapPickerBase } from './_internal/picker-base.js';
 import { readCsrfCookie } from './_internal/util/cookies.js';
 import { CSRF_FIELD, csrfHeaders } from './_internal/util/csrf.js';
@@ -30,8 +31,15 @@ class CrapUiLocalePicker extends CrapPickerBase {
   static openClass = 'locale-picker__dropdown--open';
   static valueDatasetKey = 'uiLocaleValue';
 
-  /** @param {string} locale */
+  /**
+   * Switch the UI language. An edit form with unsaved changes asks first, and
+   * the preference is saved only once the editor chose to leave.
+   *
+   * @param {string} locale
+   */
   async _onValue(locale) {
+    if (!(await confirmLeave())) return;
+
     const csrf = readCsrfCookie();
     const body = new URLSearchParams({ locale });
     if (csrf) body.append(CSRF_FIELD, csrf);

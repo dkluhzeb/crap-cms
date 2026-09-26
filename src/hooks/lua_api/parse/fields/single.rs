@@ -25,7 +25,7 @@ use crate::{
     hooks::lua_api::parse::{
         admin::{deny_type_scoped_admin_keys, parse_field_admin},
         blocks::{parse_block_definitions, parse_tab_definitions},
-        helpers::{deny_unknown_keys, get_string_val, get_table, parse_select_options},
+        helpers::{get_string_val, get_table, parse_select_options},
         relationship::parse_field_relationship,
     },
 };
@@ -153,7 +153,7 @@ fn parse_field_parts(lua: &Lua, field_tbl: &Table) -> Result<ParsedFieldParts> {
         })?,
     };
 
-    validate_field_keys(field_tbl, &field_type)?;
+    validate_field_keys(field_tbl, &field_type, &name)?;
 
     let default_value = parse_default_value(field_tbl, &name, &field_type)?;
     let relationship = parse_field_relationship(field_tbl, &field_type)?;
@@ -169,33 +169,13 @@ fn parse_field_parts(lua: &Lua, field_tbl: &Table) -> Result<ParsedFieldParts> {
         parse_field_admin(&tbl)
     })?;
 
-    let hooks = get_table(field_tbl, "hooks")
-        .map_or(Ok(FieldHooks::default()), |tbl| parse_field_hooks(&tbl))?;
+    let hooks = get_table(field_tbl, "hooks").map_or(Ok(FieldHooks::default()), |tbl| {
+        parse_field_hooks(&tbl, &field_type, &name)
+    })?;
 
-    // Transparent layout wrappers (row/collapsible/tabs) have no value of their
-    // own, so a field lifecycle hook on them could never fire. Reject it loudly
-    // at parse time rather than silently ignoring it — the hook belongs on a
-    // child field. Group/Array/Blocks DO carry a value and run their own hook.
-    if matches!(
-        field_type,
-        FieldType::Row | FieldType::Collapsible | FieldType::Tabs
-    ) && !hooks.is_empty()
-    {
-        bail!(
-            "{} field '{name}': lifecycle hooks are not supported on transparent \
-             layout wrappers (row/collapsible/tabs) — they have no value of their \
-             own; put the hook on a child field instead",
-            field_type.as_str()
-        );
-    }
-
-    let access = match get_table(field_tbl, "access") {
-        Ok(tbl) => {
-            deny_unknown_keys(&tbl, "field access", &["read", "create", "update"])?;
-            parse_field_access(&tbl)?
-        }
-        Err(_) => FieldAccess::default(),
-    };
+    let access = get_table(field_tbl, "access").map_or(Ok(FieldAccess::default()), |tbl| {
+        parse_field_access(&tbl, &field_type, &name)
+    })?;
 
     let sub_fields = parse_sub_fields(lua, field_tbl, &field_type)?;
     let block_defs = parse_block_defs(lua, field_tbl, &field_type)?;

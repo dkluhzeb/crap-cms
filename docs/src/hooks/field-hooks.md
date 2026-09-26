@@ -118,7 +118,9 @@ and `blocks` all carry a value, so a hook on any of them runs:
 The transparent layout wrappers (`row`, `collapsible`, `tabs`) have **no value
 of their own** — they only group child fields visually. Placing a lifecycle hook
 directly on one is a configuration error and is **rejected at parse time**; put
-the hook on a child field instead.
+the hook on a child field instead (see
+[Layout Wrappers](../fields/overview.md#layout-wrappers) for every key a
+wrapper refuses).
 
 ## Definition
 

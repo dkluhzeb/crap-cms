@@ -55,6 +55,22 @@ pub fn count_rows_outside_locales(
     Ok(count)
 }
 
+/// The distinct locales `table`'s rows are stored under, sorted.
+///
+/// # Errors
+///
+/// Returns a backend error if the query fails.
+pub fn held_locales(conn: &dyn DbConnection, table: &str) -> Result<Vec<String>> {
+    let sql = format!(
+        "SELECT DISTINCT _locale FROM {} WHERE _locale IS NOT NULL ORDER BY _locale",
+        quote_ident(table)
+    );
+
+    let rows = conn.query_all(&sql, &[])?;
+
+    Ok(rows.iter().filter_map(|row| row.opt_text_at(0)).collect())
+}
+
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
@@ -99,6 +115,16 @@ mod tests {
             count_rows_outside_locales(&conn, "posts_items", &configured()).unwrap(),
             2,
             "both `fr` rows are stale, the `en`/`de` ones are not"
+        );
+    }
+
+    #[test]
+    fn lists_the_locales_rows_are_held_under() {
+        let (_dir, conn) = seeded();
+
+        assert_eq!(
+            held_locales(&conn, "posts_items").unwrap(),
+            vec!["de", "en", "fr"]
         );
     }
 

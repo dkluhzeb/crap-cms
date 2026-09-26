@@ -62,8 +62,14 @@ use crate::{
         FieldType, JoinConfig, JsonRoot, NestStep, Registry, ReqContext, VisitAction,
         walk_nested_mut,
     },
+    db::query::JoinReaders,
     hooks::lifecycle::access::has_any_field_access,
-    service::{helpers::collect_api_hidden_field_names, hooks::ReadHooks},
+    service::{
+        FieldReadStrip, ReadStripArgs,
+        helpers::{collect_api_hidden_field_names, strip_unreadable_docs},
+        hooks::ReadHooks,
+        is_hidden_query_path,
+    },
 };
 
 /// Bound on cross-collection recursion. Populate breaks cycles (leaving ids), so
@@ -385,6 +391,41 @@ fn embedded_to_document(mut obj: Map<String, Value>) -> Document {
 /// join field's items and count.
 pub(crate) fn join_child_readable<R: JsonRoot + ?Sized>(join: &JoinConfig, child: &R) -> bool {
     child.root_get(&join.on).is_some()
+}
+
+/// [`join_child_readable`] for each of `children` — documents a join lists, not
+/// yet stripped — judged through `strip` on a stripped copy, exactly as the
+/// populated result is stripped. Lets a join decide which children it lists
+/// before its `limit` cuts the list, so the limit counts listed children.
+///
+/// Without any field `access.read` on the target the answer is the same for
+/// every child — `on` is readable unless it is (or lies in) a `hidden` field —
+/// so nothing is copied.
+pub(crate) fn join_children_readable(
+    strip: &dyn FieldReadStrip,
+    readers: &JoinReaders<'_>,
+    children: &[Document],
+) -> Vec<bool> {
+    let (join, target) = (readers.join, readers.target);
+
+    if !has_any_field_access(&target.fields, |f| f.access.read.as_ref()) {
+        let readable = !is_hidden_query_path(target, &join.on);
+
+        return vec![readable; children.len()];
+    }
+
+    let mut copies = children.to_vec();
+    let args = ReadStripArgs::builder(&target.fields, &join.collection)
+        .user(readers.user)
+        .locale(readers.locale)
+        .build();
+
+    strip_unreadable_docs(strip, &args, &mut copies);
+
+    copies
+        .iter()
+        .map(|child| join_child_readable(join, &child.fields))
+        .collect()
 }
 
 /// A populated relationship target carries both `collection` and `id` markers

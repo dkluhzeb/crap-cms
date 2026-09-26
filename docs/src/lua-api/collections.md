@@ -226,6 +226,18 @@ crap.collections.articles.update("abc123", {
 | `override_access` | boolean | `false` | Bypass collection/field access checks. |
 | `hooks` | boolean | `true` | Run lifecycle hooks. |
 | `events` | boolean | `true` | Emit a live-update event for the updated document. Set `false` for a quiet write. |
+| `expected_revision` | integer | `nil` | The document's `_revision` as you read it. When anyone has written the document since, the update fails with a `Revision conflict` error and nothing changes. `nil` writes unconditionally. Also applies with `unpublish = true`. See [Concurrent Editing](../collections/concurrent-editing.md). |
+
+```lua
+-- Read-modify-write that refuses to overwrite a concurrent change
+local doc = crap.collections.posts.find_by_id("abc123")
+local ok, err = pcall(crap.collections.posts.update, "abc123",
+    { views = doc.views + 1 },
+    { expected_revision = doc._revision })
+if not ok then
+    -- err contains "Revision conflict": re-read and retry
+end
+```
 
 ### `crap.collections.<slug>.delete(id, opts?)`
 
@@ -281,9 +293,10 @@ of a document with a pending draft is judged on that draft with your data on
 top, and a non-default-locale update carrying a non-localized field reports
 the same locale-lock error the write returns.
 
-`unpublish` accepts `override_access`, `hooks`, and `events` options
-(`events = false` for a quiet unpublish, matching
-`update{ unpublish = true, events = false }`).
+`unpublish` accepts `override_access`, `hooks`, `events` and
+`expected_revision` options (`events = false` for a quiet unpublish, matching
+`update{ unpublish = true, events = false }`; `expected_revision` as on
+`update`).
 
 `create_many` accepts a `locale` option with single-`create` semantics:
 an explicit default locale is accepted; a non-default locale is rejected

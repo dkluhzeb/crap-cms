@@ -12,7 +12,7 @@ use crate::{
     db::{
         DbConnection, DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
         query::{
-            ReadLocale, decode_document_values, filter::memory::matches_document,
+            REVISION_COLUMN, ReadLocale, decode_document_values, filter::memory::matches_document,
             helpers::locale_column, regroup_by_locale,
         },
     },
@@ -285,6 +285,37 @@ fn keep_empty_objects(original: &Map<String, Value>, nested: &mut Map<String, Va
     }
 }
 
+/// Stamp a draft overlay with the state only the document ROW is the authority
+/// for — the collection overlay below and the global one in the read service
+/// share it.
+///
+/// `_status` is the document's workflow status — snapshots can carry a stale
+/// value (historically the create path snapshotted before the draft stamp
+/// landed, and pre-alpha.10 databases keep such snapshots forever). A
+/// draft-only document must read as "draft"; a published document with a
+/// pending draft edit reads as "published". `_revision` counts the writes to
+/// the document, draft saves included, and a snapshot never records it: the
+/// draft view an editor opens must carry the revision their save is checked
+/// against.
+pub(crate) fn stamp_row_state(
+    conn: &dyn DbConnection,
+    slug: &str,
+    id: &str,
+    doc: &mut Document,
+) -> Result<()> {
+    if let Some(row_status) = query::versions::get_document_status(conn, slug, id)? {
+        doc.fields
+            .insert("_status".to_string(), Value::String(row_status));
+    }
+
+    if let Some(revision) = query::read_revision(conn, slug, id)? {
+        doc.fields
+            .insert(REVISION_COLUMN.to_string(), Value::from(revision));
+    }
+
+    Ok(())
+}
+
 /// Find a document by ID with full hydration and optional draft overlay.
 ///
 /// Unified read path used by admin UI, gRPC, and Lua. Handles:
@@ -327,16 +358,7 @@ pub fn find_by_id_full(p: FindByIdFullParams<'_>) -> Result<Option<Document>> {
         // that fails the constraint falls through to the (constrained) main-row
         // find below — which returns the published row or nothing.
         if matches_document(&doc, &p.snapshot_constraints, &p.def.fields) {
-            // `_status` is the DOCUMENT's workflow status, and the row is its
-            // authority — snapshots can carry a stale value (historically the
-            // create path snapshotted before the draft stamp landed, and
-            // pre-alpha.10 databases keep such snapshots forever). A draft-only
-            // document must read as "draft"; a published document with a
-            // pending draft edit reads as "published".
-            if let Some(row_status) = query::versions::get_document_status(p.conn, p.slug, p.id)? {
-                doc.fields
-                    .insert("_status".to_string(), Value::String(row_status));
-            }
+            stamp_row_state(p.conn, p.slug, p.id, &mut doc)?;
 
             return Ok(Some(doc));
         }
@@ -434,6 +456,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 _status TEXT,
                 created_at TEXT,
@@ -450,7 +473,7 @@ mod tests {
                 updated_at TEXT
             );
             INSERT INTO posts VALUES
-              ('p1', 'Live', 'published', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');",
+              ('p1', 0, 'Live', 'published', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');",
         )
         .unwrap();
 

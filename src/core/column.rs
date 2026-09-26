@@ -6,6 +6,10 @@
 /// in `parse::fields`, so the two can never list different columns.
 pub const AUTO_COLUMNS: &[&str] = &["id", "parent_id", "created_at", "updated_at"];
 
+/// The optimistic-locking revision counter every collection and global row
+/// carries — a system column, and the key a read document carries it under.
+pub const REVISION_COLUMN: &str = "_revision";
+
 /// Field names reserved for the framework that are not columns. `collection` is
 /// the tag a populated relationship target carries beside its `id` (the key
 /// polymorphic references are told apart by, and the one embedded-document
@@ -49,6 +53,7 @@ mod tests {
             "_status",
             "_deleted_at",
             "_ref_count",
+            REVISION_COLUMN,
             "_password_hash",
         ] {
             assert!(is_system_column(c), "{c}");

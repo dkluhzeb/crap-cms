@@ -7,14 +7,14 @@ use serde_json::json;
 
 use crate::core::{
     CollectionDefinition, Document, FieldDefinition, FieldType, HookRef, JoinConfig, Registry,
-    RelationshipConfig, cache::NoneCache,
+    RelationshipConfig, VersionsConfig, cache::NoneCache,
 };
 use crate::db::query::populate::test_helpers::{
-    make_authors_def_with_join, make_posts_def_for_join, setup_join_db,
+    make_authors_def_with_join, make_posts_def_for_join, setup_join_db, versions_table_sql,
 };
 use crate::db::query::populate::{
-    JoinAccessCheck, PopulateContext, PopulateOpts, batch::populate_relationships_batch_cached,
-    populate_relationships_cached,
+    JoinAccessCheck, JoinReaders, PopulateContext, PopulateOpts,
+    batch::populate_relationships_batch_cached, populate_relationships_cached,
 };
 use crate::db::query::test_helpers::CountingConn;
 use crate::db::{AccessResult, DbConnection as _, InMemoryConn};
@@ -159,19 +159,19 @@ fn batch_join_children_hydrate_query_count_is_constant() {
     let conn = InMemoryConn::open();
     conn.execute_batch(
         "CREATE TABLE authors (
-             id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT
+             id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT
          );
          CREATE TABLE posts (
-             id TEXT PRIMARY KEY, title TEXT, author TEXT,
+             id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, author TEXT,
              created_at TEXT, updated_at TEXT
          );
          CREATE TABLE posts_sections (
              id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, label TEXT
          );
          INSERT INTO posts VALUES
-             ('p1', 'One', 'a1', '2024-01-01', '2024-01-01'),
-             ('p2', 'Two', 'a1', '2024-01-01', '2024-01-01'),
-             ('p3', 'Three', 'a2', '2024-01-01', '2024-01-01');
+             ('p1', 0, 'One', 'a1', '2024-01-01', '2024-01-01'),
+             ('p2', 0, 'Two', 'a1', '2024-01-01', '2024-01-01'),
+             ('p3', 0, 'Three', 'a2', '2024-01-01', '2024-01-01');
          INSERT INTO posts_sections VALUES
              ('s1', 'p1', 0, 'Intro'), ('s2', 'p2', 0, 'Body'), ('s3', 'p3', 0, 'End');",
     )
@@ -413,7 +413,7 @@ fn join_lists_at_most_its_limit_per_document() {
 fn join_lookup_errors_propagate() {
     let conn = InMemoryConn::open();
     conn.execute_batch(
-        "CREATE TABLE authors (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);",
+        "CREATE TABLE authors (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT);",
     )
     .unwrap();
 
@@ -489,4 +489,186 @@ fn join_inside_a_layout_wrapper_is_populated() {
     )
     .unwrap();
     assert_eq!(joined_count(&single), 2);
+}
+
+/// Every view allowed; a child's `on` value is readable only when the child
+/// is `public` — a verdict that needs each child, as a per-document field
+/// read rule does.
+struct PublicOnly;
+
+impl JoinAccessCheck for PublicOnly {
+    fn check(&self, _: Option<&HookRef>, _: Option<&Document>, _: &str) -> AnyResult<AccessResult> {
+        Ok(AccessResult::Allowed)
+    }
+
+    fn on_readable(&self, _: &JoinReaders<'_>, children: &[Document]) -> Vec<bool> {
+        children
+            .iter()
+            .map(|child| child.fields.get("public") == Some(&json!(true)))
+            .collect()
+    }
+}
+
+/// `a1` referenced by five private posts (the newest) and three public ones,
+/// `a2` by one public post; the join lists at most two.
+fn mostly_private_join() -> (InMemoryConn, Registry, CollectionDefinition) {
+    let conn = InMemoryConn::open();
+    conn.execute_batch(
+        "CREATE TABLE authors (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT);
+         CREATE TABLE posts (
+             id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, author TEXT, public INTEGER,
+             created_at TEXT, updated_at TEXT
+         );",
+    )
+    .unwrap();
+
+    for (id, author, public, day) in [
+        ("p1", "a1", 0, 10),
+        ("p2", "a1", 0, 9),
+        ("p3", "a1", 0, 8),
+        ("p4", "a1", 0, 7),
+        ("p5", "a1", 0, 6),
+        ("p6", "a1", 1, 3),
+        ("p7", "a1", 1, 2),
+        ("p8", "a1", 1, 1),
+        ("q1", "a2", 1, 5),
+    ] {
+        conn.execute_batch(&format!(
+            "INSERT INTO posts VALUES \
+             ('{id}', 0, '{id}', '{author}', {public}, '2024-01-{day:02}', '2024-01-{day:02}');"
+        ))
+        .unwrap();
+    }
+
+    let mut posts_def = make_posts_def_for_join();
+    posts_def
+        .fields
+        .push(FieldDefinition::builder("public", FieldType::Checkbox).build());
+
+    // Replaces the plain `posts` the helper registers.
+    let (mut registry, authors_def) = limited_join_registry(2);
+    registry.register_collection(posts_def);
+
+    (conn, registry, authors_def)
+}
+
+/// The ids a populated `posts` join holds, in order.
+fn joined_ids(doc: &Document) -> Vec<String> {
+    doc.fields
+        .get("posts")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|child| child["id"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Regression: the join's limit was applied in SQL before the children whose
+/// `on` value the reader may not read were dropped, so `a1` — whose five
+/// newest posts are private — listed nothing. The lookup now reads on until
+/// it lists `limit` readable children: the two newest public posts, on the
+/// list path and the by-id path alike, without disturbing another parent.
+#[test]
+fn join_limit_counts_only_children_whose_on_value_is_readable() {
+    let (conn, registry, authors_def) = mostly_private_join();
+    let ctx = PopulateContext {
+        conn: &conn,
+        registry: &registry,
+        collection_slug: "authors",
+        fields: &authors_def.fields,
+    };
+    let gate = PublicOnly;
+    let opts = PopulateOpts {
+        join_access: Some(&gate),
+        ..join_opts()
+    };
+
+    let mut docs = vec![author("a1"), author("a2")];
+    populate_relationships_batch_cached(&ctx, &mut docs, &opts, &NoneCache).unwrap();
+
+    assert_eq!(joined_ids(&docs[0]), vec!["p6", "p7"]);
+    assert_eq!(joined_ids(&docs[1]), vec!["q1"]);
+
+    let mut single = author("a1");
+    populate_relationships_cached(&ctx, &mut single, &mut HashSet::new(), &opts, &NoneCache)
+        .unwrap();
+
+    assert_eq!(joined_ids(&single), vec!["p6", "p7"]);
+}
+
+/// Read and draft views allowed.
+struct DraftReader;
+
+impl JoinAccessCheck for DraftReader {
+    fn check(&self, _: Option<&HookRef>, _: Option<&Document>, _: &str) -> AnyResult<AccessResult> {
+        Ok(AccessResult::Allowed)
+    }
+}
+
+/// `posts/p1`, stored with author `a1`, has a pending draft that moves it to
+/// `a2`.
+fn draft_moves_the_parent() -> (InMemoryConn, Registry, CollectionDefinition) {
+    let conn = InMemoryConn::open();
+    conn.execute_batch(&versions_table_sql("posts")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE authors (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT);
+         CREATE TABLE posts (
+             id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, author TEXT,
+             _status TEXT NOT NULL DEFAULT 'published', created_at TEXT, updated_at TEXT
+         );
+         INSERT INTO posts VALUES ('p1', 0, 'Stored', 'a1', 'published', '2024-01-01', '2024-01-01');
+         INSERT INTO \"_versions_posts\" VALUES
+             ('v1', 'p1', 1, 'published', 0, '{\"title\":\"Stored\",\"author\":\"a1\"}', '2024-01-01'),
+             ('v2', 'p1', 2, 'draft', 1,
+              '{\"title\":\"Moved\",\"author\":\"a2\",\"_status\":\"draft\"}', '2024-01-02');",
+    )
+    .unwrap();
+
+    let mut posts_def = make_posts_def_for_join();
+    posts_def.versions = Some(VersionsConfig::new(true, 0));
+
+    // Replaces the plain `posts` the helper registers.
+    let (mut registry, authors_def) = limited_join_registry(5);
+    registry.register_collection(posts_def);
+
+    (conn, registry, authors_def)
+}
+
+/// Regression: a join child was selected by its stored `on` value but
+/// bucketed by the value of the pending draft shown in its place, so a draft
+/// that moved `p1` from `a1` to `a2` dropped it from `a1` on the by-id path
+/// and listed it under `a2` on the list path — whose lookup never counted it.
+/// A child is listed under the parent its stored value names, shown as its
+/// draft, on both paths.
+#[test]
+fn join_child_is_listed_under_its_stored_parent() {
+    let (conn, registry, authors_def) = draft_moves_the_parent();
+    let ctx = PopulateContext {
+        conn: &conn,
+        registry: &registry,
+        collection_slug: "authors",
+        fields: &authors_def.fields,
+    };
+    let gate = DraftReader;
+    let opts = PopulateOpts {
+        join_access: Some(&gate),
+        ..join_opts()
+    };
+
+    let mut docs = vec![author("a1"), author("a2")];
+    populate_relationships_batch_cached(&ctx, &mut docs, &opts, &NoneCache).unwrap();
+
+    assert_eq!(joined_ids(&docs[0]), vec!["p1"]);
+    assert_eq!(docs[0].fields["posts"][0]["title"], json!("Moved"));
+    assert!(joined_ids(&docs[1]).is_empty());
+
+    for (parent, expected) in [("a1", vec!["p1"]), ("a2", vec![])] {
+        let mut single = author(parent);
+        populate_relationships_cached(&ctx, &mut single, &mut HashSet::new(), &opts, &NoneCache)
+            .unwrap();
+
+        assert_eq!(joined_ids(&single), expected, "by id: {parent}");
+    }
 }

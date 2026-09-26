@@ -236,6 +236,7 @@ async fn list_and_restore_versions() {
             locale: None,
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -253,6 +254,7 @@ async fn list_and_restore_versions() {
             locale: None,
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -343,6 +345,7 @@ async fn unpublish_on_non_versioned_collection_is_rejected() {
             locale: None,
             draft: None,
             unpublish: Some(true),
+            expected_revision: None,
         }))
         .await
         .unwrap_err();
@@ -1294,6 +1297,7 @@ async fn update_global_nonexistent() {
             data: Some(make_struct(&[("key", "value")])),
             locale: None,
             draft: None,
+            expected_revision: None,
         }))
         .await
         .unwrap_err();
@@ -1387,6 +1391,7 @@ async fn update_nonexistent_collection() {
             locale: None,
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap_err();

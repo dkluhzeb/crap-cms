@@ -1,7 +1,7 @@
 //! Ref-count delta computation and application.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     error::Error,
     fmt,
 };
@@ -14,8 +14,10 @@ use crate::db::{DbConnection, DbValue, query::helpers::placeholder_list};
 use super::outgoing_ref::OutgoingRef;
 
 /// A write refused for referencing documents of `collection` it may not point
-/// at: `ids` do not exist — or, for a live write, are in the trash. Both read
-/// the same, so a writer learns nothing about a document it may not see.
+/// at: `ids` do not exist — or, for a live write, are in the trash, or are new
+/// references to documents the writer may not read (judged by the service
+/// layer, which holds the writer's access rules). All read the same, so a
+/// writer learns nothing about a document it may not see.
 /// Typed so the write layer can report it on the fields holding the
 /// references (see [`anchor_to_fields`](super::anchor_to_fields)).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,15 +66,7 @@ pub(super) fn to_delta_map(
 
 /// Apply ref count deltas to target collection tables.
 ///
-/// Deltas are batched per (collection, `delta_value`) so that all targets
-/// sharing the same collection and delta are updated in a single `UPDATE`
-/// with an `IN` clause. This reduces round-trips from O(targets) to
-/// O(distinct `collection×delta_sign` pairs) — typically 2-4 UPDATEs instead
-/// of 5-8+ for a write touching multiple relationships.
-///
-/// Postgres takes a row-level write lock on each updated row implicitly
-/// (READ COMMITTED default isolation), and `SQLite` serializes via the
-/// `IMMEDIATE` transaction held by the caller.
+/// See [`apply_deltas_with`] for the locking order every call follows.
 pub(super) fn apply_deltas(
     conn: &dyn DbConnection,
     deltas: &HashMap<(String, String), i64>,
@@ -99,7 +93,43 @@ pub(super) enum MissingTarget {
     Skip,
 }
 
+/// Every target of one write, per collection, both levels sorted: the one
+/// order in which every writer takes its target row locks.
+type SortedDeltas<'a> = BTreeMap<&'a str, BTreeMap<&'a str, i64>>;
+
+/// What the lock pass found among one collection's targets.
+#[derive(Default)]
+struct LockedTargets {
+    /// Ids with a row.
+    existing: HashSet<String>,
+    /// Ids with a row that is not in the trash.
+    live: HashSet<String>,
+}
+
+impl LockedTargets {
+    /// Whether an increment of `id` is refused under `on_missing`.
+    fn refuses(&self, id: &str, on_missing: MissingTarget) -> bool {
+        match on_missing {
+            MissingTarget::Reject => !self.live.contains(id),
+            MissingTarget::RejectMissing => !self.existing.contains(id),
+            MissingTarget::Skip => false,
+        }
+    }
+}
+
 /// [`apply_deltas`] with an explicit missing-target policy.
+///
+/// Two concurrent writes that share targets must lock them in the same order,
+/// or each can hold one the other waits on (a Postgres deadlock). So the
+/// targets are first locked in ONE pass over all of them — collections in
+/// name order, ids in id order within each collection — before any count
+/// moves. That pass is also the existence / trash check an increment is
+/// judged by, so a target cannot vanish or move to the trash between the
+/// check and the count. Only then are the counts adjusted, on rows this
+/// transaction already holds.
+///
+/// `SQLite` serializes writers through the caller's `IMMEDIATE` transaction,
+/// so the same pass there only reads.
 pub(super) fn apply_deltas_with(
     conn: &dyn DbConnection,
     deltas: &HashMap<(String, String), i64>,
@@ -109,133 +139,177 @@ pub(super) fn apply_deltas_with(
         return Ok(());
     }
 
-    // Group by (collection, delta_value) → Vec<id>
-    let mut groups: HashMap<(&str, i64), Vec<&str>> = HashMap::new();
+    let sorted = sort_deltas(deltas);
 
-    for ((collection, id), delta) in deltas {
-        groups
-            .entry((collection.as_str(), *delta))
-            .or_default()
-            .push(id.as_str());
+    let mut locked = Vec::with_capacity(sorted.len());
+    for (collection, targets) in &sorted {
+        locked.push(lock_targets(conn, collection, targets)?);
     }
 
-    for ((collection, delta), ids) in &groups {
-        // A new reference to a document a live write may not point at is
-        // refused before anything counts it. The check locks the targets it
-        // reads (Postgres), so none can move to the trash before the UPDATE.
-        if *delta > 0 && on_missing == MissingTarget::Reject {
-            refuse(collection, unavailable_ids(conn, collection, ids, true)?)?;
-        }
+    for ((collection, targets), found) in sorted.iter().zip(&locked) {
+        judge_increments(collection, targets, found, on_missing)?;
+    }
 
-        let in_clause = placeholder_list(conn, ids.len());
-
-        let clamped = conn.greatest_expr("0", &format!("_ref_count + ({delta})"));
-        let sql =
-            format!("UPDATE \"{collection}\" SET _ref_count = {clamped} WHERE id IN ({in_clause})");
-
-        let params: Vec<DbValue> = ids.iter().map(|id| DbValue::Text(id.to_string())).collect();
-
-        let affected = conn.execute(&sql, &params).with_context(|| {
-            format!("Failed to batch-update _ref_count on {collection} by {delta}")
-        })?;
-
-        // An increment against vanished targets: a write replaying stored
-        // references refuses it, so the enclosing transaction rolls back
-        // instead of storing dangling refs. A repair replay skips them (they
-        // are already dangling; refusing would block startup on data it
-        // cannot fix).
-        if *delta > 0 && affected < ids.len() {
-            let missing = unavailable_ids(conn, collection, ids, false)?;
-
-            if on_missing != MissingTarget::Skip {
-                refuse(collection, missing)?;
-                continue;
-            }
-
-            warn!(
-                "Ref-count backfill: {collection}/{} no longer exists — a dangling \
-                 reference was skipped (clear or update the referencing document)",
-                missing.join(", ")
-            );
-        }
-
-        // Decrement against missing targets is tolerated: soft-delete never
-        // decrements, so a missing row means a concurrent hard-delete already
-        // removed it. Nothing left to adjust.
-        if *delta < 0 && affected < ids.len() {
-            let skipped = ids.len() - affected;
-            debug!("Skipped decrement on {skipped} target(s) in {collection}: already gone");
-        }
-
-        if *delta < 0 {
-            trace!(
-                "Decremented _ref_count on {} target(s) in {collection} by {}",
-                affected,
-                delta.abs()
-            );
-        }
+    for ((collection, targets), found) in sorted.iter().zip(&locked) {
+        update_counts(conn, collection, targets, found)?;
     }
 
     Ok(())
 }
 
-/// Refuse the write when `unavailable` names any document.
-fn refuse(collection: &str, unavailable: Vec<String>) -> Result<()> {
-    if unavailable.is_empty() {
-        return Ok(());
+/// Order the delta map by collection, then by id.
+fn sort_deltas(deltas: &HashMap<(String, String), i64>) -> SortedDeltas<'_> {
+    let mut sorted = SortedDeltas::new();
+
+    for ((collection, id), delta) in deltas {
+        sorted
+            .entry(collection.as_str())
+            .or_default()
+            .insert(id.as_str(), *delta);
     }
 
-    Err(UnavailableReferences {
-        collection: collection.to_string(),
-        ids: unavailable,
-    }
-    .into())
+    sorted
 }
 
-/// The ids among `ids` a reference may not point at: those with no row, and —
-/// with `trashed_too` — those in the trash. On Postgres the rows read are
-/// locked for the rest of the transaction.
+/// Lock one collection's targets in id order (Postgres) and report which
+/// exist and which are live.
 ///
 /// Reads every column rather than naming `_deleted_at`, so it answers for a
 /// collection without a trash column too.
-fn unavailable_ids(
+fn lock_targets(
     conn: &dyn DbConnection,
     collection: &str,
-    ids: &[&str],
-    trashed_too: bool,
-) -> Result<Vec<String>> {
-    let in_clause = placeholder_list(conn, ids.len());
+    targets: &BTreeMap<&str, i64>,
+) -> Result<LockedTargets> {
+    let in_clause = placeholder_list(conn, targets.len());
     let lock = if conn.is_postgres() {
         " FOR UPDATE"
     } else {
         ""
     };
-    let sql = format!("SELECT * FROM \"{collection}\" WHERE id IN ({in_clause}){lock}");
-    let params: Vec<DbValue> = ids.iter().map(|id| DbValue::Text(id.to_string())).collect();
+    let sql = format!("SELECT * FROM \"{collection}\" WHERE id IN ({in_clause}) ORDER BY id{lock}");
+    let params: Vec<DbValue> = targets
+        .keys()
+        .map(|id| DbValue::Text((*id).to_string()))
+        .collect();
 
     let rows = conn
         .query_all(&sql, &params)
         .with_context(|| format!("Failed to read reference targets in {collection}"))?;
 
-    let available: HashSet<String> = rows
-        .iter()
-        .filter(|row| !trashed_too || row.get_named("_deleted_at").is_none_or(DbValue::is_null))
-        .filter_map(|row| row.get_string("id").ok())
-        .collect();
+    let mut found = LockedTargets::default();
 
-    Ok(ids
-        .iter()
-        .filter(|id| !available.contains(**id))
-        .map(|id| (*id).to_string())
-        .collect())
+    for row in &rows {
+        let Ok(id) = row.get_string("id") else {
+            continue;
+        };
+
+        if row.get_named("_deleted_at").is_none_or(DbValue::is_null) {
+            found.live.insert(id.clone());
+        }
+
+        found.existing.insert(id);
+    }
+
+    Ok(found)
 }
 
+/// Refuse the write when an increment points at a target `on_missing` does
+/// not allow — before any count of the write has moved.
+fn judge_increments(
+    collection: &str,
+    targets: &BTreeMap<&str, i64>,
+    found: &LockedTargets,
+    on_missing: MissingTarget,
+) -> Result<()> {
+    let refused: Vec<String> = targets
+        .iter()
+        .filter(|(id, delta)| **delta > 0 && found.refuses(id, on_missing))
+        .map(|(id, _)| (*id).to_string())
+        .collect();
+
+    if refused.is_empty() {
+        return Ok(());
+    }
+
+    Err(UnavailableReferences {
+        collection: collection.to_string(),
+        ids: refused,
+    }
+    .into())
+}
+
+/// Adjust the counts of one collection's existing targets: one `UPDATE` per
+/// distinct delta. A target with no row is left alone (see
+/// [`report_missing`]).
+fn update_counts(
+    conn: &dyn DbConnection,
+    collection: &str,
+    targets: &BTreeMap<&str, i64>,
+    found: &LockedTargets,
+) -> Result<()> {
+    let mut by_delta: BTreeMap<i64, Vec<&str>> = BTreeMap::new();
+
+    for (id, delta) in targets {
+        if found.existing.contains(*id) {
+            by_delta.entry(*delta).or_default().push(*id);
+            continue;
+        }
+
+        report_missing(collection, id, *delta);
+    }
+
+    for (delta, ids) in &by_delta {
+        update_by(conn, collection, *delta, ids)?;
+    }
+
+    Ok(())
+}
+
+/// A target with no row that got past [`judge_increments`]: an increment is
+/// only left for a repair replay (the reference is already stored and
+/// dangling; refusing would block startup on data it cannot fix). A
+/// decrement is a no-op — soft delete never decrements, so a missing row
+/// means a hard delete already removed it.
+fn report_missing(collection: &str, id: &str, delta: i64) {
+    if delta > 0 {
+        warn!(
+            "Ref-count backfill: {collection}/{id} no longer exists — a dangling \
+             reference was skipped (clear or update the referencing document)"
+        );
+
+        return;
+    }
+
+    debug!("Skipped decrement on {collection}/{id}: already gone");
+}
+
+/// `UPDATE` the counts of `ids` by `delta`, clamped at zero.
+fn update_by(conn: &dyn DbConnection, collection: &str, delta: i64, ids: &[&str]) -> Result<()> {
+    let in_clause = placeholder_list(conn, ids.len());
+    let clamped = conn.greatest_expr("0", &format!("_ref_count + ({delta})"));
+    let sql =
+        format!("UPDATE \"{collection}\" SET _ref_count = {clamped} WHERE id IN ({in_clause})");
+    let params: Vec<DbValue> = ids
+        .iter()
+        .map(|id| DbValue::Text((*id).to_string()))
+        .collect();
+
+    let affected = conn
+        .execute(&sql, &params)
+        .with_context(|| format!("Failed to batch-update _ref_count on {collection} by {delta}"))?;
+
+    trace!("Adjusted _ref_count on {affected} target(s) in {collection} by {delta}");
+
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::CollectionDefinition;
     use crate::db::query::ref_count::outgoing_ref::OutgoingRef;
     use crate::db::query::ref_count::test_helpers::*;
+    use crate::db::query::test_helpers::CountingConn;
 
     // ── to_delta_map ─────────────────────────────────────────────────────
 
@@ -486,5 +560,104 @@ mod tests {
 
         let err = replay("m_missing").expect_err("a missing target is refused");
         assert!(err.downcast_ref::<UnavailableReferences>().is_some());
+    }
+
+    /// Regression: the targets were locked per `(collection, delta sign)`
+    /// group in hash-map order, a fresh random order per call — so two
+    /// concurrent writes sharing targets in two collections locked them in
+    /// opposite orders and deadlocked on Postgres. Every target is now read
+    /// (locked, on Postgres) in one pass sorted by collection, then id —
+    /// increments and decrements alike — before any count moves.
+    #[test]
+    fn apply_deltas_locks_every_target_in_one_sorted_pass_before_any_update() {
+        let defs = ["users", "media", "tags"].map(CollectionDefinition::new);
+        let (_tmp, pool, _) = setup_db(&defs, &no_locale());
+        let conn = pool.get().unwrap();
+
+        for (collection, id) in [
+            ("users", "u1"),
+            ("media", "m2"),
+            ("media", "m1"),
+            ("tags", "t1"),
+        ] {
+            insert_doc(&conn, collection, id);
+        }
+        conn.execute("UPDATE media SET _ref_count = 1 WHERE id = 'm2'", &[])
+            .unwrap();
+
+        let deltas = HashMap::from([
+            (("users".to_string(), "u1".to_string()), 1i64),
+            (("tags".to_string(), "t1".to_string()), 1),
+            (("media".to_string(), "m2".to_string()), -1),
+            (("media".to_string(), "m1".to_string()), 1),
+        ]);
+
+        let counting = CountingConn::new(&conn);
+        apply_deltas(&counting, &deltas).unwrap();
+
+        let statements = counting.statements();
+        let reads: Vec<&String> = statements.iter().take(3).collect();
+
+        assert_eq!(statements.len(), 3 + 4, "3 lock reads, then 4 updates");
+        for (read, collection) in reads.iter().zip(["media", "tags", "users"]) {
+            assert!(
+                read.starts_with(&format!("SELECT * FROM \"{collection}\"")),
+                "targets are read collection by collection in name order: {statements:?}"
+            );
+            assert!(read.contains("ORDER BY id"), "ids in id order: {read}");
+        }
+        assert!(
+            statements[3..].iter().all(|sql| sql.starts_with("UPDATE")),
+            "no count moves before every target is read: {statements:?}"
+        );
+
+        assert_eq!(get_ref_count_val(&conn, "media", "m1"), 1);
+        assert_eq!(get_ref_count_val(&conn, "media", "m2"), 0);
+        assert_eq!(get_ref_count_val(&conn, "tags", "t1"), 1);
+        assert_eq!(get_ref_count_val(&conn, "users", "u1"), 1);
+    }
+
+    /// A refused increment is judged by the lock pass, so it stops the write
+    /// before any count of the write moved — including the counts of
+    /// collections that sort before it.
+    #[test]
+    fn apply_deltas_refuses_before_any_count_moves() {
+        let defs = ["media", "tags"].map(CollectionDefinition::new);
+        let (_tmp, pool, _) = setup_db(&defs, &no_locale());
+        let conn = pool.get().unwrap();
+
+        insert_doc(&conn, "media", "m1");
+
+        let deltas = HashMap::from([
+            (("media".to_string(), "m1".to_string()), 1i64),
+            (("tags".to_string(), "t_missing".to_string()), 1),
+        ]);
+
+        let counting = CountingConn::new(&conn);
+        let err = apply_deltas(&counting, &deltas).unwrap_err();
+
+        assert!(err.downcast_ref::<UnavailableReferences>().is_some());
+        assert!(counting.executed().is_empty(), "no UPDATE ran");
+        assert_eq!(get_ref_count_val(&conn, "media", "m1"), 0);
+    }
+
+    /// The repair replay skips a dangling increment and still counts the
+    /// targets that exist.
+    #[test]
+    fn repair_replay_skips_a_missing_target_and_counts_the_rest() {
+        let media = CollectionDefinition::new("media");
+        let (_tmp, pool, _) = setup_db(&[media], &no_locale());
+        let conn = pool.get().unwrap();
+
+        insert_doc(&conn, "media", "m1");
+
+        let deltas = HashMap::from([
+            (("media".to_string(), "m1".to_string()), 1i64),
+            (("media".to_string(), "m_missing".to_string()), 1),
+        ]);
+
+        apply_deltas_with(&conn, &deltas, MissingTarget::Skip).expect("a dangling ref is skipped");
+
+        assert_eq!(get_ref_count_val(&conn, "media", "m1"), 1);
     }
 }

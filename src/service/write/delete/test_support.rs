@@ -68,6 +68,7 @@ pub(super) fn setup_auth_collection() -> (Connection, CollectionDefinition) {
     conn.execute_batch(
         "CREATE TABLE users (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             email TEXT,
             _ref_count INTEGER DEFAULT 0,
             _session_version INTEGER DEFAULT 0,

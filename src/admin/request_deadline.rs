@@ -13,8 +13,20 @@
 //! other request middleware, so no layer can read a body before the clock
 //! starts. The route paths it recognizes are the constants the routes are
 //! registered under, so the two cannot drift apart.
+//!
+//! A `408` means nothing was changed. The handler's write runs on a blocking
+//! thread that cannot be cancelled, so the deadline is also carried into it as
+//! the request's commit gate (see [`crate::core::commit_gate`]): the write's
+//! statements are bounded by the deadline, and its `COMMIT` must be admitted
+//! by the gate. When the deadline passes the middleware expires the gate —
+//! from then on no write of the request commits — and answers `408`, unless a
+//! write had already committed, in which case it waits for the handler's own
+//! answer.
 
-use std::time::Duration;
+use std::{
+    pin::pin,
+    time::{Duration, Instant},
+};
 
 use axum::{
     extract::{FromRequestParts, MatchedPath, RawPathParams, Request, State},
@@ -22,9 +34,12 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use tokio::time::timeout;
+use tokio::time::timeout_at;
 
-use crate::admin::{AdminState, target_slug};
+use crate::{
+    admin::{AdminState, target_slug},
+    core::{CommitGate, with_commit_gate},
+};
 
 /// The admin collection route whose `POST` creates a document.
 pub(crate) const COLLECTION_ROUTE: &str = "/admin/collections/{slug}";
@@ -100,16 +115,39 @@ async fn deadline_for(state: &AdminState, parts: &mut Parts) -> Option<Duration>
     file_route_deadline(state, slug)
 }
 
-/// Run `request` through `next` within `limit`, answering `408 Request
-/// Timeout` once it has passed.
+/// The request's answer once its handler finished: `408` when its deadline
+/// passed with nothing committed — a write that reached its commit too late
+/// rolled back — else the handler's own.
+fn settled(gate: &CommitGate, response: Response) -> Response {
+    if gate.expired() {
+        return StatusCode::REQUEST_TIMEOUT.into_response();
+    }
+
+    response
+}
+
+/// Run `request` through `next` within `limit` under the request's commit
+/// gate, answering `408 Request Timeout` once it has passed with nothing
+/// committed (see the module docs).
 async fn run_within(limit: Option<Duration>, request: Request, next: Next) -> Response {
-    let Some(limit) = limit else {
+    // A deadline beyond what an `Instant` can hold is never reached.
+    let Some(deadline) = limit.and_then(|limit| Instant::now().checked_add(limit)) else {
         return next.run(request).await;
     };
 
-    timeout(limit, next.run(request))
-        .await
-        .unwrap_or_else(|_| StatusCode::REQUEST_TIMEOUT.into_response())
+    let gate = CommitGate::new(deadline);
+    let mut handler = pin!(with_commit_gate(gate.clone(), next.run(request)));
+
+    if let Ok(response) = timeout_at(deadline.into(), &mut handler).await {
+        return settled(&gate, response);
+    }
+
+    if gate.expire() {
+        return StatusCode::REQUEST_TIMEOUT.into_response();
+    }
+
+    // A write already committed: "nothing happened" would be false.
+    handler.await
 }
 
 /// Router middleware enforcing the request's deadline (see the module docs).
@@ -126,11 +164,14 @@ pub(crate) async fn request_deadline(
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::mpsc, thread};
+
     use axum::{Router, body::Body, middleware::from_fn, routing::get};
     use tokio::time::sleep;
     use tower::ServiceExt;
 
     use super::*;
+    use crate::core::{RequestDeadlinePassed, admit_request_commit, spawn_request_blocking};
     #[cfg(feature = "sqlite")]
     use crate::{
         admin::test_state::test_admin_state_with_registry,
@@ -218,5 +259,89 @@ mod tests {
 
         assert_eq!(quick, StatusCode::OK);
         assert_eq!(unbounded, StatusCode::OK);
+    }
+
+    /// Serve one request whose handler is `handler`, within `limit`.
+    async fn status_of<F, Fut>(limit: Duration, handler: F) -> StatusCode
+    where
+        F: FnOnce() -> Fut + Clone + Send + Sync + 'static,
+        Fut: Future<Output = &'static str> + Send + 'static,
+    {
+        let app = Router::new().route("/", get(handler)).layer(from_fn(
+            move |request: Request, next: Next| run_within(Some(limit), request, next),
+        ));
+
+        app.oneshot(Request::new(Body::empty()))
+            .await
+            .unwrap()
+            .status()
+    }
+
+    /// Regression: the `408` raced only the handler future, while the write
+    /// ran on an uncancellable blocking thread and committed afterwards — the
+    /// client was told nothing happened, re-submitted, and created a
+    /// duplicate. A write reaching its commit after the deadline is now
+    /// refused, so the `408` holds.
+    #[tokio::test]
+    async fn a_write_reaching_its_commit_after_a_408_is_refused() {
+        let (sent, outcome) = mpsc::channel();
+
+        let status = status_of(Duration::from_millis(20), move || async move {
+            let _ = spawn_request_blocking(move || {
+                thread::sleep(Duration::from_millis(150));
+                sent.send(admit_request_commit()).unwrap();
+            })
+            .await;
+
+            "done"
+        })
+        .await;
+
+        assert_eq!(status, StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(
+            outcome.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Err(RequestDeadlinePassed),
+            "the late write rolls back"
+        );
+    }
+
+    /// A request whose write committed before the deadline is not answered
+    /// `408` when its remaining work overruns — the change happened, so the
+    /// handler's own answer is the true one.
+    #[tokio::test]
+    async fn a_committed_write_is_answered_by_its_handler_past_the_deadline() {
+        let status = status_of(Duration::from_millis(50), || async {
+            spawn_request_blocking(admit_request_commit)
+                .await
+                .unwrap()
+                .expect("in time");
+
+            sleep(Duration::from_millis(200)).await;
+
+            "done"
+        })
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    /// A handler that returns before the timer fires, but whose write reached
+    /// its commit past the deadline (and was refused), is answered `408` too;
+    /// one whose write committed keeps its own answer.
+    #[test]
+    fn a_settled_request_answers_408_only_when_nothing_committed() {
+        let late = CommitGate::new(Instant::now());
+        assert!(late.admit_commit().is_err());
+        assert_eq!(
+            settled(&late, "error page".into_response()).status(),
+            StatusCode::REQUEST_TIMEOUT
+        );
+
+        let in_time = CommitGate::new(Instant::now() + Duration::from_mins(1));
+        assert!(in_time.admit_commit().is_ok());
+        assert_eq!(
+            settled(&in_time, "done".into_response()).status(),
+            StatusCode::OK
+        );
     }
 }

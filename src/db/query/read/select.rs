@@ -1,14 +1,63 @@
-//! `apply_select_filter` and `apply_select_to_document` — column/field selection filtering.
+//! The document SELECT list ([`document_select_named`]) and the `select`
+//! projection over it (`apply_select_filter`, `apply_select_to_document`).
 
 use std::collections::HashSet;
 
-use crate::{core::Document, db::query::helpers::column_belongs_to};
+use anyhow::Result;
+
+use crate::{
+    core::{CollectionDefinition, Document},
+    db::{
+        LocaleContext,
+        query::{
+            REVISION_COLUMN, get_column_names, get_locale_select_columns_full,
+            helpers::{column_belongs_to, quote_ident},
+        },
+    },
+};
+
+/// The SELECT expressions a collection document is read with, each paired with
+/// the name it comes back under: the field columns (per locale when locales are
+/// on), the gated system columns, and the document's revision.
+///
+/// The one column list every document read builds on — `find`, `find_by_id`
+/// and the auth lookups — so a system column a read returns can never be
+/// present on one of them and missing on another.
+///
+/// # Errors
+///
+/// Returns an error if any field name conflicts with locale-suffixed naming.
+pub(crate) fn document_select_named(
+    def: &CollectionDefinition,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<(Vec<String>, Vec<String>)> {
+    let (mut exprs, mut names) = match locale_ctx {
+        Some(ctx) if ctx.config.is_enabled() => get_locale_select_columns_full(
+            &def.fields,
+            def.timestamps,
+            def.soft_delete,
+            def.has_drafts(),
+            ctx,
+        )?,
+        _ => {
+            let names = get_column_names(def);
+            let quoted = names.iter().map(|n| quote_ident(n)).collect();
+            (quoted, names)
+        }
+    };
+
+    exprs.push(quote_ident(REVISION_COLUMN));
+    names.push(REVISION_COLUMN.to_string());
+
+    Ok((exprs, names))
+}
 
 /// Filter SELECT columns based on a `select` list. If `select` is None or empty,
 /// returns all columns (backward compat). Always includes `id`, `created_at`,
-/// `updated_at`, and `_status` (the latter so cursor pagination can encode the
-/// composite `(_status, sort_col, id)` order regardless of caller-provided
-/// `select`). A selected field keeps every column it stores
+/// `updated_at`, `_status` (so cursor pagination can encode the composite
+/// `(_status, sort_col, id)` order regardless of caller-provided `select`) and
+/// `_revision` (a projected read still hands back the revision a later write
+/// sends as its precondition). A selected field keeps every column it stores
 /// ([`column_belongs_to`]): per-locale columns, a group's sub-columns, and its
 /// `_tz` / `_lang` companions.
 pub(super) fn apply_select_filter(
@@ -28,7 +77,7 @@ pub(super) fn apply_select_filter(
     for (expr, name) in select_exprs.into_iter().zip(result_names) {
         let dominated_by_select = matches!(
             name.as_str(),
-            "id" | "created_at" | "updated_at" | "_status"
+            "id" | "created_at" | "updated_at" | "_status" | REVISION_COLUMN
         ) || selected.iter().any(|field| column_belongs_to(&name, field));
 
         if dominated_by_select {
@@ -40,13 +89,15 @@ pub(super) fn apply_select_filter(
     (out_exprs, out_names)
 }
 
-/// Strip fields not in `select` from a document. Always keeps `id`.
+/// Strip fields not in `select` from a document. Always keeps `id` and the
+/// document's `_revision`.
 /// Used for post-query field stripping (e.g., after `find_by_id`).
 pub fn apply_select_to_document(doc: &mut Document, select: &[String]) {
     let selected: HashSet<&str> = select.iter().map(std::string::String::as_str).collect();
 
-    doc.fields
-        .retain(|key, _| selected.iter().any(|field| column_belongs_to(key, field)));
+    doc.fields.retain(|key, _| {
+        key == REVISION_COLUMN || selected.iter().any(|field| column_belongs_to(key, field))
+    });
 
     if !selected.contains("created_at") {
         doc.created_at = None;

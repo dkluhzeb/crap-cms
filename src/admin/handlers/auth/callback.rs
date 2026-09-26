@@ -18,7 +18,6 @@ use axum::{
     http::{HeaderMap, Method},
     response::{IntoResponse, Redirect, Response},
 };
-use tokio::task;
 use tracing::{error, warn};
 
 use crate::{
@@ -38,6 +37,7 @@ use crate::{
     core::{
         Builder, Document, HookRef,
         collection::{Auth, Surface},
+        spawn_request_blocking,
     },
     hooks::lifecycle::AuthStrategyInput,
     service::{
@@ -170,7 +170,7 @@ async fn run_auth_callback_hook(
     let collection = request.collection.to_string();
     let ctx = hook_context(request);
 
-    let result = task::spawn_blocking(move || {
+    let result = spawn_request_blocking(move || {
         run_auth_strategy_blocking(&infra, &hook_ref, &collection, &ctx)
     })
     .await
@@ -287,7 +287,7 @@ async fn authenticate_callback(
         hook_doc,
     };
 
-    task::spawn_blocking(move || admit_callback_user(&input))
+    spawn_request_blocking(move || admit_callback_user(&input))
         .await
         .inspect_err(|e| error!("Auth callback admission task error: {}", e))
         .ok()
@@ -547,6 +547,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE users (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 email TEXT,
                 _locked INTEGER DEFAULT 0,
                 _verified INTEGER DEFAULT 1,

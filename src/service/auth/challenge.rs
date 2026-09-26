@@ -123,6 +123,10 @@ fn mint_pending_token(
 /// Generate a 6-digit code, then store and deliver it (built-in email or the
 /// collection's `mfa_deliver` hook) in the background: the surface answers
 /// the challenge without waiting on the delivery channel.
+///
+/// Detached from the request on purpose (plain `spawn_blocking`, not the
+/// request scope): the challenge was already answered, so the delivery's own
+/// commit must not be refused by that request's deadline.
 fn spawn_code_delivery(infra: &Arc<AppInfra>, req: &ChallengeRequest<'_>) {
     let infra = Arc::clone(infra);
     let delivery = MfaCodeDelivery {

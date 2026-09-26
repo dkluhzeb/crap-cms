@@ -49,6 +49,10 @@ pub(crate) struct GlobalUpdateOptions {
     /// Set `false` for a quiet write.
     #[lua(optional)]
     pub(crate) events: bool,
+    /// The global's revision this write is based on — the `_revision` of the
+    /// read it edits. Set, the write fails with a revision conflict when
+    /// anyone has written the global since; nil writes unconditionally.
+    pub(crate) expected_revision: Option<i64>,
 }
 
 impl Default for GlobalUpdateOptions {
@@ -59,6 +63,7 @@ impl Default for GlobalUpdateOptions {
             hooks: true,
             draft: false,
             events: true,
+            expected_revision: None,
         }
     }
 }
@@ -133,6 +138,7 @@ fn globals_update(
         .locale_ctx(locale_ctx)
         .draft(opts.draft)
         .events(opts.events)
+        .expected_revision(opts.expected_revision)
         .build();
 
     let (doc, _) = UpdateGlobal::run(&ctx, args)

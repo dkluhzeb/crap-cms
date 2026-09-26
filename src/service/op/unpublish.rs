@@ -1,33 +1,23 @@
 //! The `unpublish` operation.
 
 use crate::{
-    core::Document,
+    core::{Builder, Document},
     service::{ServiceContext, ServiceError, unpublish_document},
 };
 
 use super::Operation;
 
 /// Owned arguments for [`Unpublish`].
+#[derive(Builder)]
 pub struct UnpublishArgs {
+    #[builder(required)]
     pub id: String,
     /// Publish a mutation event for this write (request `events` flag).
+    #[builder(default = true)]
     pub events: bool,
-}
-
-impl UnpublishArgs {
-    #[must_use]
-    pub fn new(id: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            events: true,
-        }
-    }
-
-    #[must_use]
-    pub fn events(mut self, events: bool) -> Self {
-        self.events = events;
-        self
-    }
+    /// The document revision the caller last read. Set, the unpublish is
+    /// refused with a conflict when the document has been written since.
+    pub expected_revision: Option<i64>,
 }
 
 /// Revert a document to draft status. The service gate rejects unpublish on
@@ -47,6 +37,6 @@ impl Operation for Unpublish {
     }
 
     fn run(ctx: &ServiceContext<'_>, args: Self::Args) -> Result<Self::Output, ServiceError> {
-        unpublish_document(ctx, &args.id)
+        unpublish_document(ctx, &args.id, args.expected_revision)
     }
 }

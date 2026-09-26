@@ -8,7 +8,7 @@ use axum::{
     response::Response,
 };
 
-use serde_json::{Value, json};
+use serde_json::Value;
 use tracing::warn;
 
 use crate::{
@@ -23,16 +23,17 @@ use crate::{
         handlers::{
             collections::shared::{locked_field, password_field, upload_form_context},
             shared::{
-                EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
-                collection_base, compute_denied_read_fields, editor_locale_ctx, editor_read_ctx,
-                enrich_field_contexts, extract_doc_status, extract_editor_locale,
-                fetch_version_sidebar_data, flatten_document_values, get_user_doc,
-                is_non_default_locale, lookup_ref_count, not_found, paths, render_page,
-                require_collection, service_error_to_admin_response, split_sidebar_fields,
+                EnrichOptions, FormReadDenials, HxNav, PageRequest, apply_display_conditions,
+                build_field_contexts, collection_base, compute_denied_read_fields, condition_data,
+                editor_locale_ctx, editor_read_ctx, enrich_field_contexts, extract_doc_status,
+                extract_editor_locale, fetch_version_sidebar_data, flatten_document_values,
+                get_user_doc, is_non_default_locale, lookup_ref_count, not_found, paths,
+                readable_form_fields, render_page, require_collection,
+                service_error_to_admin_response, split_sidebar_fields,
             },
         },
     },
-    core::{AuthUser, Claims, CollectionDefinition, Document, FieldDenial, upload},
+    core::{AuthUser, Claims, CollectionDefinition, Document, upload},
     db::{DbPool, LocaleContext},
     hooks::ConditionContext,
     service::{
@@ -79,19 +80,20 @@ fn prepare_edit_fields(
     document: &Document,
     id: &str,
     editor_locale: Option<&str>,
-    denied_read_fields: &[FieldDenial],
+    denied_read_fields: &FormReadDenials,
     auth_user: Option<&Extension<AuthUser>>,
 ) -> Result<(Vec<FieldContext>, Vec<FieldContext>), ServiceError> {
     // The service read already stripped read-denied *values* (data-aware), so
-    // this view of the data carries only readable values; `denied_read_fields`
-    // is used below only to drop the denied fields' input contexts.
+    // this view of the data carries only readable values; the form renders
+    // no input at all for a field the viewer may not read, at any depth.
     let visible_fields = document.fields.clone();
+    let form_fields = readable_form_fields(&def.fields, &denied_read_fields.flat);
 
-    let values = flatten_document_values(&visible_fields, &def.fields);
+    let values = flatten_document_values(&visible_fields, &form_fields);
     let non_default_locale = is_non_default_locale(state, editor_locale);
 
     let mut fields = build_field_contexts(
-        &def.fields,
+        &form_fields,
         &values,
         &HashMap::new(),
         true,
@@ -101,7 +103,7 @@ fn prepare_edit_fields(
     let locale_ctx = editor_locale_ctx(&state.config.locale, editor_locale);
     enrich_field_contexts(
         &mut fields,
-        &def.fields,
+        &form_fields,
         &visible_fields,
         state,
         &EnrichOptions::builder(&HashMap::new())
@@ -113,15 +115,9 @@ fn prepare_edit_fields(
             .build(),
     );
 
-    // Drop top-level denied field contexts so no empty input renders for them.
-    if !denied_read_fields.is_empty() {
-        fields.retain(|fc| {
-            let name = fc.base().name.as_str();
-            !denied_read_fields.iter().any(|d| d.display_path() == name)
-        });
-    }
+    // Each row renders the sub-fields its viewer may read in that row.
+    denied_read_fields.rows.prune(&mut fields);
 
-    let form_data_json = json!(visible_fields);
     let cond_ctx = ConditionContext {
         collection: &def.slug,
         operation: "update",
@@ -132,8 +128,8 @@ fn prepare_edit_fields(
     };
     apply_display_conditions(
         &mut fields,
-        &def.fields,
-        &form_data_json,
+        &form_fields,
+        &condition_data(&def.fields, &visible_fields),
         &state.infra.hook_runner,
         true,
         &cond_ctx,
@@ -464,6 +460,7 @@ fn build_edit_page_context(input: EditPageContextInput<'_>) -> CollectionEditPag
         document_title: doc_title,
         ref_count: lookup_ref_count(&input.state.infra.pool, input.slug, input.id),
         upload,
+        revision: input.document.revision(),
     }
 }
 

@@ -3,7 +3,7 @@
 //! registry, translations) to drive a handler helper. Integration tests in
 //! `tests/admin_*.rs` build their own state via [`test_support`](super::test_support).
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use r2d2_sqlite::SqliteConnectionManager;
 use tokio_util::sync::CancellationToken;
@@ -40,7 +40,22 @@ pub(crate) fn test_admin_state_with_registry(registry: Registry) -> AdminState {
     test_admin_state_full(false, registry)
 }
 
+/// Like [`test_admin_state`] but running hooks — access rules included — from
+/// `hooks_dir`, so a test can evaluate real rules (e.g. the example config's
+/// `access.*` modules).
+pub(crate) fn test_admin_state_with_hooks(hooks_dir: &Path) -> AdminState {
+    test_admin_state_in(false, Registry::default(), Some(hooks_dir))
+}
+
 fn test_admin_state_full(default_deny: bool, registry: Registry) -> AdminState {
+    test_admin_state_in(default_deny, registry, None)
+}
+
+fn test_admin_state_in(
+    default_deny: bool,
+    registry: Registry,
+    hooks_dir: Option<&Path>,
+) -> AdminState {
     let tmp = tempfile::tempdir().unwrap();
     let manager = SqliteConnectionManager::memory();
     let pool = DbPool::from_pool(r2d2::Pool::builder().max_size(4).build(manager).unwrap());
@@ -48,7 +63,7 @@ fn test_admin_state_full(default_deny: bool, registry: Registry) -> AdminState {
     let mut config = CrapConfig::test_default();
     config.access.default_deny = default_deny;
     let hook_runner = HookRunner::builder()
-        .config_dir(tmp.path())
+        .config_dir(hooks_dir.unwrap_or(tmp.path()))
         .registry(Arc::clone(&registry))
         .config(&config)
         .build()

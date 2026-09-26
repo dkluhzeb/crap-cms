@@ -28,13 +28,24 @@
             data-collection-slug="{{global.slug}}"
             data-global-slug="{{global.slug}}"
           >
+            {{#if (and global.has_drafts perms.update)}}
+              {{> partials/implicit-submit}}
+            {{/if}}
             {{slot "global_edit_toolbar"}}
+            <input
+              type="hidden"
+              name="_revision"
+              value="{{revision}}"
+            />
             {{#if has_editor_locales}}
               <input
                 type="hidden"
                 name="_locale"
                 value="{{editor_locale}}"
               />
+            {{/if}}
+            {{#if revision_conflict}}
+              {{> partials/revision-conflict}}
             {{/if}}
             <div class="edit-layout">
               <div class="edit-layout__content">{{> globals/edit_form}}</div>

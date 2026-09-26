@@ -92,6 +92,10 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         Some(self.runner.registry())
     }
 
+    fn overrides_access(&self) -> bool {
+        self.override_access
+    }
+
     fn run_before_write(
         &self,
         hooks: &Hooks,

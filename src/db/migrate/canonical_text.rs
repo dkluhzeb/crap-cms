@@ -32,7 +32,7 @@ use crate::{
                 Scan, block_paths, field_paths, for_each_row, holds_leaf, update_by_id,
                 versioned_fingerprint,
             },
-            meta,
+            meta, search_index,
         },
         query::{
             helpers::{global_table, join_table, prefixed_name, walk_leaf_fields},
@@ -219,6 +219,11 @@ fn canonicalize_one(
             "Stored {rewritten} email or text value(s) of '{}' in canonical form",
             target.slug()
         );
+    }
+
+    // The rewrite bypassed the per-write search upsert.
+    if rewritten > 0 && matches!(target, Target::Collection(..)) {
+        search_index::invalidate(conn, target.slug())?;
     }
 
     meta::upsert(conn, &key, &gate)

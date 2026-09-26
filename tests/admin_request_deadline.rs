@@ -5,25 +5,30 @@
 
 mod admin_collections_support;
 
-use std::{io, net::SocketAddr, time::Duration};
+use std::{fs, io, net::SocketAddr, time::Duration};
 
 use axum::{
     body::{Body, Bytes},
     extract::ConnectInfo,
     http::{Request, Response, StatusCode},
 };
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use tokio_stream::{StreamExt, iter, pending};
 use tower::ServiceExt;
 
 use crap_cms::{
     config::CrapConfig,
-    core::{auth, collection::CollectionDefinition, upload::CollectionUpload},
-    db::query,
+    core::{
+        HookRef, auth,
+        collection::{Activation, AuthMethod, CollectionDefinition, SurfaceSet},
+        upload::CollectionUpload,
+    },
+    db::{DbConnection, query},
 };
 
 use admin_collections_support::{
-    TEST_CSRF, TestApp, create_test_user, make_posts_def, make_users_def, setup_app_with_config,
+    TEST_CSRF, TestApp, auth_and_csrf, create_test_user, make_auth_cookie, make_posts_def,
+    make_users_def, setup_app_with_config,
 };
 
 /// How long a test waits for a response before concluding the server is
@@ -170,4 +175,137 @@ async fn a_route_into_a_collection_without_uploads_keeps_the_request_timeout() {
     let response = send(app, request).await.expect("cut by the deadline");
 
     assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+}
+
+/// A `before_change` hook that keeps the save busy for two to three seconds
+/// of wall time (`os.time` ticks in whole seconds).
+const SLOW_HOOK: &str = "local M = {}
+function M.wait(ctx)
+    local started = os.time()
+    while os.time() - started < 3 do end
+    return ctx
+end
+return M
+";
+
+/// Rows in `posts`.
+fn post_count(app: &TestApp) -> i64 {
+    let conn = app.pool.get().unwrap();
+
+    conn.query_one("SELECT COUNT(*) AS c FROM posts", &[])
+        .unwrap()
+        .unwrap()
+        .get_i64("c")
+        .unwrap()
+}
+
+/// Regression: the `408` raced only the handler future, while the save ran
+/// on an uncancellable blocking thread and committed afterwards — the editor,
+/// told the save timed out, re-submitted and created a duplicate. The save
+/// that overruns its request's deadline now rolls back, so after a `408` no
+/// document exists, even once the hook has long finished.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_save_answered_408_commits_nothing() {
+    let mut posts = make_posts_def();
+    posts.hooks.before_change = vec!["hooks.slow.wait".into()];
+
+    let mut slow_config = config(1, 0);
+    slow_config.hooks.max_instructions = 0;
+
+    let app = setup_app_with_config(vec![make_users_def(), posts], vec![], slow_config);
+
+    let hooks_dir = app.tmp.path().join("hooks");
+    fs::create_dir_all(&hooks_dir).unwrap();
+    fs::write(hooks_dir.join("slow.lua"), SLOW_HOOK).unwrap();
+
+    let user_id = create_test_user(&app, "slow_save@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "slow_save@test.com");
+
+    let request = Request::post("/admin/collections/posts")
+        .header("cookie", auth_and_csrf(&cookie))
+        .header("X-CSRF-Token", TEST_CSRF)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+        .body(Body::from("title=Late"))
+        .unwrap();
+
+    let response = timeout(WAIT, app.router.clone().oneshot(request))
+        .await
+        .expect("answered")
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+
+    // Let the hook finish and the save reach its commit.
+    sleep(Duration::from_secs(4)).await;
+
+    assert_eq!(post_count(&app), 0, "the timed-out save committed nothing");
+}
+
+/// A per-request auth strategy that provisions something (a post, standing in
+/// for a first-sight user) and then keeps the request busy for two to three
+/// seconds of wall time before naming its user.
+const SLOW_STRATEGY: &str = r#"
+return function(ctx)
+    local uid = ctx.headers["x-sso-user"]
+    if not uid then return nil end
+    crap.collections.create("posts", { title = "provisioned" })
+    local started = os.time()
+    while os.time() - started < 3 do end
+    return { id = uid }
+end
+"#;
+
+/// Regression: the account flows — auth strategies, auth callbacks, login,
+/// logout, MFA, password reset, email verification — ran their writes outside
+/// the request's commit gate, so a request answered `408` could still change
+/// an account (provision a user, consume a token) a moment later. A strategy
+/// whose write reaches its commit after the deadline now rolls back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_auth_strategy_answered_408_commits_nothing() {
+    let mut users = make_users_def();
+    users
+        .auth
+        .as_mut()
+        .unwrap()
+        .methods
+        .push(AuthMethod::Strategy {
+            name: "sso".into(),
+            authenticate: HookRef::new("auth.sso"),
+            activates_on: Activation::header("x-sso-user"),
+            surfaces: SurfaceSet::admin_only(),
+        });
+
+    let mut slow_config = config(1, 0);
+    slow_config.hooks.max_instructions = 0;
+
+    let app = setup_app_with_config(vec![users, make_posts_def()], vec![], slow_config);
+
+    let auth_dir = app.tmp.path().join("auth");
+    fs::create_dir_all(&auth_dir).unwrap();
+    fs::write(auth_dir.join("sso.lua"), SLOW_STRATEGY).unwrap();
+
+    let user_id = create_test_user(&app, "slow_sso@test.com", "pass123");
+
+    let request = Request::get("/admin")
+        .header("x-sso-user", &user_id)
+        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = timeout(WAIT, app.router.clone().oneshot(request))
+        .await
+        .expect("answered")
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+
+    // Let the strategy finish and its transaction reach its commit.
+    sleep(Duration::from_secs(4)).await;
+
+    assert_eq!(
+        post_count(&app),
+        0,
+        "the timed-out strategy committed nothing"
+    );
 }

@@ -211,6 +211,7 @@ async fn an_empty_list_clears_a_has_many_field_through_a_before_validate_hook() 
             locale: None,
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .expect("an empty list clears the field");

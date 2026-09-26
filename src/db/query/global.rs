@@ -7,7 +7,7 @@ use crate::{
     db::{
         DbConnection, DbRow, DbValue, LocaleContext,
         query::{
-            collect_column_names, get_locale_select_columns,
+            REVISION_COLUMN, collect_column_names, get_locale_select_columns,
             helpers::{global_table, quote_ident, utc_now},
             join::hydrate_document,
             read::decode_row,
@@ -29,14 +29,7 @@ pub fn get_global(
 ) -> Result<Document> {
     let table_name = global_table(slug);
 
-    let (select_exprs, result_names) = match locale_ctx {
-        Some(ctx) if ctx.config.is_enabled() => get_global_locale_columns(def, ctx)?,
-        _ => {
-            let names = get_global_column_names(def);
-            let quoted = names.iter().map(|n| quote_ident(n)).collect();
-            (quoted, names)
-        }
-    };
+    let (select_exprs, result_names) = global_select_named(def, locale_ctx)?;
 
     let sql = format!(
         "SELECT {} FROM \"{}\" WHERE id = 'default'",
@@ -98,6 +91,28 @@ pub fn update_global(
         .with_context(|| format!("Failed to update global '{slug}'"))?;
 
     get_global(conn, slug, def, locale_ctx)
+}
+
+/// The SELECT expressions the global's row is read with, each paired with the
+/// name it comes back under — the global twin of the collection document
+/// SELECT list, revision included.
+fn global_select_named(
+    def: &GlobalDefinition,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<(Vec<String>, Vec<String>)> {
+    let (mut exprs, mut names) = match locale_ctx {
+        Some(ctx) if ctx.config.is_enabled() => get_global_locale_columns(def, ctx)?,
+        _ => {
+            let names = get_global_column_names(def);
+            let quoted = names.iter().map(|n| quote_ident(n)).collect();
+            (quoted, names)
+        }
+    };
+
+    exprs.push(quote_ident(REVISION_COLUMN));
+    names.push(REVISION_COLUMN.to_string());
+
+    Ok((exprs, names))
 }
 
 fn get_global_column_names(def: &GlobalDefinition) -> Vec<String> {
@@ -198,6 +213,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE _global_settings (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 site_name TEXT,
                 tagline TEXT,
                 created_at TEXT,
@@ -217,6 +233,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE _global_site (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 site_name__en TEXT,
                 site_name__de TEXT,
                 social__github TEXT,
@@ -338,6 +355,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE _global_prefs (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 newsletter INTEGER DEFAULT 0,
                 created_at TEXT,
                 updated_at TEXT
@@ -363,6 +381,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE _global_branding (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 colors__primary TEXT,
                 colors__secondary TEXT,
                 created_at TEXT,
@@ -425,6 +444,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE _global_branding (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 colors__primary TEXT,
                 colors__secondary TEXT,
                 created_at TEXT,
@@ -472,6 +492,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE _global_settings (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 config__theme TEXT,
                 config__cache_ttl TEXT,
                 created_at TEXT,

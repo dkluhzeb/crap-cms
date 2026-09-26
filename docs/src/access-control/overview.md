@@ -69,6 +69,18 @@ The `trash` view (`trash = true`) and version history (`list_versions`) are
 access-denied error rather than silently substituting live rows. A denied write
 (`create`/`update`/`delete`) returns a 403.
 
+**A write reports only what its caller may read.** A write needs only its own
+key (`create`, `update`, …), but the document it returns sits in a content view:
+the published view after a publish, the draft view after a draft save, a draft
+create or an unpublish. When the caller may not see the document in that view —
+`read` (or its row constraint) for published content, `draft` for draft content,
+`trash` for a trashed document — the response carries only the document's `id`,
+`_status` and `_revision`; otherwise it is stripped by field rules like any read.
+So an author allowed to `update` but not to see drafts (`draft = "reviewers"`)
+saves a draft and gets back its id, never the merged pending draft that may hold
+other editors' unsaved edits. The same applies to globals, whose views are
+boolean.
+
 You never write a `_status` filter yourself — each key scopes its own view. See
 [Collection-Level](collection-level.md) for the per-key configuration and
 [Filter Constraints](filter-constraints.md) for what a returned filter table may

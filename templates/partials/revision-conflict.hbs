@@ -1,0 +1,23 @@
+{{!-- partials/revision-conflict
+     Notice over an edit form whose save was refused because someone else
+     saved the document after the form was loaded. The form still holds the
+     editor's unsaved values and now carries the document's current
+     revision, so submitting it again overwrites the other change.
+
+     Context: `revision_conflict` — `reload_url` (the edit page, reloaded
+     with the saved document) and `action` (the `_action` the refused save
+     was submitted with, which the overwrite button submits again). --}}
+{{#> partials/warning-card title_key="revision_conflict_title"}}
+  <p>{{t "revision_conflict_body"}}</p>
+  <div class="form__actions">
+    {{> partials/htmx-nav-link href=revision_conflict.reload_url label_key="revision_conflict_reload" variant="secondary"}}
+    <button
+      type="submit"
+      name="_action"
+      value="{{revision_conflict.action}}"
+      class="button button--primary"
+    >
+      {{t "revision_conflict_overwrite"}}
+    </button>
+  </div>
+{{/partials/warning-card}}

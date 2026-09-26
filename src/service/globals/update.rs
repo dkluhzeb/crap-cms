@@ -7,17 +7,22 @@ use crate::{
         Document, DocumentFields, collection::GlobalDefinition, event::EventOperation,
         reject_nul_characters,
     },
-    db::{DbConnection, LocaleContext, query, query::helpers::global_table},
-    hooks::{
-        AccessCheckInput, HookContext, ValidationCtx, lifecycle::access::has_any_field_access,
+    db::{
+        DbConnection, LocaleContext, query,
+        query::{StoredRow, helpers::global_table},
     },
+    hooks::{AccessCheckInput, HookContext, ValidationCtx},
     service::{
-        AfterChangeInput, Gated, ServiceContext, ServiceError, WriteHooks, WriteInput, WriteResult,
-        admit_global_update_input, global_access_allowed, helpers as svc_helpers,
+        AfterChangeInput, Gated, NonObjectGroups, ServiceContext, ServiceError, UpdateStored,
+        WriteHooks, WriteInput, WriteResult, admit_global_update_input, draft_save_base,
+        global_access_allowed, helpers as svc_helpers,
         persist::{DraftDocumentArgs, draft_document},
-        run_after_change_hooks, run_pool_write,
+        run_after_change_hooks, run_pool_write, update_strip_needs_stored,
         versions::{self, VersionSnapshotCtx},
-        write::reject_locale_locked_fields,
+        write::{
+            PendingDraft, PublishStored, WriterHeldGate, claim_revision,
+            refuse_unreadable_references, reject_locale_locked_fields,
+        },
     },
 };
 
@@ -53,7 +58,7 @@ struct GlobalBeforeWrite<'a> {
 /// Load the stored global that field-level `access.update` rules judge as
 /// `ctx.document` — the global twin of
 /// [`stored_fields_for_update_rules`](crate::service::stored_fields_for_update_rules).
-/// Skips the read when no field configures `access.update`.
+/// Skips the read when no field configures `access.update` or `access.read`.
 ///
 /// # Errors
 ///
@@ -64,11 +69,71 @@ pub(crate) fn stored_global_fields_for_update_rules(
     def: &GlobalDefinition,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<DocumentFields> {
-    if !has_any_field_access(&def.fields, |f| f.access.update.as_ref()) {
+    if !update_strip_needs_stored(&def.fields) {
         return Ok(DocumentFields::default());
     }
 
     Ok(query::get_global(conn, slug, def, locale_ctx)?.fields)
+}
+
+/// The global twin of the collection update's field strip (`admit_update`):
+/// write-denied fields are stripped (each `access.update` rule sees `ctx.data`
+/// = its level and `ctx.document` = the stored global, never the patch), every
+/// value the writer cannot read is kept as it is (judged against what the
+/// write replaces: the pending draft for a draft save, else the stored global),
+/// the request's non-object groups are refused, and the pending draft a
+/// publish makes live is returned — stripped and kept the same way per locale.
+///
+/// # Errors
+///
+/// Returns a backend error if the stored global or its draft cannot be read,
+/// or the non-object group refusal.
+fn strip_global_input(
+    ctx: &ServiceContext,
+    conn: &dyn DbConnection,
+    input: &mut WriteInput<'_>,
+    (pending_draft, groups): (PendingDraft, NonObjectGroups),
+) -> Result<Option<Value>> {
+    let def = ctx.global_def()?;
+    let write_hooks = ctx.write_hooks()?;
+    let gtable = global_table(ctx.slug);
+
+    let stored = stored_global_fields_for_update_rules(conn, ctx.slug, def, input.locale_ctx)?;
+    let draft = draft_save_base(
+        conn,
+        &StoredRow {
+            table: &gtable,
+            id: "default",
+            fields: &def.fields,
+            locale_ctx: input.locale_ctx,
+        },
+        input.draft && def.has_drafts() && def.has_versions(),
+    )?;
+    write_hooks.strip_write_access_update(
+        &def.fields,
+        &mut input.data,
+        UpdateStored::new(&stored, draft.as_ref().unwrap_or(&stored)),
+        ctx.slug,
+        ctx.user,
+        input.locale_ctx.map(LocaleContext::access_locale),
+    );
+
+    // A non-object group the strip left is refused; one it dropped is silent.
+    groups.refuse_unstripped(&input.data)?;
+
+    // The draft goes live as ONE unit, so the locales this request does not
+    // target come from the snapshot — stripped and kept exactly like the
+    // merged data above, each locale against the global as it stores it.
+    let load = |locale_ctx: Option<&LocaleContext>| {
+        stored_global_fields_for_update_rules(conn, ctx.slug, def, locale_ctx)
+    };
+
+    pending_draft.publishing_snapshot(
+        ctx,
+        write_hooks,
+        PublishStored::new(&stored, &load),
+        input.locale_ctx,
+    )
 }
 
 /// Update a global document.
@@ -145,10 +210,10 @@ fn update_global_gated(
 
     // The admission prefix the `validate` dry-run runs too: canonicalize the
     // incoming data, adopt the pending draft as the write's base (publishing
-    // means the same thing on a global as on a collection), and reject a
+    // means the same thing on a global as on a collection), and refuse a
     // non-default-locale write that carries a locale-locked field rather than
-    // silently skipping it.
-    let pending_draft = admit_global_update_input(ctx, def, &mut input)?;
+    // silently skipping it — once the access gate has admitted the caller.
+    let admission = admit_global_update_input(ctx, def, &mut input)?;
 
     check_global_update_access(
         ctx,
@@ -158,26 +223,17 @@ fn update_global_gated(
         input.locale_ctx.map(LocaleContext::access_locale),
     )?;
 
+    // The input's refusal, raised only past the access gate (see `Admission`).
+    let admitted = admission.admit()?;
+
+    // The collection update's revision step (`admit_update`): under the lock,
+    // after the access gate, in this transaction.
+    claim_revision(conn, &gtable, "default", input.expected_revision)?;
+
     let is_draft = input.draft && def.has_drafts();
     let ui_locale = ctx.ui_locale.as_deref();
 
-    // Data-aware write strip (each `access.update` rule sees `ctx.data` = its
-    // level and `ctx.document` = the stored global, never the patch).
-    let stored = stored_global_fields_for_update_rules(conn, ctx.slug, def, input.locale_ctx)?;
-    write_hooks.strip_write_access_update(
-        &def.fields,
-        &mut input.data,
-        &stored,
-        ctx.slug,
-        ctx.user,
-        input.locale_ctx.map(LocaleContext::access_locale),
-    );
-
-    // The draft goes live as ONE unit, so the locales this request does not
-    // target come from the snapshot — stripped by the publisher's own
-    // field-level write access, exactly like the merged data above.
-    let publishing_draft =
-        pending_draft.publishing_snapshot(ctx, write_hooks, &stored, input.locale_ctx)?;
+    let publishing_draft = strip_global_input(ctx, conn, &mut input, admitted)?;
 
     let final_ctx = run_global_before_write_hooks(
         write_hooks,
@@ -295,6 +351,15 @@ fn run_global_before_write_hooks(
     // validation, so the completeness gate judges that snapshot rather than the
     // locales it is about to replace.
     let conn = ctx.resolve_conn()?;
+
+    // The stored values a resubmitted value no check would now accept may lean
+    // on — only what this writer may read.
+    let held_gate = WriterHeldGate::builder(write_hooks, ctx.slug, &def.fields)
+        .draft_access(def.access.resolve_draft())
+        .user(ctx.user)
+        .locale(input.locale_ctx.map(LocaleContext::access_locale))
+        .build();
+
     let val_ctx = ValidationCtx::builder(conn.as_ref(), call.gtable)
         .exclude_id(Some("default"))
         .draft(call.is_draft)
@@ -303,6 +368,7 @@ fn run_global_before_write_hooks(
         .ui_locale(ctx.ui_locale.as_deref())
         .locale_overlay(call.locale_overlay)
         .versioned_drafts(def.has_drafts())
+        .held_gate(Some(&held_gate))
         .build();
 
     Ok(write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?)
@@ -402,8 +468,10 @@ fn persist_global_published_update(
         locale_ctx,
     )?;
 
-    // A refused reference is reported on the field holding it.
+    // A refused reference — to a missing document, or a new one to a document
+    // the writer may not read — is reported on the field holding it.
     query::ref_count::after_update(conn, gtable, "default", &def.fields, &locale_cfg, &old_refs)
+        .and_then(|added| refuse_unreadable_references(ctx, &added, locale_ctx))
         .map_err(|e| query::ref_count::anchor_to_fields(e, &def.fields, &final_ctx.data))?;
 
     if def.has_versions() {

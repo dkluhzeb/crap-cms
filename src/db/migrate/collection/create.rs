@@ -7,8 +7,8 @@ use serde_json::Value;
 use tracing::{debug, info, warn};
 
 use super::system_columns::{
-    AUTH_COLUMNS, DRAFT_STATUS_COLUMN, MFA_COLUMNS, REF_COUNT_COLUMN, TOTP_COLUMNS,
-    VERIFY_EMAIL_COLUMNS,
+    AUTH_COLUMNS, DRAFT_STATUS_COLUMN, MFA_COLUMNS, REF_COUNT_COLUMN, REVISION_COLUMN,
+    TOTP_COLUMNS, VERIFY_EMAIL_COLUMNS,
 };
 use crate::{
     config::LocaleConfig,
@@ -29,7 +29,7 @@ use crate::{
 /// `table` is the name to create it under. That is the collection's slug
 /// everywhere but the soft-delete rebuild, which assembles the replacement
 /// under a temporary name and renames it into place afterwards. No indexes are
-/// created here — `sync_indexes` owns those, and a rebuild depends on the
+/// created here — the index sync owns those, and a rebuild depends on the
 /// temporary table carrying none that would collide with the managed names.
 pub(crate) fn create_collection_table(
     conn: &dyn DbConnection,
@@ -84,6 +84,7 @@ fn collect_system_columns(
     }
 
     columns.push(REF_COUNT_COLUMN.to_string());
+    columns.push(REVISION_COLUMN.to_string());
 
     if def.is_auth_collection() {
         columns.extend(AUTH_COLUMNS.iter().map(|c| (*c).to_string()));
@@ -865,7 +866,7 @@ mod tests {
     }
 
     /// A `unique` field carries no inline `UNIQUE` on a new table: the managed
-    /// index `sync_indexes` creates is the one enforcement point, so a field
+    /// index the schema sync creates is the one enforcement point, so a field
     /// that gains `unique` later ends up with exactly the same constraint as
     /// one created with it.
     #[test]

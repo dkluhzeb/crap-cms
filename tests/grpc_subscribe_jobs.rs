@@ -444,6 +444,7 @@ async fn subscribe_receives_update_event() {
             locale: None,
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -586,6 +587,7 @@ async fn subscribe_global_events() {
             data: Some(make_struct(&[("site_name", "My Site")])),
             locale: None,
             draft: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();

@@ -5,14 +5,14 @@ use serde_json::{Map, Value};
 
 use crate::{
     core::{
-        Document, DocumentFields, FieldChildren, FieldDefinition, FieldType,
+        BLOCK_TYPE_KEY, Document, DocumentFields, FieldChildren, FieldDefinition, FieldType,
         collection::VersionsConfig, field_children, flatten_group_fields, nest_group_fields,
         walk_leaf_fields,
     },
     db::{
         DbConnection, LocaleContext, query,
         query::{
-            VersionWrite,
+            REVISION_COLUMN, VersionWrite,
             helpers::{locale_column, prefixed_name},
             locale_locked_field_names,
         },
@@ -67,6 +67,11 @@ pub(crate) fn save_draft_version(args: &SaveDraftArgs<'_>) -> Result<Value> {
     // overlay nor the join re-merge can bake a non-default-locale edit of a
     // shared field into the snapshot.
     flattened.retain(|k, _| !locked.contains(k));
+
+    // A caller that sends a document it read back as the write's data carries
+    // its `_revision` along. The revision belongs to the row, never to a
+    // version: recorded in the snapshot it would resurface as a stale value.
+    flattened.remove(REVISION_COLUMN);
 
     // The snapshot stands in for the stored row: every value in the form its
     // write stores and a read returns (a checkbox as a boolean, JSON parsed, a
@@ -307,7 +312,8 @@ fn merge_join_data_prefixed(
                 let key = prefixed_name(prefix, &field.name);
 
                 if let Some(v) = data.get(&key) {
-                    obj.insert(field.name.clone(), v.clone());
+                    let merged = merge_rows_by_id(obj.get(&field.name), v);
+                    obj.insert(field.name.clone(), merged);
                 }
             }
             FieldChildren::Group(sub) => {
@@ -352,6 +358,46 @@ fn merge_join_data_prefixed(
             }
         }
     }
+}
+
+/// The rows an edit of a list leaves in the draft: each incoming row matched
+/// by `id` to a row of the draft's base (of the same block type) keeps every
+/// top-level value it does not send — exactly as the row writer keeps a
+/// stored row's columns — so a value the write held back (one its writer may
+/// not read or write) is not dropped from the draft. Any other row is taken
+/// as sent.
+fn merge_rows_by_id(base: Option<&Value>, incoming: &Value) -> Value {
+    let (Some(Value::Array(base)), Value::Array(rows)) = (base, incoming) else {
+        return incoming.clone();
+    };
+
+    let merged = rows
+        .iter()
+        .map(|row| {
+            let Some(base_row) = base_row_of(base, row) else {
+                return row.clone();
+            };
+
+            let mut out = base_row.clone();
+            if let Value::Object(fields) = row {
+                out.extend(fields.clone());
+            }
+
+            Value::Object(out)
+        })
+        .collect();
+
+    Value::Array(merged)
+}
+
+/// The base row an incoming `row` edits: the one with its `id` and block type.
+fn base_row_of<'a>(base: &'a [Value], row: &Value) -> Option<&'a Map<String, Value>> {
+    let id = row.get("id").and_then(Value::as_str)?;
+
+    base.iter()
+        .filter_map(Value::as_object)
+        .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(id))
+        .filter(|candidate| candidate.get(BLOCK_TYPE_KEY) == row.get(BLOCK_TYPE_KEY))
 }
 
 #[cfg(test)]
@@ -571,7 +617,7 @@ mod tests {
         data.insert("rows".into(), json!([{ "_block_type": "hero" }]));
         data.insert("ignored".into(), json!([{ "y": 2 }]));
 
-        let mut obj = serde_json::Map::new();
+        let mut obj = Map::new();
         merge_join_data_into_snapshot(&mut obj, &fields, &data);
 
         assert_eq!(obj.get("tags"), Some(&json!(["t1"])));
@@ -585,9 +631,58 @@ mod tests {
     #[test]
     fn absent_data_keys_are_skipped() {
         let fields = vec![FieldDefinition::builder("items", FieldType::Array).build()];
-        let mut obj = serde_json::Map::new();
+        let mut obj = Map::new();
         merge_join_data_into_snapshot(&mut obj, &fields, &DocumentFields::new());
         assert!(obj.is_empty());
+    }
+
+    /// Regression: a draft save replaced a list wholesale, so a row value the
+    /// write held back (a sub-field its writer may not read, left out of the
+    /// row) was dropped from the draft — and a later save of that draft
+    /// blanked it. A row matched by `id` keeps what it does not send; a new
+    /// row and a row whose block type changed are taken as sent.
+    #[test]
+    fn a_draft_row_keeps_the_values_its_edit_does_not_send() {
+        let fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("caption", FieldType::Text).build(),
+                    FieldDefinition::builder("secret", FieldType::Text).build(),
+                ])
+                .build(),
+            FieldDefinition::builder("body", FieldType::Blocks).build(),
+        ];
+
+        let mut obj = Map::new();
+        obj.insert(
+            "items".into(),
+            json!([{ "id": "r1", "caption": "a", "secret": "s" }]),
+        );
+        obj.insert(
+            "body".into(),
+            json!([{ "id": "b1", "_block_type": "quote", "text": "t", "source": "x" }]),
+        );
+
+        let mut data = DocumentFields::new();
+        data.insert(
+            "items".into(),
+            json!([{ "id": "r1", "caption": "b" }, { "caption": "new" }]),
+        );
+        data.insert(
+            "body".into(),
+            json!([{ "id": "b1", "_block_type": "image", "url": "u" }]),
+        );
+
+        merge_join_data_into_snapshot(&mut obj, &fields, &data);
+
+        assert_eq!(
+            obj["items"],
+            json!([{ "id": "r1", "caption": "b", "secret": "s" }, { "caption": "new" }])
+        );
+        assert_eq!(
+            obj["body"],
+            json!([{ "id": "b1", "_block_type": "image", "url": "u" }])
+        );
     }
 
     /// Regression: a has-many Upload is join-table-backed exactly like a
@@ -607,7 +702,7 @@ mod tests {
         data.insert("gallery".into(), json!(["m1", "m2"]));
 
         // Snapshot as `build_snapshot` produced it: the stale pre-edit selection.
-        let mut obj = serde_json::Map::new();
+        let mut obj = Map::new();
         obj.insert("gallery".into(), json!(["m0"]));
 
         merge_join_data_into_snapshot(&mut obj, &fields, &data);
@@ -639,7 +734,7 @@ mod tests {
 
         // Snapshot as `build_snapshot` produced it: the group is nested, its
         // join child holding the stale (empty) DB data.
-        let mut obj = serde_json::Map::new();
+        let mut obj = Map::new();
         obj.insert("meta".into(), json!({ "things": [] }));
 
         merge_join_data_into_snapshot(&mut obj, &fields, &data);

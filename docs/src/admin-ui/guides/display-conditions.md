@@ -25,6 +25,26 @@ The second `ctx` argument carries `collection`, `operation` (`"create"` or `"upd
 
 The `data` parameter is typed per-collection (`crap.data.Posts`, `crap.global_data.SiteSettings`) for IDE autocomplete. The type generator emits these types automatically.
 
+### What `data` holds
+
+A condition sees the form's values in **one shape, wherever it is evaluated** — the edit form's first render, the create form, the re-render after a failed save, the live re-evaluation as you type, and the browser's evaluation of a condition table. The values are decoded the way a save stores them:
+
+| Field | Value in `data` |
+|-------|-----------------|
+| Checkbox | `true` / `false` (an unchecked box is `false`) |
+| Number | a number (`5`, not `"5"`); numbers compare by value, so `5` equals `5.0` |
+| Text, textarea | the text, NFC-composed |
+| Email | the address trimmed, lowercased and NFC-composed |
+| Any input left empty | `nil` |
+| A `has_many` field (select, text, number, relationship) | a list |
+| A field inside a group | nested under the group: `data.seo.title` |
+| Array / blocks | a list of rows |
+| Date | its stored form, a UTC instant: a day is noon UTC (`2026-01-15` → `"2026-01-15T12:00:00.000Z"`), a date and time is UTC (`2026-01-15T09:30` → `"2026-01-15T09:30:00.000Z"`) — or, for a field with `timezone = true`, the time in the chosen zone converted to UTC. A time alone or a month keeps its text (`"14:30"`, `"2026-01"`) |
+
+On the **create form** the condition sees each field's `default_value` — the values the inputs render with — so a field shown by a default select option starts visible. After a failed save it sees the values that were submitted.
+
+A field you may not read is not in `data` (it is not in the form either).
+
 Use `crap-cms make hook` with `--type condition` to scaffold condition hooks:
 
 ```bash
@@ -72,6 +92,8 @@ end)
 
 ## Condition Table Operators
 
+`field` names a top-level field by its name, and a field inside a group by its dotted path (`"seo.title"`) or its form name (`"seo__title"`) — both resolve the same. A field with no value compares as `nil`. Values compare by type: a checkbox condition is `equals = true`, a number condition `equals = 5`.
+
 | Operator | Example | Description |
 |----------|---------|-------------|
 | `equals` | `{ field = "type", equals = "link" }` | Exact match |
@@ -116,19 +138,26 @@ When the user changes a form field:
 
 When the user changes a form field:
 1. JavaScript debounces for 300ms
-2. POSTs current form data to `/admin/collections/{slug}/evaluate-conditions`
-3. Server calls each boolean condition function
+2. POSTs the form's current values to `/admin/collections/{slug}/evaluate-conditions` (`/admin/globals/{slug}/…` for a global), keyed by each field's form name (`seo__title` for `title` inside group `seo`), with the edited document's `document_id` (none on a create form) and the editor `locale`
+3. Server decodes the values into the condition data described above — against the fields the edit form rendered for its viewer, so a field the viewer may not read (which has no input) is `nil`, as on the first render and in the browser — and calls each boolean condition function with `ctx.locale` set to the editor locale
 4. Response updates field visibility
+
+Custom inputs (relationship, upload, tags) and array/blocks row changes (add, remove, reorder) re-evaluate conditions too.
+
+## Fields Inside Array and Blocks Rows
+
+`admin.condition` is **not supported** on a field inside an array or blocks row, and the server refuses to start with one: a condition judges the whole form, and a row has no scope of its own, so such a condition could never apply. Put the condition on the array/blocks field itself, or move the field out of the row. A condition on a field inside a group, row, collapsible or tab works as on a top-level field.
 
 ## Sidebar Fields
 
 Display conditions work on fields in any position, including sidebar fields (`admin.position = "sidebar"`).
 
-## Safe Defaults
+## Failure Modes
 
-- If a condition function throws an error, the field remains **visible** (safe default)
-- If the condition returns `nil`, the field remains **visible**
+- If a condition function throws an error, returns a malformed condition table, or returns anything but a boolean, a table or `nil`, the field is **hidden** (fail closed) and the server logs a warning
+- If the condition returns `nil`, the field is **visible** (no condition)
 - On page load, fields are hidden server-side before rendering (no flash)
+- A hidden field's inputs are still submitted with the form
 
 ## Complexity Limits
 

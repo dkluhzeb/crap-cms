@@ -41,6 +41,25 @@ impl AuthConfig {
 
         Ok(())
     }
+
+    /// [`resolve_secret`](Self::resolve_secret) without writing anything: the
+    /// persisted secret when there is one, else a random one for this process
+    /// alone. For a command that only checks a project and must leave it as
+    /// it found it (`crap-cms check`); a server never runs on it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the persisted secret exists but can't be read.
+    pub fn resolve_secret_read_only(&mut self, config_dir: &Path) -> Result<()> {
+        if !self.secret.is_empty() {
+            return Ok(());
+        }
+
+        let persisted = read_secret(&config_dir.join("data").join(".jwt_secret"))?;
+        self.secret = JwtSecret::new(persisted.unwrap_or_else(|| nanoid!(64)));
+
+        Ok(())
+    }
 }
 
 /// Load the persisted secret, or generate and persist a new one. Generation
@@ -191,6 +210,25 @@ mod tests {
     use std::thread;
 
     use super::*;
+
+    /// The read-only resolution uses a persisted secret and otherwise writes
+    /// nothing.
+    #[test]
+    fn resolve_read_only_writes_nothing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        let mut fresh = AuthConfig::default();
+        fresh.resolve_secret_read_only(tmp.path()).unwrap();
+        assert!(!fresh.secret.is_empty());
+        assert!(!tmp.path().join("data").exists(), "nothing is written");
+
+        let mut persisted = AuthConfig::default();
+        persisted.resolve_secret(tmp.path()).unwrap();
+
+        let mut read = AuthConfig::default();
+        read.resolve_secret_read_only(tmp.path()).unwrap();
+        assert_eq!(read.secret.into_inner(), persisted.secret.into_inner());
+    }
 
     #[test]
     fn resolve_generates_and_persists() {

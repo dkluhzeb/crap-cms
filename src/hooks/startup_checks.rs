@@ -10,6 +10,9 @@
 //!   (for uploads: upload-enabled) target collection.
 //! - `join_limits` — no join lists more than `[pagination] max_limit`.
 //! - `richtext_nodes` — rich text fields list only registered custom nodes.
+//! - `row_conditions` — no `admin.condition` on a field inside an array or
+//!   blocks row.
+//! - `run_all` — the boot runs every gate and reports every problem together.
 //! - This file — locale/field-name collisions, table-name collisions, job
 //!   cron schedules, `required_locales`, and the advisory warnings
 //!   (public lifecycle views, MCP reserved-argument shadowing).
@@ -25,6 +28,8 @@ mod pages;
 mod relation_targets;
 mod richtext_nodes;
 mod routes;
+mod row_conditions;
+mod run_all;
 
 pub use auth_methods::validate_auth_methods;
 pub use default_sort::validate_admin_default_sorts;
@@ -34,6 +39,8 @@ pub use pages::validate_pages;
 pub use relation_targets::validate_relation_targets;
 pub use richtext_nodes::validate_richtext_nodes;
 pub use routes::validate_routes;
+pub use row_conditions::validate_row_conditions;
+pub(crate) use run_all::run_startup_checks;
 
 use std::collections::{HashMap, HashSet};
 

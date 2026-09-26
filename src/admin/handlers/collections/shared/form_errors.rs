@@ -3,30 +3,34 @@
 use std::collections::HashMap;
 
 use axum::{Extension, response::Response};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::{
     admin::{
         AdminState,
         context::{
             BasePageContext, CollectionContext, CollectionPermissions, DocumentRef, PageMeta,
-            PageType, field::FieldContext, page::collections::CollectionFormErrorPage,
+            PageType,
+            field::FieldContext,
+            page::{RevisionConflictNotice, collections::CollectionFormErrorPage},
         },
         handlers::{
             forms::FormData,
             shared::{
-                EnrichOptions, ErrorLabels, HxNav, PageRequest, apply_display_conditions,
-                build_field_contexts, editor_read_ctx, enrich_field_contexts, forbidden,
-                get_user_doc, is_non_default_locale, page_with_toast, paths, redirect_response,
-                split_sidebar_fields, translate_validation_errors, ui_locale_of,
+                EnrichOptions, ErrorLabels, FormReadDenials, HxNav, PageRequest,
+                apply_display_conditions, build_field_contexts, collection_read_denials,
+                conflict_keeps_form, editor_read_ctx, enrich_field_contexts, forbidden,
+                form_condition_data, get_user_doc, is_non_default_locale, page_with_toast, paths,
+                readable_form_fields, redirect_response, split_sidebar_fields,
+                translate_validation_errors, ui_locale_of, unpublish_conflict_response,
                 write_error_response,
             },
         },
     },
-    core::{AuthUser, CollectionDefinition, FieldDefinition, ValidationError},
+    core::{AuthUser, Builder, CollectionDefinition, FieldDefinition, ValidationError},
     db::LocaleContext,
     hooks::ConditionContext,
-    service::ServiceError,
+    service::{RevisionConflict, ServiceError},
 };
 
 use super::{locked_field, password_field};
@@ -63,20 +67,20 @@ pub(in crate::admin::handlers::collections) fn collect_upload_hidden_fields(
 /// They are not document data, so they never reach the write's `DocumentFields`
 /// — but the form did render them, and an error re-render has to put them back:
 /// without `_locale` the corrected save writes a translation into the default
-/// locale's columns, and without `_locked` the update reads the missing box as
-/// an explicit unlock.
-#[derive(Debug, Clone, Copy, Default)]
+/// locale's columns, without `_locked` the update reads the missing box as
+/// an explicit unlock, and without `_revision` the corrected save would no
+/// longer be checked against the revision the editor loaded.
+#[derive(Debug, Clone, Copy, Default, Builder)]
 pub(in crate::admin::handlers::collections) struct SubmittedMeta<'a> {
     /// The content locale the form was submitted in (`_locale`).
     pub locale: Option<&'a str>,
     /// The lock box as the user left it — auth collections, edit only.
     pub locked: Option<bool>,
-}
-
-impl<'a> SubmittedMeta<'a> {
-    pub fn new(locale: Option<&'a str>, locked: Option<bool>) -> Self {
-        Self { locale, locked }
-    }
+    /// The document revision the form was loaded at (`_revision`) — edit only.
+    pub revision: Option<i64>,
+    /// The action the form was submitted with (`_action`), which the
+    /// revision-conflict notice's overwrite button submits again.
+    pub action: Option<&'a str>,
 }
 
 /// Parameters for re-rendering a form with errors.
@@ -92,6 +96,9 @@ pub(in crate::admin::handlers::collections) struct FormErrorParams<'a> {
     /// How the submit was issued — an htmx form post targeting `#main` gets
     /// the fragment back, not a second full document.
     pub hx: HxNav,
+    /// Set when the save was refused because the document changed since the
+    /// form was loaded.
+    pub conflict: Option<RevisionConflictNotice>,
 }
 
 /// Re-add the auth-collection inputs the write handler took out of the form.
@@ -119,32 +126,20 @@ fn append_auth_fields(
     fields.extend(auth);
 }
 
-/// The submitted values as the display-condition evaluator sees them. Only an
-/// edit has a document to condition against; a create conditions on nothing,
-/// exactly as the create form does.
-fn condition_form_json(p: &FormErrorParams<'_>) -> Value {
-    if p.doc_id.is_none() {
-        return json!({});
-    }
-
-    json!(
-        p.form
-            .raw()
-            .iter()
-            .map(|(k, v)| (k.clone(), Value::String(v.clone())))
-            .collect::<Map<String, Value>>()
-    )
-}
-
 /// Build, enrich, condition and split the field contexts for the re-render,
-/// in the locale the form was submitted in.
+/// in the locale the form was submitted in. The fields the viewer may not read
+/// (`denied`) get no input, exactly as on the edit form — in each row, what the
+/// viewer may not read in that row.
 fn prepare_error_fields(
     p: &FormErrorParams<'_>,
     locale_ctx: Option<&LocaleContext>,
     non_default_locale: bool,
+    denied: &FormReadDenials,
 ) -> (Vec<FieldContext>, Vec<FieldContext>) {
+    let form_fields = readable_form_fields(&p.def.fields, &denied.flat);
+
     let mut fields = build_field_contexts(
-        &p.def.fields,
+        &form_fields,
         p.form.raw(),
         p.error_map,
         true,
@@ -160,11 +155,13 @@ fn prepare_error_fields(
 
     enrich_field_contexts(
         &mut fields,
-        &p.def.fields,
+        &form_fields,
         p.form.join(),
         p.state,
         &enrich_opts.build(),
     );
+
+    denied.rows.prune(&mut fields);
 
     let cond_ctx = ConditionContext {
         collection: &p.def.slug,
@@ -179,10 +176,12 @@ fn prepare_error_fields(
         options: None,
     };
 
+    // The submitted values, decoded like the write they were meant for — the
+    // same data view the edit and create forms condition on.
     apply_display_conditions(
         &mut fields,
-        &p.def.fields,
-        &condition_form_json(p),
+        &form_fields,
+        &form_condition_data(&p.def.fields, p.form),
         &p.state.infra.hook_runner,
         true,
         &cond_ctx,
@@ -208,8 +207,13 @@ pub(in crate::admin::handlers::collections) async fn render_form_with_error(
     let locale_ctx = editor_read_ctx(p.state, p.meta.locale);
     let non_default_locale = is_non_default_locale(p.state, p.meta.locale);
 
+    let denied = match p.doc_id {
+        Some(id) => collection_read_denials(p.state, p.def, id, p.auth_user, p.meta.locale).await,
+        None => FormReadDenials::default(),
+    };
+
     let (main_fields, sidebar_fields) =
-        prepare_error_fields(p, locale_ctx.as_ref(), non_default_locale);
+        prepare_error_fields(p, locale_ctx.as_ref(), non_default_locale, &denied);
 
     let editing = p.doc_id.is_some();
     let (page_type, page_key) = if editing {
@@ -253,6 +257,8 @@ pub(in crate::admin::handlers::collections) async fn render_form_with_error(
         has_drafts: p.def.has_drafts(),
         unsaved: true,
         upload_hidden_fields,
+        revision: p.meta.revision,
+        revision_conflict: p.conflict.clone(),
     };
 
     page_with_toast(
@@ -310,6 +316,45 @@ async fn render_form_validation_errors(p: &ValidationRender<'_>, ve: &Validation
         toast_msg,
         meta: p.meta,
         hx: p.hx,
+        conflict: None,
+    })
+    .await
+}
+
+/// Re-render the edit form after its save was refused by a revision conflict.
+///
+/// The editor's unsaved values stay in the form, which now carries the
+/// document's current revision: the notice offers a reload (the saved
+/// document, discarding the edits) or an overwrite, which resubmits the form
+/// with the same action at that revision.
+async fn render_revision_conflict(
+    p: &WriteErrorParams<'_>,
+    conflict: RevisionConflict,
+) -> Response {
+    let locale = ui_locale_of(p.auth_user);
+    let id = p.doc_id.unwrap_or_default();
+
+    let notice = RevisionConflictNotice::new(
+        paths::collection_item(&p.def.slug, id),
+        p.meta.action.unwrap_or_default(),
+    );
+
+    let meta = SubmittedMeta {
+        revision: Some(conflict.current),
+        ..p.meta
+    };
+
+    render_form_with_error(&FormErrorParams {
+        state: p.state,
+        def: p.def,
+        form: p.form,
+        error_map: &HashMap::new(),
+        doc_id: p.doc_id,
+        auth_user: p.auth_user,
+        toast_msg: p.state.translations.get(locale, "revision_conflict_title"),
+        meta,
+        hx: p.hx,
+        conflict: Some(notice),
     })
     .await
 }
@@ -337,6 +382,9 @@ enum WriteErrorResponse {
     Forbidden,
     /// Re-render the form with inline field errors.
     Validation,
+    /// The edited document was saved by someone else after the form was
+    /// loaded — re-render with the conflict notice.
+    Conflict,
     /// The edited document vanished (deleted in another tab) — navigate back.
     RedirectToItem,
     /// Generic error toast over the re-rendered form.
@@ -354,6 +402,7 @@ fn classify_write_error(editing: bool, err: &ServiceError) -> WriteErrorResponse
     match err {
         ServiceError::AccessDenied(_) => WriteErrorResponse::Forbidden,
         ServiceError::Validation(_) => WriteErrorResponse::Validation,
+        ServiceError::Conflict(_) if editing => WriteErrorResponse::Conflict,
         ServiceError::NotFound(_) if editing => WriteErrorResponse::RedirectToItem,
         _ => WriteErrorResponse::Toast,
     }
@@ -408,6 +457,17 @@ pub(in crate::admin::handlers::collections) async fn handle_collection_write_err
 
             write_error_response(p.state, ui_locale_of(p.auth_user), op_label(editing), p.err)
         }
+        WriteErrorResponse::Conflict => {
+            if !conflict_keeps_form(p.meta.action.unwrap_or_default()) {
+                return unpublish_conflict_response(p.state, ui_locale_of(p.auth_user));
+            }
+
+            if let ServiceError::Conflict(conflict) = p.err {
+                return render_revision_conflict(&p, conflict).await;
+            }
+
+            write_error_response(p.state, ui_locale_of(p.auth_user), op_label(editing), p.err)
+        }
         WriteErrorResponse::Toast => {
             write_error_response(p.state, ui_locale_of(p.auth_user), op_label(editing), p.err)
         }
@@ -439,6 +499,22 @@ mod tests {
             classify_write_error(false, &ServiceError::NotFound("gone".into())),
             WriteErrorResponse::Toast,
             "create: no target, NotFound is a real error → toast, never redirect"
+        );
+    }
+
+    /// A revision conflict re-renders the edit form with the conflict notice;
+    /// a create has no revision to conflict on, so one would be a real error.
+    #[test]
+    fn a_revision_conflict_re_renders_only_an_edit() {
+        let conflict = || ServiceError::Conflict(RevisionConflict::new(1, 2));
+
+        assert_eq!(
+            classify_write_error(true, &conflict()),
+            WriteErrorResponse::Conflict
+        );
+        assert_eq!(
+            classify_write_error(false, &conflict()),
+            WriteErrorResponse::Toast
         );
     }
 
@@ -535,7 +611,10 @@ mod tests {
         append_auth_fields(
             &mut fields,
             true,
-            SubmittedMeta::new(Some("de"), Some(true)),
+            SubmittedMeta::builder()
+                .locale(Some("de"))
+                .locked(Some(true))
+                .build(),
             &HashMap::new(),
         );
 
@@ -587,7 +666,7 @@ mod tests {
             append_auth_fields(
                 &mut fields,
                 true,
-                SubmittedMeta::new(None, locked),
+                SubmittedMeta::builder().locked(locked).build(),
                 &HashMap::new(),
             );
 

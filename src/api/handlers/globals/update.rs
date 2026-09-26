@@ -47,6 +47,7 @@ impl ContentService {
             .locale_ctx(locale_ctx)
             .events(req.events.unwrap_or(true))
             .draft(req.draft.unwrap_or(false))
+            .expected_revision(req.expected_revision)
             .build();
 
         let principal = Principal::Credentials(Credentials {

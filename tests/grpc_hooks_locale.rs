@@ -475,6 +475,7 @@ async fn create_and_find_with_locale_all() {
             locale: Some("de".to_string()),
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -627,6 +628,7 @@ async fn publish_draft() {
             locale: None,
             draft: Some(false),
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -688,6 +690,7 @@ async fn update_global_with_nested_fields() {
             }),
             locale: None,
             draft: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -1057,6 +1060,7 @@ async fn update_with_invalid_locale_returns_invalid_argument() {
             locale: Some("zz".to_string()),
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap_err();
@@ -1127,6 +1131,7 @@ async fn partial_update_omitting_required_localized_field_is_allowed() {
             locale: Some("en".to_string()),
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .expect("partial update omitting an untouched required field must be allowed");
@@ -1289,6 +1294,7 @@ async fn localized_required_group_subfield_nested_roundtrip() {
             locale: Some("en".to_string()),
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .expect("omitting an untouched required group sub-field must be allowed");

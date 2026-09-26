@@ -7,14 +7,13 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Response,
 };
-use tokio::task;
 use tracing::error;
 
 use crate::{
     admin::{
         AdminState, FormData, handlers::shared::response::on_blocking_section, parse_multipart_form,
     },
-    core::{CollectionDefinition, Document, upload::UploadedFile},
+    core::{CollectionDefinition, Document, spawn_request_blocking, upload::UploadedFile},
     service::{
         AppInfra, ServiceContext, ServiceError,
         upload::{CreateUploadInput, UploadCreateResult, create_upload as create_upload_document},
@@ -115,7 +114,7 @@ pub(super) async fn create_upload(
         image_max_attempts: state.config.jobs.system_image_max_attempts(),
     };
 
-    let result = task::spawn_blocking(move || create_upload_blocking(input)).await;
+    let result = spawn_request_blocking(move || create_upload_blocking(input)).await;
 
     match result {
         Ok(Ok(UploadCreateResult { doc, .. })) => {

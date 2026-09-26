@@ -220,6 +220,7 @@ fn an_all_locales_upload_write_is_refused() {
             upload_max_file_size: MAX_FILE_SIZE,
             image_max_attempts: FALLBACK_MAX_ATTEMPTS,
             form_echoes_locked_fields: false,
+            expected_revision: None,
         },
     )
     .err()
@@ -265,7 +266,7 @@ fn unpublishing_releases_a_file_its_pruning_orphaned() {
     let ctx = ServiceContext::collection("media", &def)
         .infra(&infra)
         .build();
-    unpublish_document(&ctx, &published.id).expect("unpublish");
+    unpublish_document(&ctx, &published.id, None).expect("unpublish");
 
     assert!(
         !infra.storage.exists(&first_key).expect("exists"),

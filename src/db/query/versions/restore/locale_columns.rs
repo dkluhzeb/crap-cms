@@ -239,6 +239,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE events (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 start_date__en TEXT,
                 start_date__de TEXT,
                 start_date_tz__en TEXT,
@@ -330,6 +331,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title__en TEXT,
                 title__de TEXT,
                 title__fr TEXT,
@@ -407,6 +409,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE events (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 start_date__en TEXT,
                 start_date__de TEXT,
                 start_date_tz__en TEXT,
@@ -482,6 +485,7 @@ mod tests {
         conn.execute_batch(&format!(
             "CREATE TABLE snippets (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 snippet__en TEXT,
                 snippet__de TEXT,
                 snippet_lang__en TEXT,
@@ -534,6 +538,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE people (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 work__en TEXT,
                 work__de TEXT,
                 _status TEXT DEFAULT 'published',
@@ -595,6 +600,7 @@ mod tests {
         conn.execute_batch(&format!(
             "CREATE TABLE snippets (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 snippet__en TEXT,
                 snippet__de TEXT,
                 snippet_lang__en TEXT,

@@ -11,7 +11,6 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
 };
-use tokio::task::spawn_blocking;
 
 use crate::admin::{
     AdminState,
@@ -25,7 +24,7 @@ use crate::admin::{
         shared::paths,
     },
 };
-use crate::core::{AuthUser, collection::Surface, with_label_locale};
+use crate::core::{AuthUser, collection::Surface, spawn_request_blocking, with_label_locale};
 use crate::db::BoxedConnection;
 use crate::service::{
     self, AppInfra,
@@ -235,7 +234,7 @@ pub(in crate::admin) async fn auth_middleware(
         headers_map: headers_to_map(request.headers()),
     };
 
-    let resolution = spawn_blocking(move || resolve_auth(&params)).await;
+    let resolution = spawn_request_blocking(move || resolve_auth(&params)).await;
 
     let Ok(outcome) = resolution else {
         return login_redirect(&request);

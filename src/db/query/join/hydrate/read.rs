@@ -816,7 +816,7 @@ mod tests {
     fn setup_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, meta__note TEXT);
+            "CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, meta__note TEXT);
              CREATE TABLE posts_items (
                  id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, label TEXT
              );
@@ -926,7 +926,7 @@ mod tests {
     fn batch_hydrate_array_locale_fallback_is_per_parent() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+            "CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0);
              CREATE TABLE posts_items (
                  id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER,
                  _locale TEXT, label TEXT

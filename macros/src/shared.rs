@@ -77,6 +77,23 @@ pub(crate) struct LuaField {
     /// Combine with `applies_to` to flatten only in matching views.
     #[darling(default)]
     pub(crate) flatten: bool,
+
+    /// `layout` — used only by `LuaFieldTypeViews`. Ignored by
+    /// `LuaAnnotation`. Marks a common field (no `applies_to`) that a
+    /// layout wrapper accepts too: it is emitted on the container's
+    /// `layout_base` class, which the base class extends, instead of on the
+    /// base class itself.
+    #[darling(default)]
+    pub(crate) layout: bool,
+
+    /// `virtual_field` — used only by `LuaFieldTypeViews`. Ignored by
+    /// `LuaAnnotation`. Marks a common field (no `applies_to`) that a virtual
+    /// field (one with no stored value, e.g. a join) accepts too: it is
+    /// emitted on the container's `virtual_base` class, which the base class
+    /// extends, instead of on the base class itself. A `layout` field needs no
+    /// mark: the virtual base extends the layout base.
+    #[darling(default)]
+    pub(crate) virtual_field: bool,
 }
 
 // ── Doc-comment extraction ───────────────────────────────────────────

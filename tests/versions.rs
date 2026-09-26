@@ -1128,6 +1128,119 @@ fn service_update_publish_updates_main_table() {
     assert_eq!(status.as_deref(), Some("published"));
 }
 
+/// Every lifecycle write moves the document's revision exactly once — a draft
+/// save included, although it leaves the published row's content alone — and
+/// each reports the revision it moved to. The draft view carries the row's
+/// revision (a snapshot never records one), and a write holding a revision
+/// that has moved on is refused without recording anything.
+#[test]
+fn every_lifecycle_write_moves_the_revision_once() {
+    let def = make_versioned_def();
+    let ts = setup_service(vec![def.clone()]);
+    let pool = &ts.pool;
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .pool(pool)
+        .runner(&ts.runner)
+        .build();
+    let fields =
+        |title: &str| -> DocumentFields { [("title".into(), json!(title))].into_iter().collect() };
+
+    let (doc, _) =
+        service::create_document(&ctx, service::WriteInput::builder(fields("v0")).build()).unwrap();
+    assert_eq!(doc.revision(), Some(0));
+
+    // A draft save moves the row's revision and reports it.
+    let (draft, _) = service::update_document(
+        &ctx,
+        &doc.id,
+        service::WriteInput::builder(fields("draft"))
+            .draft(true)
+            .expected_revision(Some(0))
+            .build(),
+    )
+    .unwrap();
+    assert_eq!(draft.revision(), Some(1));
+
+    // The draft view carries the row's revision, the snapshot none.
+    let conn = pool.get().unwrap();
+    let draft_view = crap_cms::db::ops::find_by_id_full(crap_cms::db::ops::FindByIdFullParams {
+        conn: &conn,
+        slug: "articles",
+        def: &def,
+        id: &doc.id,
+        locale_ctx: None,
+        constraints: None,
+        snapshot_constraints: Vec::new(),
+        use_draft: true,
+        include_deleted: false,
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(draft_view.get_str("title"), Some("draft"));
+    assert_eq!(draft_view.revision(), Some(1));
+
+    let versions = query::list_versions(&conn, "articles", &doc.id, false, None, None).unwrap();
+    assert!(
+        versions
+            .iter()
+            .all(|v| v.snapshot.get("_revision").is_none()),
+        "a version snapshot never records the revision"
+    );
+    drop(conn);
+
+    // A save from before the draft save is refused and records nothing.
+    let err = service::update_document(
+        &ctx,
+        &doc.id,
+        service::WriteInput::builder(fields("stale"))
+            .expected_revision(Some(0))
+            .build(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, service::ServiceError::Conflict(c) if c.expected == 0 && c.current == 1),
+        "{err:?}"
+    );
+
+    // Publish, unpublish and restore each move it once more.
+    let (published, _) = service::update_document(
+        &ctx,
+        &doc.id,
+        service::WriteInput::builder(DocumentFields::new())
+            .expected_revision(Some(1))
+            .build(),
+    )
+    .unwrap();
+    assert_eq!(published.revision(), Some(2));
+
+    let unpublished = service::unpublish_document(&ctx, &doc.id, Some(2)).unwrap();
+    assert_eq!(unpublished.revision(), Some(3));
+
+    let conn = pool.get().unwrap();
+    let first = query::list_versions(&conn, "articles", &doc.id, false, None, None)
+        .unwrap()
+        .into_iter()
+        .last()
+        .expect("the create's version");
+    drop(conn);
+
+    let restored = service::restore_collection_version(
+        &ctx,
+        &doc.id,
+        &first.id,
+        &CrapConfig::default().locale,
+    )
+    .unwrap();
+    assert_eq!(restored.revision(), Some(4));
+
+    let conn = pool.get().unwrap();
+    assert_eq!(
+        query::read_revision(&conn, "articles", &doc.id).unwrap(),
+        Some(4),
+        "the refused write left no trace"
+    );
+}
+
 #[test]
 fn service_nonversioned_create_no_version_created() {
     let def = make_nonversioned_def();
@@ -1453,6 +1566,7 @@ async fn grpc_draft_view_of_published_doc_with_pending_edit_reports_published() 
             locale: None,
             draft: Some(true),
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();

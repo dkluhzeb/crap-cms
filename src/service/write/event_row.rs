@@ -211,7 +211,7 @@ mod tests {
         let conn = InMemoryConn::open();
 
         conn.execute_ddl(
-            "CREATE TABLE posts (id TEXT PRIMARY KEY, title__en TEXT, title__de TEXT, \
+            "CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title__en TEXT, title__de TEXT, \
              _status TEXT, created_at TEXT, updated_at TEXT, _ref_count INTEGER DEFAULT 0)",
             &[],
         )

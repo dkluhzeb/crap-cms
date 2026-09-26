@@ -11,6 +11,7 @@ mod global;
 mod has_many_lists;
 pub mod helpers;
 mod identifier_check;
+mod inline_unique;
 mod legacy_timestamps;
 mod locale_change;
 mod meta;
@@ -20,6 +21,7 @@ mod one_time;
 mod orphan_tables;
 mod reference_cardinality;
 mod relationship_target;
+mod search_index;
 mod sync;
 mod tracking;
 
@@ -32,7 +34,7 @@ pub use orphan_tables::{OrphanKind, OrphanTable, find_orphan_tables};
 /// drift between test setup and prod).
 #[cfg(test)]
 pub(crate) use sync::create_jobs_table;
-pub use sync::{recreate_all, sync_all};
+pub use sync::{check_all_identifiers, recreate_all, sync_all};
 pub use tracking::{
     get_applied_migrations, get_applied_migrations_desc, get_pending_migrations,
     list_migration_files, record_migration, remove_migration,

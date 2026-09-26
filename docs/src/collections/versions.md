@@ -78,9 +78,9 @@ When `drafts = true`, documents have a `_status` field that is either `"publishe
 
 Every write reports the `_status` the row ends with — to its caller, its `after_change` hooks and its live event: a draft create reports `draft` (and its event reaches only subscribers with draft access), a publish reports `published` (and its event reaches published-view subscribers), even when the row said otherwise before the write.
 
-The version-only draft save is key: it lets authors iterate on changes without affecting the published version. The main table always reflects the last published state.
+The version-only draft save is key: it lets authors iterate on changes without affecting the published version. The main table always reflects the last published state. A draft save keeps every drafted value its writer may not read (`access.read`) as the pending draft holds it — the rule judges the pending draft the draft edit form shows (the published document when no draft is pending), not the published document.
 
-**Publishing takes the pending draft as its base.** An update with `draft = false` while a draft is pending publishes the whole draft — every field, every locale, join rows, companions and a drafted upload file — with the request's own fields applied on top, on every surface (admin, gRPC, Lua, MCP, `update_many`). A field the request sends wins; a field the publisher may not write (`access.update`) is not published from the draft — a localized field is judged once per locale (`ctx.locale` set to each configured locale), so a rule that denies one locale keeps only that locale's column at its stored value. A publish issued in a non-default locale makes the drafted file live too, with its conversions queued and the previous file's cancelled. To discard a pending draft instead, restore the published version.
+**Publishing takes the pending draft as its base.** An update with `draft = false` while a draft is pending publishes the whole draft — every field, every locale, join rows, companions and a drafted upload file — with the request's own fields applied on top, on every surface (admin, gRPC, Lua, MCP, `update_many`). A field the request sends wins; a field the publisher may not write (`access.update`) is not published from the draft — a localized field is judged once per locale (`ctx.locale` set to each configured locale), so a rule that denies one locale keeps only that locale's column at its stored value. A value the publisher may not **read** is not published from the draft either — a write never changes a value its writer cannot read: each `access.read` rule judges the document as stored in each locale the draft makes live (`ctx.locale` set to that locale), and a drafted value it hides keeps its stored value in that locale, neither cleared nor overwritten. A publish issued in a non-default locale makes the drafted file live too, with its conversions queued and the previous file's cancelled. To discard a pending draft instead, restore the published version.
 
 The same rule applies to globals: `crap.globals.update` (and every other global write surface) publishes the pending global draft merged under the request.
 
@@ -181,7 +181,11 @@ snapshot.
 Restore is gated by `access.update` (and the `access.versions` toggle) for the
 collection, and it also honors **field-level write access**: a field the caller
 is denied `access.update` on is not overwritten by the restore — it keeps its
-current live value, exactly as a normal partial update would leave it. The
+current live value, exactly as a normal partial update would leave it. A field
+(or an array/blocks row value) the caller may not **read** keeps its current
+value too — a write never changes a value its writer cannot read: each
+`access.read` rule judges the document as it currently stands, in each locale
+the restore writes, so the restore is partial for that caller. The
 schema is re-validated against the snapshot before the write, so a snapshot that
 violates current constraints (e.g. a field that has since become `required`) is
 rejected rather than restored. User-defined write hooks are **not** re-run —

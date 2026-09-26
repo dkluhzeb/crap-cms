@@ -15,6 +15,36 @@ use crate::{
     hooks::VmPoolExhausted,
 };
 
+/// A write refused because the document moved past the revision it was based
+/// on: `expected` is what the caller sent, `current` what the row holds.
+///
+/// Reported only to a caller the write's access gate admitted, so the current
+/// revision tells it nothing it could not read itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RevisionConflict {
+    pub expected: i64,
+    pub current: i64,
+}
+
+impl RevisionConflict {
+    #[must_use]
+    pub fn new(expected: i64, current: i64) -> Self {
+        Self { expected, current }
+    }
+}
+
+impl fmt::Display for RevisionConflict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Revision conflict: the document was changed after revision {} was read (it is \
+             now at revision {}) — re-read it and retry, or resend the write with revision {} \
+             to overwrite that change",
+            self.expected, self.current, self.current
+        )
+    }
+}
+
 /// Typed service-layer errors that callers can match on for surface-specific handling.
 #[derive(Debug)]
 pub enum ServiceError {
@@ -27,6 +57,11 @@ pub enum ServiceError {
     /// A bulk operation matched more documents than the configured limit
     /// (`server.bulk_max_documents`). Nothing was changed.
     LimitExceeded(String),
+    /// The write carried the revision the caller last read (`expected_revision`),
+    /// and the document has been written since: the caller would overwrite a
+    /// change it never saw. Nothing was changed; re-read the document and
+    /// retry, or resend with the current revision to overwrite on purpose.
+    Conflict(RevisionConflict),
     /// Structured per-field validation errors (required, unique, custom Lua validators).
     Validation(ValidationError),
     /// Hook execution error with a user-facing message.
@@ -64,6 +99,7 @@ impl fmt::Display for ServiceError {
             | Self::LimitExceeded(msg) => {
                 write!(f, "{msg}")
             }
+            Self::Conflict(conflict) => write!(f, "{conflict}"),
             Self::Referenced { id, count } => {
                 write!(f, "Cannot delete '{id}': referenced by {count} document(s)")
             }

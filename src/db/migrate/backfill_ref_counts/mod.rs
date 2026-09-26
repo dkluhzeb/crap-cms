@@ -8,4 +8,4 @@ mod topology;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use recount::{backfill_if_needed, recompute_ref_counts};
+pub(crate) use recount::{backfill_if_needed, invalidate_ref_counts, recompute_ref_counts};

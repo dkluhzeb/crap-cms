@@ -9,10 +9,12 @@ were loose or silently-wrong are tightened so they can freeze. Most
 projects need no changes — the items below only bite definitions that
 were already relying on ignored or malformed input.
 
-Definition errors are reported as the loader hits them, one file at a
-time (post-parse checks then aggregate). A project with several latent
-problems may need a couple of fix-and-restart cycles before it boots
-clean.
+Every problem a start finds in `crap.toml` or the definitions is reported at
+once — every failing `crap.toml` section and validation, every definition file
+that fails to load, every failing boot check — so one round of fixes is
+enough. Run `crap-cms check` with the alpha.10 binary before you swap it in
+(see *Before you upgrade*): it runs all of these checks without opening the
+database (item 126).
 
 
 ## Job payload field renamed to `data`
@@ -172,9 +174,25 @@ of the API.
 
 ## Required action items
 
-### Before you upgrade: take a backup (there is no way back)
+### Before you upgrade: check the project, take a backup (there is no way back)
 
 Do this first, before item 18 and before you swap the binary.
+
+**Check the project with the new binary.** Point the alpha.10 binary at your
+project without starting it:
+
+```bash
+/path/to/alpha10/crap-cms -C ./my-project check
+```
+
+It decodes and validates `crap.toml` and loads every definition file, running
+every boot check, and lists every problem it finds at once — without opening
+the database or writing anything into the project. Fix what it reports and run
+it again until it passes; the items below explain each change it may point
+at. (It cannot see problems in the stored data, such as the duplicate
+accounts of item 33 — the first start reports those.)
+
+**Take a backup.**
 
 ```bash
 crap-cms backup --include-uploads      # → <config_dir>/backups/backup-<timestamp>/
@@ -217,6 +235,15 @@ data in place, inside the migration transaction, and nothing converts it back:
 - **Postgres checkbox columns** are retyped `BIGINT` → `SMALLINT`.
 - **Legacy SQLite timestamps** (`YYYY-MM-DD HH:MM:SS`) are rewritten as ISO
   8601 (`…THH:MM:SS.sssZ`).
+- **Has-many values** that are not a list yet are rewritten as lists —
+  `'news'` → `["news"]`, `'a,b'` in a row → `["a","b"]` (item 60).
+- **A has-one relationship or upload inside an array or blocks row** holding
+  a one-element list is rewritten as its single id (an empty list as `null`).
+- **SQLite tables are rebuilt** to drop the `NOT NULL` (item 93) and the
+  inline `UNIQUE` (item 127) earlier releases created; on Postgres both
+  are dropped in place.
+- **Join-table rows of other locales are deleted** for an array, blocks or
+  has-many field that is no longer localized (item 137).
 
 (`_ref_count` is also recomputed for every document, but that is derived data
 and recomputed again by any later version.)
@@ -353,7 +380,7 @@ crap.collections.define("posts", {
 })
 ```
 
-If present, config load now fails with `unknown field "default_mode"`.
+If present, config load now fails with ``live.default_mode: unknown field `default_mode` ``.
 
 ### 6. Fix definitions that relied on silently-ignored values
 
@@ -2778,11 +2805,352 @@ gRPC `null_value`, JSON `"seo": null` — or to any value that is not an object
 was accepted and changed nothing: a group has no column of its own, so the
 value was dropped. Every write surface (admin, gRPC, MCP, Lua, the `validate`
 dry-run) now refuses it with a validation error on the group (`seo`, or
-`seo__social` for a group nested in a group). A group inside an array or blocks
+`seo__social` for a group nested in a group). A group the caller's field-level
+write rule denies (or, on update, its read rule) is still dropped silently, like
+any other field the caller may not write. A group inside an array or blocks
 row is unchanged: there `null` is stored and clears it.
 
 **Action:** to clear a group, set its sub-fields to `null`
 (`{ seo = { title = crap.null, description = crap.null } }`).
+
+### 122. Schema authors: a layout wrapper takes no value keys
+
+A layout wrapper refuses every key that describes a stored value. `access`, `hidden`, `required`, `required_when`, `unique`, `index`, `localized`,
+`required_locales`, `validate`, `default_value` and `mcp` on a `row`,
+`collapsible` or `tabs` field used to be accepted and did nothing — a wrapper has
+no value of its own, and every check looked straight through it to its children.
+For `access` and `hidden` that meant the wrapped fields were **not** protected:
+every caller could read, filter, sort, search and write them. Each of these keys
+is now a load error naming the wrapper and the key (even `hidden = false`); a
+wrapper accepts only `name`, `type`, `admin` and its `fields` / `tabs`.
+
+**Action:** if the load fails naming a wrapper, move the key onto each child
+field — or, when one rule should cover several fields, replace the wrapper with a
+`group` and set the key there (a group stores its children as
+`group__field` columns, so this renames the columns: migrate the data). If you
+relied on a wrapper-level `access` / `hidden`, review what those fields exposed
+until now.
+
+### 123. A `408` from the admin server means nothing changed
+
+`[server] request_timeout` answered `408 Request Timeout` once a request ran
+past it, but the save it started kept running on a background thread and
+could still commit afterwards — an editor told the save timed out re-submitted
+and created a duplicate. A save still running at the deadline is now rolled
+back: its statements are cut off at the deadline and its commit is refused.
+A request whose change had already committed before the deadline is answered
+by its handler (success or error) instead of `408`. This covers every admin
+write — the admin forms, `/api/upload`, MCP over HTTP, custom routes'
+`crap.*` writes, the user-settings saves, and the account flows: login (auth
+strategies provisioning a user), auth callbacks, logout, MFA verification and
+TOTP enrollment, password reset and email verification. Emails and MFA codes
+the admin sends in the background (sign-up verification, forgot-password,
+resend, MFA code delivery) are detached from the request and not affected.
+
+**Action:** none. A save that legitimately needs longer than
+`request_timeout` (a slow `before_change` hook) now fails instead of
+completing after a `408` — raise `request_timeout`, or move the slow work to
+`crap.tx.on_commit` or a job.
+
+### 124. Postgres: concurrent writes that share references no longer deadlock
+
+On Postgres, concurrent writes that referenced the same documents in several
+collections (posts sharing an author, categories and tags) locked those
+documents in a random order and often deadlocked — most of them failed with a
+`503`. The referenced documents are now locked in one fixed order, before any
+reference count moves. Also on Postgres: a delete or trash now locks the
+document before judging its `access.delete` / `access.trash` rule, as an update
+does, so it waits for a concurrent save of that document instead of acting on
+what it read before; a per-request auth strategy that writes does so on the
+request's own connection instead of taking a second one from the shared pool;
+two concurrent saves of one user's list columns and UI locale both land;
+bulk updates and deletes work through their matched documents in id order, so
+two over overlapping sets no longer lock them crosswise; and nodes firing cron
+jobs at the same moment claim them in slug order.
+
+**Action:** none. Note that the documents a write references stay locked
+until it commits — including while its `after_change` hooks run — so keep
+slow work (an outbound `crap.http` call) out of `after_change` as well as
+`before_change`; use `crap.tx.on_commit` or a job (see *Hooks → Concurrency*).
+
+### 125. Write clients: a write returns content only in a view you may read
+
+A write's response carried the document it wrote, stripped only by field
+rules — so a caller allowed to `create` / `update` but not to `read` the
+collection read every field through its own writes, and a draft save returned
+the merged pending draft (other editors' unsaved edits included) to a caller
+without the `draft` view. Every write — create, update, draft save, publish,
+unpublish, restore, undelete, on collections and globals, on every surface —
+now checks the content view the written document sits in: `read` (with its row
+constraint) for published content, `draft` for draft content, `trash` for a
+trashed document. A caller outside that view gets a document holding only `id`,
+`_status` and `_revision`.
+
+**Action:** a client that writes without read access and used the response's
+fields must read them another way (or be granted the view). Clients with read
+access see no change.
+
+### 126. `crap-cms check`, and every problem reported at once
+
+A start stopped at the first problem: the first unknown or mistyped key in
+`crap.toml`, the first failing validation, the first definition file that
+failed to load, the first failing boot check — so a project with several
+needed one fix-and-restart cycle each. Every problem is now reported
+together: every unknown key, mistyped value and unset `${VAR}` of every
+`crap.toml` section (a section with a problem keeps its defaults), every
+failing check of every section's validation, every definition file that fails
+to load, and every failing boot check. Several problems are listed sorted and
+numbered under a count (`3 problems: 1. … 2. … 3. …`); an error message you
+matched on is now one line of that list, a `crap.toml` decode problem named
+by its path (`server.admin_port: invalid type: …`, `live.default_mode:
+unknown field …`) instead of TOML's line and column.
+
+The new `crap-cms check` runs the same checks without opening the database
+and without writing into the project (an unset `[auth] secret` is neither
+generated nor persisted) — plus the generated-identifier length check a start
+runs before creating tables — and exits non-zero when anything fails.
+
+**Action:** run `crap-cms check` against your project with the new binary
+before you upgrade (see *Before you upgrade*), and in CI after changing
+`crap.toml` or a definition.
+
+### 127. Inline `UNIQUE` constraints of older tables are dropped
+
+Earlier releases wrote an inline `UNIQUE` into the table for each `unique`
+field of a collection without soft delete. Uniqueness now lives only in the
+managed unique indexes (`idx_<collection>_<field>_unique`), which follow the
+definition; the inline constraint did not, so removing `unique` from such a
+field still failed every duplicate write at the database, and turning
+`soft_delete` on left a trashed row blocking a new one with its value. The
+first start drops every inline `UNIQUE` of a collection table once — in place
+on PostgreSQL, by rebuilding the table on SQLite (rows, child rows and your
+own indexes and triggers are kept) — and the managed indexes carry on for the
+fields that are still `unique`. A `UNIQUE` constraint you add to a table by
+hand afterwards is left alone.
+
+**Action:** none. On a large SQLite database the rebuild makes the first start
+take longer.
+
+### 128. Auth emails: one uniqueness rule, and duplicates reported by account
+
+Emails are stored in canonical form (item 33), and the email field's own
+unique index now is the database's guarantee of one account per address. The
+separate case-folding index development builds of alpha.10 created
+(`idx_<collection>_email_ci_unique`, over `LOWER(email)`) is dropped: the
+database's case folding (the collation's rules on Postgres, ASCII only on
+SQLite) need not agree with the canonical form, so it could reject an address
+the application accepts or let through one it doesn't. The login lookup and
+the unique check compare the canonical address exactly.
+
+An alpha.9 database can hold one address twice in different capitals
+(`Bob@example.com` and `bob@example.com` — alpha.9 compared emails as typed).
+The first start used to stop on a raw `UNIQUE constraint failed` error from
+creating an index, naming no account. Indexes are now created after the stored
+values are converted, so the start stops with the item-33 report instead,
+listing each address and the ids of the accounts sharing it — non-ASCII
+capitals included (`ÄRGER@…` / `ärger@…`).
+
+**Action:** if the first start reports duplicate accounts, merge or rename them
+(keep one account per address) on alpha.9 or in the database, then start
+again.
+
+### 129. The search index is rebuilt only when it changes
+
+Every start dropped and rebuilt every collection's search index inside the
+startup transaction. On Postgres that held a lock the other nodes' searches
+and writes of the collection waited on for as long as the rebuild ran — on
+every restart of any node. A start now rebuilds an index only when what it is
+built from changed (the searchable fields, their locale columns, the rich text
+nodes they index, the backend) or when a first-start conversion rewrote the
+collection's stored text; otherwise the index every write keeps current is
+kept. The first start after the upgrade rebuilds every index once, from the
+converted text.
+
+**Action:** none. Writes that bypass crap-cms (raw SQL against a collection
+table) are not indexed; to rebuild an index by hand, delete the collection's
+`fts_shape:<collection>` row from `_crap_meta` and restart.
+
+### 130. A has-many relationship that became localized can hold the same document per locale
+
+A has-many relationship or upload whose junction table existed before the
+field (or its group) became `localized` — or before `[locale]` was turned on —
+kept a key without the locale, so saving the second locale's list failed when
+it named a document the first locale's list held. The start now re-keys such a
+table once (in place on Postgres, by rebuilding it on SQLite); its existing
+rows belong to the default locale, as before. The same reconcile adds the
+target collection to the key of a relationship that became polymorphic, which
+on Postgres failed outright.
+
+**Action:** none.
+
+### 131. Has-many values inside array rows are stored as text on every backend
+
+A `has_many` text, number, select or radio field inside an array row got the
+column type of a single value — `DOUBLE PRECISION` for a number on Postgres —
+while every write stores the list as JSON text, so on Postgres every write of
+such a row failed. The column is now `TEXT` like a top-level has-many list's,
+and an existing numeric column is converted at startup (its values then become
+lists, item 60).
+
+**Action:** none.
+
+### 132. Every document gains a `_revision` system column (optimistic locking)
+
+Every collection and global table gains `_revision INTEGER NOT NULL DEFAULT 0`
+at startup; existing rows start at `0` (a plain column add on both backends,
+no rebuild). Every write that changes a document moves it one forward, and
+every document read now carries it as the `_revision` key beside the fields.
+An update can send the revision it read back as `expected_revision` (gRPC,
+MCP, Lua) or as the `_revision` form field (upload API) and is then refused —
+gRPC `ABORTED`, upload API `409`, an MCP / Lua `Revision conflict` error —
+when the document was written since. Writes without it are unconditional, as
+before. The admin edit forms send it automatically and answer a stale save
+with a conflict page (a stale unpublish with a toast asking for a reload).
+`crap-cms import` moves the revision of every document it overwrites; a document it creates takes its exported revision. See
+[Concurrent Editing](../collections/concurrent-editing.md).
+
+**Action:** a client that rejects unknown keys in a document must allow
+`_revision`; regenerated typed clients (`typegen client` / `typegen proto`)
+declare it (Go member `DocumentRevision`). A project that overrides `templates/collections/edit.hbs` or
+`templates/globals/edit.hbs` should add the hidden input and the conflict
+notice the shipped templates now render —
+`<input type="hidden" name="_revision" value="{{revision}}" />` inside the
+form (on a collection, within `{{#if editing}}`), and
+`{{#if revision_conflict}}{{> partials/revision-conflict}}{{/if}}` above the
+fields; an override without the input saves unconditionally, as before.
+
+### 133. Write clients: new references need read access to their target
+
+A write may now add a reference (relationship or upload) only to a document
+its writer may read — through the target collection's `read` view, with its
+row constraint, or its `draft` view for a draft. A new reference to any other
+live document is refused exactly like one to a missing document: a
+`validation.reference_unavailable` error on the field holding it. A reference
+the document already holds is not judged again, and Lua writes with
+`override_access = true` and version restores are exempt.
+
+**Action:** a writer that links documents it cannot read (e.g. an author
+picking a reviewer from a staff-only collection) needs `read` on the target
+collection, or the link must be made by a hook or job with `override_access`.
+
+### 134. An update keeps every value its writer cannot read
+
+A field whose `access.read` denies a writer is now also kept as stored when
+that writer updates the document — on every update surface, at every depth.
+Before, a user allowed to `update` a field but not to `read` it overwrote it
+blind: the admin edit form submitted an unchecked box, an empty list or an
+empty group sub-field for what it could not show. The `read` rule judges what
+the write replaces — the stored document, per stored row inside arrays and
+blocks; for a draft save, the pending draft its form showed. A row the write
+adds is judged against an empty row, so a value the writer may not read there
+is left out of the new row. Publishing a pending draft keeps each locale's
+values its publisher cannot read in that locale at their stored values, and a
+version restore does the same (item 139).
+
+The edit form judges a row sub-field row by row: where a data-aware rule hides
+it in one row and not another, the form renders it (and saves it) only in the
+rows the viewer may read; the new-row template offers what an empty row
+allows.
+
+**Action:** a role that must change a field needs to be able to read it. A
+role that updates a field it may not read (through the API, say) now leaves
+it unchanged — grant `read`, or make the change in a hook or job with
+`override_access`.
+
+### 135. Display conditions: typed values, form-name keys, none inside rows
+
+Display conditions see typed, nested values everywhere. Every display-condition evaluation now sees the form's values as a save
+stores them — a checkbox `true`/`false`, a number as a number, a date as its
+stored UTC instant (`"2026-01-15T12:00:00.000Z"`, converted from the chosen
+timezone when the field stores one), text in its canonical form, an empty
+input `nil`, a group's values nested (`data.seo.title`) — on the edit and
+create forms (the create form sees field defaults), after a failed save and
+live, in the browser as on the server. Numbers compare by value (`5` equals
+`5.0`). A condition table's `field` resolves a group sub-field as `seo.title`
+or `seo__title`. `admin.condition` on a field inside an array or blocks row
+now fails the load (it was never evaluated).
+
+**Action:** a condition table written against the browser's old raw strings
+(`equals = "on"` for a checkbox, `equals = "5"` for a number) must compare
+the typed value (`equals = true`, `equals = 5`); one comparing a date must
+compare its stored form (`equals = "2026-01-15T12:00:00.000Z"` for the day
+`2026-01-15`). Move a condition off any
+field inside an array/blocks row (onto the array/blocks field, or move the
+field out of the row). A custom client of
+`/admin/{collections|globals}/{slug}/evaluate-conditions` sends the form's
+raw name → value map and keys group sub-fields by form name (`seo__title`),
+plus the edited document's `document_id` (omit it for a create form) and the
+editor `locale`: the endpoint parses the map against the fields the edit form
+rendered for its viewer, so a field the viewer may not read is `nil` to the
+condition — without `document_id` a missing checkbox reads as unchecked.
+
+### 136. Template overrides: one field wrapper, Enter saves drafts, Unpublish sends no form
+
+- Every rendered field's `<div class="form__field">` wrapper now comes from
+  `partials/field-wrapper.hbs`. An override of `collections/edit_form`,
+  `globals/edit_form`, an edit sidebar, or `fields/group`, `row`,
+  `collapsible`, `tabs`, `array`, `blocks` should render
+  `{{> partials/field-wrapper}}` for each field, so the wrapper carries the
+  `data-kind` / `data-has-many` / `data-timezone` attributes live display conditions decode
+  values by.
+- A drafts-enabled edit form starts with a hidden default button
+  (`partials/implicit-submit.hbs`) that saves a draft: Enter in a
+  single-line input no longer publishes. An override of
+  `collections/edit.hbs` / `globals/edit.hbs` should keep it.
+- The sidebar's Unpublish is a plain button (`data-action="unpublish"`) that
+  posts only the action; an overridden sidebar should render it the same way.
+
+**Action:** only for projects overriding those templates.
+
+### 137. An array, blocks or has-many field that stopped being localized keeps its default locale's rows
+
+A localized array, blocks or has-many relationship/upload keeps one set of
+rows per locale. When the field stopped being localized — `localized` cleared
+on it or its group, or `[locale]` turned off — every locale's rows stayed, and
+the field's reads, which no longer name a locale, returned them all as one
+list: the default locale's entries followed by every other locale's. The start
+now keeps only the default locale's rows (in their order), deletes the other
+locales' rows once, and recomputes the reference counts. It happens on the
+start that sees the switch — and on the first alpha.10 start for a field an
+earlier release already switched — and never again for that table: rows
+written while the field is shared are left alone. A table that holds rows of
+other locales but none of the default locale stops the start instead of being
+emptied.
+
+**Action:** back up first (see *Before you upgrade*). If a field you
+un-localized under alpha.9 should keep another locale's rows, set
+`default_locale` to that locale or mark the field `localized` again before the
+first start. If the start stops on a table without default-locale rows, do the
+same, or delete the rows you don't want by hand, then start again.
+
+### 138. Schema authors: a join takes only the keys it can honor
+
+A join field refuses every key it cannot honor. `required_when`, `unique`, `index`, `validate`, `default_value` and `mcp` on a
+`join` field used to be accepted and did nothing, and `required`, `localized`
+and `required_locales` were refused only when set truthy. A join stores no
+value and no write ever carries it, so each of these keys is now a load error
+naming the join and the key — even `required = false` — and so are
+`access.create`, `access.update` and the `before_validate` / `before_change` /
+`after_change` field hooks. A join accepts `name`, `type`, `admin`, `hidden`,
+`access = { read = … }`, `hooks = { after_read = … }` and its `collection`,
+`on` and `limit`.
+
+**Action:** if the load fails naming a join, delete the key: it never had an
+effect. A validation, default or index you meant for the relationship belongs
+on the target collection's `on` field.
+
+### 139. A version restore leaves the fields its restorer cannot read at their current values
+
+A restore used to write every field of the snapshot back. A user who may
+update a document but not read one of its fields therefore overwrote a value
+they could not see. The field's `access.read` rule now judges the document as
+it currently stands, in each locale the restore writes (a row value per stored
+row), and a value it hides keeps its current value — the restore is partial for
+that user, exactly as it already was for a field they may not write.
+
+**Action:** none for a restorer who may read every field. A role that must
+roll a field back needs to be able to read it; otherwise restore with a user
+(or a hook or job with `override_access`) that can.
 
 ## Admin UI behavior
 

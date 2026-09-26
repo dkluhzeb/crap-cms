@@ -21,12 +21,14 @@ fn populate_has_many_relationship() {
     conn.execute_batch(
         "CREATE TABLE categories (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             name TEXT,
             created_at TEXT,
             updated_at TEXT
         );
         CREATE TABLE posts (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             title TEXT,
             created_at TEXT,
             updated_at TEXT
@@ -111,12 +113,14 @@ fn populate_has_many_missing_related_is_dropped() {
     conn.execute_batch(
         "CREATE TABLE categories (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             name TEXT,
             created_at TEXT,
             updated_at TEXT
         );
         CREATE TABLE posts (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             title TEXT,
             created_at TEXT,
             updated_at TEXT
@@ -184,6 +188,7 @@ fn populate_has_many_soft_deleted_target_dropped() {
     conn.execute_batch(
         "CREATE TABLE categories (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             name TEXT,
             _deleted_at TEXT,
             created_at TEXT,
@@ -191,6 +196,7 @@ fn populate_has_many_soft_deleted_target_dropped() {
         );
         CREATE TABLE posts (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             title TEXT,
             created_at TEXT,
             updated_at TEXT
@@ -257,12 +263,14 @@ fn populate_has_one_missing_related_is_null() {
     conn.execute_batch(
         "CREATE TABLE authors (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             name TEXT,
             created_at TEXT,
             updated_at TEXT
         );
         CREATE TABLE posts (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             title TEXT,
             author TEXT,
             created_at TEXT,
@@ -320,6 +328,7 @@ fn populate_has_one_draft_target_hidden_when_published_only() {
     conn.execute_batch(
         "CREATE TABLE authors (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             name TEXT,
             _status TEXT NOT NULL DEFAULT 'published',
             created_at TEXT,
@@ -327,6 +336,7 @@ fn populate_has_one_draft_target_hidden_when_published_only() {
         );
         CREATE TABLE posts (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             title TEXT,
             author TEXT,
             created_at TEXT,
@@ -422,11 +432,11 @@ fn populate_has_one_draft_target_gated_by_target_draft_access() {
     conn.execute_batch(&versions_table_sql("authors")).unwrap();
     conn.execute_batch(
         "CREATE TABLE authors (
-            id TEXT PRIMARY KEY, name TEXT,
+            id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT,
             _status TEXT NOT NULL DEFAULT 'published', created_at TEXT, updated_at TEXT
         );
         CREATE TABLE posts (
-            id TEXT PRIMARY KEY, title TEXT, author TEXT, created_at TEXT, updated_at TEXT
+            id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, author TEXT, created_at TEXT, updated_at TEXT
         );
         INSERT INTO authors (id, name, _status, created_at, updated_at)
             VALUES ('a1', 'Secret Draft', 'draft', '2024-01-01', '2024-01-01');
@@ -493,6 +503,7 @@ fn populate_has_one_soft_deleted_target_null() {
     conn.execute_batch(
         "CREATE TABLE authors (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             name TEXT,
             _deleted_at TEXT,
             created_at TEXT,
@@ -500,6 +511,7 @@ fn populate_has_one_soft_deleted_target_null() {
         );
         CREATE TABLE posts (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             title TEXT,
             author TEXT,
             created_at TEXT,
@@ -558,12 +570,14 @@ fn populate_has_many_visited_keeps_as_id() {
     conn.execute_batch(
         "CREATE TABLE categories (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             name TEXT,
             created_at TEXT,
             updated_at TEXT
         );
         CREATE TABLE posts (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             title TEXT,
             created_at TEXT,
             updated_at TEXT
@@ -723,10 +737,10 @@ fn populate_has_one_cache_hit() {
 fn populate_has_many_cache_hit_in_reassembly() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE categories (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
-         CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT);
-         INSERT INTO categories VALUES ('c1', 'DBTech', '2024-01-01', '2024-01-01');
-         INSERT INTO posts VALUES ('p1', 'Hello', '2024-01-01', '2024-01-01');"
+        "CREATE TABLE categories (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT);
+         CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, created_at TEXT, updated_at TEXT);
+         INSERT INTO categories VALUES ('c1', 0, 'DBTech', '2024-01-01', '2024-01-01');
+         INSERT INTO posts VALUES ('p1', 0, 'Hello', '2024-01-01', '2024-01-01');"
     ).unwrap();
 
     let cats_def = make_collection_def("categories", vec![make_field("name", FieldType::Text)]);
@@ -946,12 +960,12 @@ fn nested_depth_two_target_denied() {
 
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE teams (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
-         CREATE TABLE authors (id TEXT PRIMARY KEY, name TEXT, team TEXT, created_at TEXT, updated_at TEXT);
-         CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, author TEXT, created_at TEXT, updated_at TEXT);
-         INSERT INTO teams VALUES ('t1', 'Core', '2024-01-01', '2024-01-01');
-         INSERT INTO authors VALUES ('a1', 'Alice', 't1', '2024-01-01', '2024-01-01');
-         INSERT INTO posts VALUES ('p1', 'Hello', 'a1', '2024-01-01', '2024-01-01');",
+        "CREATE TABLE teams (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT);
+         CREATE TABLE authors (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, team TEXT, created_at TEXT, updated_at TEXT);
+         CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, author TEXT, created_at TEXT, updated_at TEXT);
+         INSERT INTO teams VALUES ('t1', 0, 'Core', '2024-01-01', '2024-01-01');
+         INSERT INTO authors VALUES ('a1', 0, 'Alice', 't1', '2024-01-01', '2024-01-01');
+         INSERT INTO posts VALUES ('p1', 0, 'Hello', 'a1', '2024-01-01', '2024-01-01');",
     )
     .unwrap();
 

@@ -80,10 +80,10 @@ fn batch_empty_docs_noop() {
 fn batch_select_filters_fields() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, author TEXT, editor TEXT, created_at TEXT, updated_at TEXT);
-         CREATE TABLE authors (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
-         INSERT INTO authors VALUES ('a1', 'Alice', '2024-01-01', '2024-01-01');
-         INSERT INTO posts VALUES ('p1', 'Post 1', 'a1', 'a1', '2024-01-01', '2024-01-01');"
+        "CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, author TEXT, editor TEXT, created_at TEXT, updated_at TEXT);
+         CREATE TABLE authors (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT);
+         INSERT INTO authors VALUES ('a1', 0, 'Alice', '2024-01-01', '2024-01-01');
+         INSERT INTO posts VALUES ('p1', 0, 'Post 1', 'a1', 'a1', '2024-01-01', '2024-01-01');"
     ).unwrap();
 
     let mut author_field = make_field("author", FieldType::Relationship);
@@ -190,9 +190,9 @@ fn batch_max_depth_zero_stays_as_id() {
 fn batch_missing_related_has_one_becomes_null() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, author TEXT, created_at TEXT, updated_at TEXT);
-         CREATE TABLE authors (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
-         INSERT INTO posts VALUES ('p1', 'Post 1', 'nonexistent', '2024-01-01', '2024-01-01');"
+        "CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, author TEXT, created_at TEXT, updated_at TEXT);
+         CREATE TABLE authors (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT);
+         INSERT INTO posts VALUES ('p1', 0, 'Post 1', 'nonexistent', '2024-01-01', '2024-01-01');"
     ).unwrap();
 
     let registry = make_registry_with_posts_and_authors();
@@ -341,10 +341,10 @@ fn mutual_has_one_registry() -> (Registry, CollectionDefinition) {
 fn mutual_has_one_db() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, best_comment TEXT, created_at TEXT, updated_at TEXT);
-         CREATE TABLE comments (id TEXT PRIMARY KEY, body TEXT, post TEXT, created_at TEXT, updated_at TEXT);
-         INSERT INTO posts VALUES ('p1', 'Post', 'c1', '2024-01-01', '2024-01-01');
-         INSERT INTO comments VALUES ('c1', 'Nice', 'p1', '2024-01-01', '2024-01-01');",
+        "CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, best_comment TEXT, created_at TEXT, updated_at TEXT);
+         CREATE TABLE comments (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, body TEXT, post TEXT, created_at TEXT, updated_at TEXT);
+         INSERT INTO posts VALUES ('p1', 0, 'Post', 'c1', '2024-01-01', '2024-01-01');
+         INSERT INTO comments VALUES ('c1', 0, 'Nice', 'p1', '2024-01-01', '2024-01-01');",
     )
     .unwrap();
     conn
@@ -460,14 +460,14 @@ fn batch_cycle_guard_holds_at_every_depth() {
 fn parity_fixture() -> (Connection, Registry, CollectionDefinition) {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
+        "CREATE TABLE users (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT);
          CREATE TABLE posts (
-             id TEXT PRIMARY KEY, title TEXT, author TEXT, editor TEXT, related TEXT,
+             id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, author TEXT, editor TEXT, related TEXT,
              created_at TEXT, updated_at TEXT
          );
-         INSERT INTO users VALUES ('u1', 'Ada', '2024-01-01', '2024-01-01');
-         INSERT INTO posts VALUES ('p1', 'One', 'u1', 'u1', 'p2', '2024-01-01', '2024-01-01');
-         INSERT INTO posts VALUES ('p2', 'Two', 'u1', 'u1', 'p1', '2024-01-01', '2024-01-01');",
+         INSERT INTO users VALUES ('u1', 0, 'Ada', '2024-01-01', '2024-01-01');
+         INSERT INTO posts VALUES ('p1', 0, 'One', 'u1', 'u1', 'p2', '2024-01-01', '2024-01-01');
+         INSERT INTO posts VALUES ('p2', 0, 'Two', 'u1', 'u1', 'p1', '2024-01-01', '2024-01-01');",
     )
     .unwrap();
 
@@ -593,15 +593,15 @@ fn pending_draft_fixture() -> (Connection, Registry, CollectionDefinition) {
     conn.execute_batch(&versions_table_sql("authors")).unwrap();
     conn.execute_batch(
         "CREATE TABLE authors (
-             id TEXT PRIMARY KEY, name TEXT,
+             id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT,
              _status TEXT NOT NULL DEFAULT 'published', created_at TEXT, updated_at TEXT
          );
-         CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, author TEXT, created_at TEXT, updated_at TEXT);
-         INSERT INTO authors VALUES ('a1', 'Published', 'published', '2024-01-01', '2024-01-01');
+         CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, author TEXT, created_at TEXT, updated_at TEXT);
+         INSERT INTO authors VALUES ('a1', 0, 'Published', 'published', '2024-01-01', '2024-01-01');
          INSERT INTO _versions_authors VALUES
              ('v1', 'a1', 1, 'published', 0, '{\"name\":\"Published\"}', '2024-01-01'),
              ('v2', 'a1', 2, 'draft', 1, '{\"name\":\"Draft edit\",\"_status\":\"draft\"}', '2024-01-02');
-         INSERT INTO posts VALUES ('p1', 'Hello', 'a1', '2024-01-01', '2024-01-01');",
+         INSERT INTO posts VALUES ('p1', 0, 'Hello', 'a1', '2024-01-01', '2024-01-01');",
     )
     .unwrap();
 

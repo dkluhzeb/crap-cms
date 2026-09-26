@@ -32,6 +32,7 @@ pub(super) fn setup_db() -> (TempDir, DbPool) {
         .execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 status TEXT,
                 created_at TEXT,

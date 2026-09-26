@@ -171,8 +171,17 @@ For collections with `versions = { drafts = true }`, the admin UI provides a dra
 
 **Edit form:**
 - **Draft document:** "Publish" (primary) + "Save Draft" (secondary) buttons
-- **Published document:** "Update" (primary) + "Save Draft" (secondary) + "Unpublish" (ghost) buttons
+- **Published document:** "Publish" (primary) + "Save Draft" (secondary) + "Unpublish" (ghost) buttons
 - Draft saves create a version snapshot only — the main (published) document is not modified until you publish
+- **Enter** in a single-line input saves a **draft** — it never publishes. Publishing is always a deliberate click on Publish. (Without drafts, Enter saves as the one save button does.)
+- **Unpublish** takes the document out of publication and saves nothing the form holds. With unsaved edits in the form you are asked first: discard them and unpublish, or stay and save them. It does not run the form's pre-submit validation.
+
+**Unsaved changes:**
+- Leaving an edit form with unsaved changes — a link, back/forward, closing the tab, switching the editor or UI locale — asks first. Row changes (add, remove, duplicate, reorder, drag-and-drop) count as unsaved changes. The locale switch is recorded only once you choose to leave.
+
+**Validation errors:**
+- A save the pre-submit validation refuses always says so: the errors are drawn on their fields, the first one is brought into view (its tab switched to, its collapsed group, collapsible or row expanded), each tab shows its error count, and a toast summarises — naming every error that has no visible field (a field the form does not render, or one hidden by its display condition).
+- A field you may not read has no input on the form, and saving never changes it — see [Field-Level Access](../access-control/field-level.md).
 
 **Sidebar:**
 - Status badge showing current document status

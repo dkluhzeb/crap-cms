@@ -3,6 +3,7 @@
 //! composite types (Array, Blocks, Group) with nesting depth limits.
 
 mod builder;
+mod condition_data;
 mod enrich;
 mod helpers;
 
@@ -10,6 +11,9 @@ mod helpers;
 mod test_helpers;
 
 pub(super) use builder::build_field_contexts;
+pub(super) use condition_data::{
+    condition_data, default_condition_data, form_condition_data, live_condition_data,
+};
 pub(super) use enrich::{EnrichOptions, enrich_field_contexts};
 pub(super) use helpers::{
     MAX_FIELD_DEPTH, apply_display_conditions, cascaded_readonly, collect_node_attr_errors,

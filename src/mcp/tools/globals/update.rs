@@ -8,7 +8,10 @@ use crate::{
     db::LocaleContext,
     mcp::tools::{
         ToolExecCtx,
-        collection::helpers::{doc_to_json, events_flag, extract_data_from_args},
+        collection::helpers::{
+            EXPECTED_REVISION_KEY, doc_to_json, events_flag, expected_revision_arg,
+            extract_data_from_args,
+        },
     },
     service::op::{self, Principal, TargetRef, UpdateGlobal, UpdateGlobalArgs},
 };
@@ -26,7 +29,8 @@ pub(in crate::mcp::tools) fn exec_update_global(
         .get(slug)
         .context("Global not found")?;
 
-    // `locale` is a reserved top-level key — excluded from field data.
+    // `locale`, `draft`, `events` and `expected_revision` are reserved
+    // top-level keys — excluded from field data.
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
 
@@ -36,12 +40,19 @@ pub(in crate::mcp::tools) fn exec_update_global(
     // published (and a `draft` key fell into field data and was dropped).
     let draft = args.get("draft").and_then(Value::as_bool).unwrap_or(false);
 
-    let data = extract_data_from_args(args, &["locale", "draft", "events"], &def.fields)?;
+    let expected_revision = expected_revision_arg(args)?;
+
+    let data = extract_data_from_args(
+        args,
+        &["locale", "draft", "events", EXPECTED_REVISION_KEY],
+        &def.fields,
+    )?;
 
     let op_args = UpdateGlobalArgs::builder(data)
         .locale_ctx(locale_ctx)
         .draft(draft)
         .events(events)
+        .expected_revision(expected_revision)
         .build();
 
     let (doc, _req_context) = op::run::<UpdateGlobal>(

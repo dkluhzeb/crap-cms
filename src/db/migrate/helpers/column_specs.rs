@@ -37,11 +37,11 @@ impl ColumnSpec<'_> {
     /// as a JSON array, see [`FieldDefinition::is_has_many_scalar`]) are always
     /// `TEXT`; everything else uses the backend's per-field-type mapping.
     pub(in crate::db::migrate) fn ddl_type(&self, conn: &dyn DbConnection) -> &'static str {
-        if self.companion_text || self.field.is_has_many_scalar() {
-            "TEXT"
-        } else {
-            conn.column_type_for(&self.field.field_type)
+        if self.companion_text {
+            return "TEXT";
         }
+
+        field_ddl_type(conn, self.field)
     }
 
     /// The full column definition of `col_name` (the spec's column, or one of
@@ -69,6 +69,23 @@ impl ColumnSpec<'_> {
 
         col
     }
+}
+
+/// The backend DDL type of a field's own column, on every kind of table: a
+/// collection's or global's column, and an array join table's sub-field
+/// column. A **scalar has-many list** (see
+/// [`FieldDefinition::is_has_many_scalar`]) is stored as a JSON array and is
+/// always `TEXT` — a numeric column can't hold the list the writer binds;
+/// everything else uses the backend's per-field-type mapping.
+pub(in crate::db::migrate) fn field_ddl_type(
+    conn: &dyn DbConnection,
+    field: &FieldDefinition,
+) -> &'static str {
+    if field.is_has_many_scalar() {
+        return "TEXT";
+    }
+
+    conn.column_type_for(&field.field_type)
 }
 
 /// Collect column specifications from a field tree.

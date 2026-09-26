@@ -18,12 +18,12 @@ pub(in crate::db::migrate) fn sync_versions_table(
     // FROZEN-CONTRACT NOTE: this path is create-only —
     // there is no ALTER limb, unlike the collection and global main
     // tables. The version-table schema (`id, _parent, _version, _status,
-    // data, created_at`) is fixed. If a future release ever needs a NEW
-    // column on `_versions_{slug}`, it MUST add a reconcile/ALTER limb
-    // here AND a versioned `_crap_meta` gate — otherwise the column would
-    // silently be absent on every upgraded database. Adding a column to
-    // the snapshot JSON `data` blob is fine (it's schema-driven); adding a
-    // real column is the case this note guards.
+    // _latest, snapshot, created_at, updated_at`) is fixed. If a future
+    // release ever needs a NEW column on `_versions_{slug}`, it MUST add a
+    // reconcile/ALTER limb here AND a versioned `_crap_meta` gate —
+    // otherwise the column would silently be absent on every upgraded
+    // database. Adding a key to the `snapshot` JSON is fine (it's
+    // schema-driven); adding a real column is the case this note guards.
     if table_exists(conn, &table_name)? {
         return Ok(());
     }

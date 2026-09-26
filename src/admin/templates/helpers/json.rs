@@ -1,8 +1,30 @@
 use handlebars::{Handlebars, Helper, HelperDef, RenderContext, RenderError, ScopedJson};
-use serde_json::Value;
+use serde_json::{Value, to_string};
 
 /// JSON serialization helper: `{{{json value}}}`.
 pub(super) struct JsonHelper;
+
+/// `value` as JSON text that stays inert wherever a template places it raw: in
+/// a `<script>` element or inside a single-quoted attribute. Every helper that
+/// emits raw JSON into markup goes through here, so the escaping policy is
+/// one policy.
+pub(super) fn markup_json(value: &Value) -> String {
+    let json_str = to_string(value).unwrap_or_default();
+
+    // Prevent </script> breakout when used inside <script> blocks.
+    let json_str = json_str.replace("</", r"<\/");
+
+    // Prevent HTML attribute breakout when used in single-quoted attributes
+    // like data-condition='{{{json condition_json}}}'.
+    // \u0027 is valid JSON — parsers decode it back to '.
+    let json_str = json_str.replace('\'', r"\u0027");
+
+    // An HTML attribute value decodes character references before the value
+    // reaches `JSON.parse`, so a string holding `&amp;` would arrive as `&`.
+    // `&` only occurs inside JSON strings, where `\u0026` is the same
+    // character.
+    json_str.replace('&', r"\u0026")
+}
 
 impl HelperDef for JsonHelper {
     fn call_inner<'reg: 'rc, 'rc>(
@@ -15,23 +37,14 @@ impl HelperDef for JsonHelper {
         let val = h
             .param(0)
             .map_or(&Value::Null, handlebars::PathAndJson::value);
-        let json_str = serde_json::to_string(val).unwrap_or_default();
 
-        // Prevent </script> breakout when used inside <script> blocks.
-        let json_str = json_str.replace("</", r"<\/");
-
-        // Prevent HTML attribute breakout when used in single-quoted attributes
-        // like data-condition='{{{json condition_json}}}'.
-        // \u0027 is valid JSON — parsers decode it back to '.
-        let json_str = json_str.replace('\'', r"\u0027");
-
-        Ok(ScopedJson::Derived(Value::String(json_str)))
+        Ok(ScopedJson::Derived(Value::String(markup_json(val))))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, from_str, json};
 
     use crate::admin::templates::helpers::test_helpers::test_hbs;
 
@@ -89,6 +102,20 @@ mod tests {
             result.contains(r"\u0027"),
             r"should escape ' to \u0027: {result}"
         );
+    }
+
+    /// Regression: a condition value spelled like a character reference
+    /// (`&amp;`) was decoded by the HTML parser inside `data-condition='…'`,
+    /// so the browser compared against `&` while the server compared against
+    /// `&amp;`.
+    #[test]
+    fn json_escapes_ampersands_for_html_attributes() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{{json val}}}").unwrap();
+        let result = hbs.render("t", &json!({"val": "a &amp; b"})).unwrap();
+
+        assert_eq!(result, r#""a \u0026amp; b""#);
+        assert_eq!(from_str::<Value>(&result).unwrap(), json!("a &amp; b"));
     }
 
     #[test]

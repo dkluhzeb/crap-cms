@@ -75,34 +75,26 @@ fn prepare_delete_hook_data(
     Ok(hook_data)
 }
 
-/// Delete a document on an existing connection/transaction.
-///
-/// Runs the full lifecycle: ref count check -> before-delete hooks -> delete -> cleanup -> after-delete hooks.
-/// Does NOT manage transactions — caller must open/commit.
-/// Upload file cleanup is returned as `upload_keys` for the caller to handle after commit.
-pub(crate) fn delete_document_in_conn(
+/// Judge the delete against its access rule: `trash` for a soft delete,
+/// `delete` for a hard one — including the row-level constraints a rule may
+/// return. Runs on the locked row (see [`delete_document_in_conn`]).
+fn admit_delete(
     ctx: &ServiceContext,
+    write_hooks: &dyn WriteHooks,
+    def: &CollectionDefinition,
     id: &str,
-    locale_config: Option<&LocaleConfig>,
-) -> Result<DeleteResult> {
-    let conn = ctx.resolve_conn()?;
-    let conn = conn.as_ref();
-    let write_hooks = ctx.write_hooks()?;
-    let def = ctx.collection_def()?;
-
-    // Collection-level access check — use trash access for soft delete, delete for hard
-    let access_ref = if def.soft_delete {
-        def.access.resolve_trash()
+) -> Result<()> {
+    let (operation, access_ref, op_label) = if def.soft_delete {
+        ("trash", def.access.resolve_trash(), "Trash")
     } else {
-        def.access.delete.as_ref()
+        ("delete", def.access.delete.as_ref(), "Delete")
     };
 
     // Delete is locale-agnostic — the whole row is removed across all locales.
-    // A soft delete is a "trash" operation (gated by the trash access fn);
-    // a hard delete is "delete". Keeps the operation label consistent with
-    // the access fn being invoked (and with the admin permission grid).
+    // The operation label matches the access fn invoked (and the admin
+    // permission grid).
     let access = write_hooks.check_access(
-        &AccessCheckInput::builder(if def.soft_delete { "trash" } else { "delete" }, ctx.slug)
+        &AccessCheckInput::builder(operation, ctx.slug)
             .access(access_ref)
             .user(ctx.user)
             .id(Some(id))
@@ -110,84 +102,156 @@ pub(crate) fn delete_document_in_conn(
     )?;
 
     if matches!(access, AccessResult::Denied) {
-        let msg = if def.soft_delete {
-            "Trash access denied"
-        } else {
-            "Delete access denied"
-        };
-
-        return Err(ServiceError::AccessDenied(msg.into()));
+        return Err(ServiceError::AccessDenied(format!(
+            "{op_label} access denied"
+        )));
     }
 
-    // When the hook returned Constrained filters, enforce the row-level match
-    // before deleting. The target row is live (soft-delete moves it to trash,
-    // hard delete removes it — both start from the live view).
-    let op_label = if def.soft_delete { "Trash" } else { "Delete" };
-    enforce_access_constraints(ctx, id, &access, op_label, false)?;
+    // Constrained filters must match the row. The target row is live (a soft
+    // delete moves it to the trash, a hard delete removes it — both start from
+    // the live view).
+    enforce_access_constraints(ctx, id, &access, op_label, false)
+}
 
-    // Load the document fields once (before deletion removes the row) for the
-    // delete-hook context, and build the hook `data`. For a hard delete the row
-    // is gone afterwards, so this snapshot is `after_delete`'s only view of
-    // what was removed.
+/// Refuse a hard delete of a document other documents still reference.
+fn refuse_if_referenced(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
+    let count = query::ref_count::get_ref_count_locked(conn, slug, id)?.unwrap_or(0);
+
+    if count == 0 {
+        return Ok(());
+    }
+
+    Err(ServiceError::Referenced {
+        id: id.to_string(),
+        count,
+    })
+}
+
+/// The files this document owns — the published row's AND every version
+/// snapshot's, so a file only a never-published draft ever named goes with
+/// the document instead of staying behind forever. A soft delete resolves
+/// none: an undelete brings the document back and must find its files.
+fn files_to_release(
+    conn: &dyn DbConnection,
+    def: &CollectionDefinition,
+    id: &str,
+    locale_cfg: &LocaleConfig,
+) -> Result<Vec<String>> {
+    if def.soft_delete {
+        return Ok(Vec::new());
+    }
+
+    let purge_locale = LocaleContext::default_for(locale_cfg);
+
+    owned_file_keys(conn, def, id, purge_locale.as_ref())
+}
+
+/// Lock the row, judge the delete on it, and take the delete-hook snapshot.
+///
+/// The row is locked before it is judged, as every state-changing write does:
+/// the access constraints, the delete-hook snapshot and the reference count
+/// must all see the row the delete lands on — not one a concurrent writer
+/// reassigns or publishes in between. The lock is a no-op on `SQLite`, whose
+/// `IMMEDIATE` transaction serializes writers already.
+///
+/// The snapshot is read once, before the delete removes the row; for a hard
+/// delete it is `after_delete`'s only view of what was removed.
+fn admit_locked(
+    ctx: &ServiceContext,
+    conn: &dyn DbConnection,
+    id: &str,
+    locale_config: Option<&LocaleConfig>,
+) -> Result<DocumentFields> {
+    let write_hooks = ctx.write_hooks()?;
+    let def = ctx.collection_def()?;
+
+    conn.lock_row(ctx.slug, id)?;
+
+    admit_delete(ctx, write_hooks, def, id)?;
+
     let hook_data = prepare_delete_hook_data(ctx, write_hooks, def, conn, id, locale_config)?;
 
-    // Ref count protection (hard delete only).
     if !def.soft_delete {
-        let ref_count = query::ref_count::get_ref_count_locked(conn, ctx.slug, id)?.unwrap_or(0);
-
-        if ref_count > 0 {
-            return Err(ServiceError::Referenced {
-                id: id.to_string(),
-                count: ref_count,
-            });
-        }
+        refuse_if_referenced(conn, ctx.slug, id)?;
     }
 
-    let hook_ctx = ctx
-        .hook_context("delete")
-        .data(hook_data.clone())
-        .document_id(id)
-        .build();
+    Ok(hook_data)
+}
 
-    let final_ctx =
-        write_hooks.run_hooks_with_conn(&def.hooks, HookEvent::BeforeDelete, hook_ctx, conn)?;
+/// The delete hooks of one document, run on the delete's connection.
+struct DeleteHooks<'a, 'c> {
+    ctx: &'a ServiceContext<'c>,
+    conn: &'a dyn DbConnection,
+    id: &'a str,
+}
+
+impl DeleteHooks<'_, '_> {
+    /// Run `event`'s hooks on `data`, carrying `context` from an earlier
+    /// hook; returns the context they leave.
+    fn run(
+        &self,
+        event: HookEvent,
+        data: DocumentFields,
+        context: Option<ReqContext>,
+    ) -> Result<ReqContext> {
+        let write_hooks = self.ctx.write_hooks()?;
+        let def = self.ctx.collection_def()?;
+
+        let mut builder = self
+            .ctx
+            .hook_context("delete")
+            .data(data)
+            .document_id(self.id);
+
+        if let Some(context) = context {
+            builder = builder.context(context);
+        }
+
+        let result =
+            write_hooks.run_hooks_with_conn(&def.hooks, event, builder.build(), self.conn)?;
+
+        Ok(result.context)
+    }
+}
+
+/// Delete a document on an existing connection/transaction.
+///
+/// Runs the full lifecycle: row lock -> access -> ref count check ->
+/// before-delete hooks -> delete -> cleanup -> after-delete hooks.
+/// Does NOT manage transactions — caller must open/commit.
+/// Upload file cleanup is returned as `upload_keys` for the caller to handle after commit.
+///
+/// Hard-deleting an auth document revokes that user's sessions; the stream
+/// invalidation is published post-commit by the wrappers
+/// (`delete_document_pool` / `_conn`, `delete_many_*`), so a rollback cannot
+/// leave a phantom invalidation.
+pub(crate) fn delete_document_in_conn(
+    ctx: &ServiceContext,
+    id: &str,
+    locale_config: Option<&LocaleConfig>,
+) -> Result<DeleteResult> {
+    let conn = ctx.resolve_conn()?;
+    let conn = conn.as_ref();
+    let def = ctx.collection_def()?;
+
+    let hook_data = admit_locked(ctx, conn, id, locale_config)?;
+
+    let hooks = DeleteHooks { ctx, conn, id };
+    let context = hooks.run(HookEvent::BeforeDelete, hook_data.clone(), None)?;
 
     let locale_cfg = locale_config.cloned().unwrap_or_default();
-    let purge_locale = LocaleContext::default_for(&locale_cfg);
 
-    // The files this document owns — the published row's AND every version
-    // snapshot's, so a file only a never-published draft ever named goes with
-    // the document instead of staying behind forever. Read after the
-    // before-hooks, so one that rewrote the row through its own CRUD is
-    // accounted for, and before the delete removes both the row and its
-    // versions. A soft delete resolves none: an undelete brings the document
-    // back and must find its files.
-    let upload_keys = if def.soft_delete {
-        Vec::new()
-    } else {
-        owned_file_keys(conn, def, id, purge_locale.as_ref())?
-    };
+    // Read after the before-hooks, so one that rewrote the row through its own
+    // CRUD is accounted for, and before the delete removes both the row and
+    // its versions.
+    let upload_keys = files_to_release(conn, def, id, &locale_cfg)?;
 
     let event = execute_delete(ctx, conn, id, &locale_cfg)?;
 
-    // After-delete hooks
-    let after_ctx = ctx
-        .hook_context("delete")
-        .data(hook_data)
-        .document_id(id)
-        .context(final_ctx.context)
-        .build();
-
-    let after_result =
-        write_hooks.run_hooks_with_conn(&def.hooks, HookEvent::AfterDelete, after_ctx, conn)?;
-
-    // Hard-deleting an auth document revokes that user's sessions, so its live
-    // streams must be torn down — but the invalidation is published POST-COMMIT
-    // by the wrapper (`delete_document_pool`/`_conn`, `delete_many_*`), mirroring
-    // update/undelete so a rollback can't leave a phantom invalidation.
+    let context = hooks.run(HookEvent::AfterDelete, hook_data, Some(context))?;
 
     Ok(DeleteResult {
-        context: after_result.context,
+        context,
         upload_keys,
         event,
     })
@@ -206,6 +270,7 @@ mod tests {
             FieldDefinition, FieldType, Hooks, SharedInvalidationTransport, ValidationError,
             event::InProcessInvalidationBus,
         },
+        db::query::test_helpers::CountingConn,
         hooks::{HookContext, ValidationCtx},
         service::{
             FieldReadStrip, delete_document,
@@ -281,6 +346,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 _ref_count INTEGER DEFAULT 0,
                 created_at TEXT,
@@ -397,6 +463,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 _ref_count INTEGER DEFAULT 0,
                 created_at TEXT,
@@ -450,6 +517,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 _ref_count INTEGER DEFAULT 0,
                 created_at TEXT,
@@ -478,5 +546,62 @@ mod tests {
             seen.iter().all(|l| l.as_deref() == Some("de")),
             "every delete hook sees ctx.ui_locale, got {seen:?}"
         );
+    }
+
+    /// A `posts` table with one live row `p1`, and `trash` adding the trash
+    /// column.
+    fn posts_with_row(trash: bool) -> (Connection, CollectionDefinition) {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
+                title TEXT,
+                _ref_count INTEGER DEFAULT 0,
+                _deleted_at TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO posts (id, title) VALUES ('p1', 'Hello');",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("posts");
+        def.soft_delete = trash;
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+
+        (conn, def)
+    }
+
+    /// Regression: a delete and a trash judged the access rule's row
+    /// constraints — and read the delete-hook snapshot — before taking any
+    /// lock. On Postgres a writer that reassigned or published the row in
+    /// between let the delete remove a document the rule forbids. The row is
+    /// now locked before anything is read, as an update does.
+    #[test]
+    fn delete_and_trash_lock_the_row_before_reading_it() {
+        for trash in [false, true] {
+            let (raw, def) = posts_with_row(trash);
+            let conn = CountingConn::new(&raw);
+            let hooks = RecordingWriteHooks::default();
+            let ctx = ServiceContext::collection("posts", &def)
+                .conn(&conn)
+                .write_hooks(&hooks)
+                .override_access(true)
+                .build();
+
+            delete_document_in_conn(&ctx, "p1", None).expect("delete");
+
+            assert_eq!(
+                conn.locks(),
+                vec![("posts".to_string(), "p1".to_string())],
+                "trash={trash}: the row is locked once"
+            );
+            assert_eq!(
+                conn.reads_at_locks(),
+                vec![0],
+                "trash={trash}: nothing is read before the lock"
+            );
+        }
     }
 }

@@ -63,19 +63,26 @@ crap.fields.email({
 ```
 
 If you define your own `email` field, it must have `type = "email"` and
-`unique = true` — anything else is a load error. The email field is the login
-identity, and the case-insensitive uniqueness below is keyed to the email field
-*type*, so a `text`-typed or non-unique `email` would allow duplicate accounts.
+`unique = true`, and must not be `localized` — anything else is a load error.
+The email field is the login identity: the case-insensitive uniqueness below is
+keyed to the email field *type*, so a `text`-typed or non-unique `email` would
+allow duplicate accounts, and a localized one would be stored per locale while
+login looks up the one address.
 
 The email address is matched **case-insensitively** everywhere it identifies an
-account: login lookup, the per-account login / forgot-password rate-limit keys,
-and the uniqueness check all compare `LOWER(email)`. So `Victim@x.com` and
-`victim@x.com` are one account — you cannot register both, and either casing logs
-into the same user. The database enforces this too: every auth collection gets a
-`UNIQUE INDEX ON (LOWER(email))` (restricted to active rows on soft-delete
-collections), so even concurrent registrations can't create case-variant
-duplicates. If an existing database already contains such duplicates, migration
-fails creating the index — resolve the duplicate accounts first.
+account. Every write stores an email in canonical form — trimmed, lowercased
+and NFC-composed — and login lookup, the per-account login / forgot-password
+rate-limit keys and the uniqueness check all compare that form. So
+`Victim@x.com` and `victim@x.com` are one account — you cannot register both,
+and either casing logs into the same user — and so are `ÄRGER@x.com` and
+`ärger@x.com`. The database enforces this too: the email field's unique index
+(restricted to active rows on soft-delete collections) holds the canonical
+addresses, so even concurrent registrations can't create case-variant
+duplicates. The comparison is never left to SQL case folding, whose rules (the
+collation on Postgres, ASCII only on SQLite) need not match the canonical form.
+If an existing database already contains such duplicates, the first start
+refuses to run and lists each address with the ids of the accounts sharing it —
+resolve the duplicate accounts, then start again.
 
 ## Password Storage
 

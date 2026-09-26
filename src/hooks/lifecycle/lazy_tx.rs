@@ -13,7 +13,11 @@
 //! An auth strategy runs the same way, with the caller's connection as its
 //! reader: its reads before any write run on that connection — the request's
 //! read connection, for a per-request strategy — and only a write takes a
-//! write connection.
+//! write connection. On a pool that serves reads and writes from one set of
+//! connections (Postgres), the write opens the transaction on the reader
+//! itself instead: holding the reader while waiting for a second connection
+//! would let a burst of such requests take every connection and wait on each
+//! other until they time out.
 
 use std::{cell::OnceCell, marker::PhantomData, ptr};
 
@@ -21,6 +25,7 @@ use anyhow::{Context as _, Result};
 use mlua::Lua;
 
 use crate::{
+    core::admit_request_commit,
     db::{DbConnection, DbPool, InPlaceTransaction},
     hooks::lifecycle::types::{TxContext, restore_slot},
 };
@@ -34,23 +39,22 @@ use crate::{
 /// Given a reader — the caller's own connection — the hook's reads before
 /// its first write run there, in autocommit, and only a write opens the
 /// transaction: a per-request auth strategy that only looks its user up
-/// never takes a write connection.
+/// never takes a write connection. On an unsplit pool the transaction opens
+/// on the reader (see the module docs).
 pub(crate) struct LazyTx<'c> {
     pool: DbPool,
     reader: Option<&'c dyn DbConnection>,
     label: &'static str,
-    tx: OnceCell<InPlaceTransaction<'static>>,
+    tx: OnceCell<InPlaceTransaction<'c>>,
 }
 
-impl LazyTx<'static> {
+impl<'c> LazyTx<'c> {
     /// A not-yet-opened transaction on `pool`'s write side; `label` names
     /// the hook in error messages (e.g. "auth-callback").
     pub(crate) fn on_pool(pool: DbPool, label: &'static str) -> Self {
         Self::new(pool, None, label)
     }
-}
 
-impl<'c> LazyTx<'c> {
     /// A not-yet-opened transaction on `pool`'s write side, whose reads run
     /// on `reader` until the first write opens it.
     pub(crate) fn on_pool_reading(
@@ -100,10 +104,25 @@ impl<'c> LazyTx<'c> {
         Ok(self.tx.get_or_init(|| tx).conn())
     }
 
-    fn open(&self) -> Result<InPlaceTransaction<'static>> {
+    fn open(&self) -> Result<InPlaceTransaction<'c>> {
+        if let Some(reader) = self.reader_to_write_on() {
+            return InPlaceTransaction::begin_on(reader);
+        }
+
         let conn = self.pool.write().context("no write connection")?;
 
         InPlaceTransaction::begin_owned(conn)
+    }
+
+    /// The reader, when the transaction must open on it: the pool hands reads
+    /// and writes out of one set of connections, and the reader is free to
+    /// start one (it is not inside a transaction of its own).
+    fn reader_to_write_on(&self) -> Option<&'c dyn DbConnection> {
+        if self.pool.is_split() {
+            return None;
+        }
+
+        self.reader.filter(|reader| !reader.in_transaction())
     }
 
     /// Whether the hook opened the transaction (made a CRUD call).
@@ -113,15 +132,22 @@ impl<'c> LazyTx<'c> {
         self.tx.get().is_some()
     }
 
-    /// Commit the transaction, if the hook opened one.
+    /// Commit the transaction, if the hook opened one — once the request the
+    /// hook runs for admits it (see [`crate::core::commit_gate`]): an auth
+    /// callback, an `mfa_deliver` hook or an auth strategy whose request was
+    /// already answered as timed out changes nothing.
     ///
     /// # Errors
     ///
-    /// Returns the commit error (the transaction is rolled back).
+    /// Returns the refusal or the commit error (the transaction is rolled
+    /// back).
     pub(crate) fn commit(mut self) -> Result<()> {
         let Some(tx) = self.tx.take() else {
             return Ok(());
         };
+
+        admit_request_commit()
+            .with_context(|| format!("the {} transaction was not committed", self.label))?;
 
         tx.commit()
             .with_context(|| format!("failed to commit the {} transaction", self.label))
@@ -185,11 +211,20 @@ impl Drop for LazyTxGuard<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
+    use std::time::{Duration, Instant};
+
+    use r2d2::Pool;
+    use r2d2_sqlite::SqliteConnectionManager;
+
     use super::*;
 
-    use crate::{config::CrapConfig, db::pool};
+    use crate::{
+        config::CrapConfig,
+        core::{CommitGate, in_commit_gate},
+        db::pool,
+    };
 
     fn test_pool() -> (tempfile::TempDir, DbPool) {
         let dir = tempfile::TempDir::new().expect("tmpdir");
@@ -252,6 +287,31 @@ mod tests {
             .unwrap();
         drop(tx);
         assert_eq!(count(&pool), 1, "a dropped transaction rolls back");
+    }
+
+    /// Regression: a hook transaction (auth callback, `mfa_deliver`, auth
+    /// strategy) committed whatever became of its request, so an admin
+    /// request answered `408` could still have changed an account. A commit
+    /// reaching a request gate whose deadline passed is refused and rolls
+    /// back.
+    #[test]
+    fn a_commit_past_the_request_deadline_is_refused() {
+        let (_dir, pool) = with_table();
+        let late = CommitGate::new(Instant::now());
+
+        let outcome = in_commit_gate(Some(late.clone()), || {
+            let tx = LazyTx::on_pool(pool.clone(), "test");
+            tx.conn()
+                .unwrap()
+                .execute("INSERT INTO t VALUES (1)", &[])
+                .unwrap();
+
+            tx.commit()
+        });
+
+        assert!(outcome.is_err(), "the late commit is refused");
+        assert!(late.expired());
+        assert_eq!(count(&pool), 0, "nothing was written");
     }
 
     /// The guard's context is removed on drop — along with the connection
@@ -320,5 +380,68 @@ mod tests {
 
         tx.commit().unwrap();
         assert_eq!(count(&pool), 1);
+    }
+
+    /// Regression: on a pool serving reads and writes from one set of
+    /// connections (Postgres), a strategy's first write checked out a second
+    /// connection while its request still held the reader — so a burst of
+    /// such requests held every connection and each waited on another until
+    /// the checkout timed out. The transaction now opens on the reader.
+    #[test]
+    fn an_unsplit_pool_opens_the_transaction_on_the_reader() {
+        let dir = tempfile::TempDir::new().expect("tmpdir");
+        let manager = SqliteConnectionManager::file(dir.path().join("one.db"));
+        let pool = DbPool::from_pool(
+            Pool::builder()
+                .max_size(1)
+                .connection_timeout(Duration::from_millis(250))
+                .build(manager)
+                .expect("pool"),
+        );
+        let reader = pool.get().expect("the only connection");
+        reader.execute_batch("CREATE TABLE t (x INTEGER)").unwrap();
+
+        let tx = LazyTx::on_pool_reading(pool.clone(), &reader, "test");
+        tx.conn()
+            .expect("the write opens on the reader, not a second connection")
+            .execute("INSERT INTO t VALUES (1)", &[])
+            .unwrap();
+        tx.commit().unwrap();
+
+        assert!(!reader.in_transaction(), "the reader is back in autocommit");
+        let rows = reader
+            .query_one("SELECT COUNT(*) AS c FROM t", &[])
+            .unwrap()
+            .unwrap()
+            .get_i64("c")
+            .unwrap();
+        assert_eq!(rows, 1);
+    }
+
+    /// A dropped transaction opened on the reader rolls back and leaves the
+    /// reader usable.
+    #[test]
+    fn a_dropped_transaction_on_the_reader_rolls_back() {
+        let pool = DbPool::from_pool(
+            Pool::builder()
+                .max_size(1)
+                .build(SqliteConnectionManager::memory())
+                .expect("pool"),
+        );
+        let reader = pool.get().expect("the only connection");
+        reader.execute_batch("CREATE TABLE t (x INTEGER)").unwrap();
+
+        let tx = LazyTx::on_pool_reading(pool.clone(), &reader, "test");
+        tx.conn()
+            .unwrap()
+            .execute("INSERT INTO t VALUES (1)", &[])
+            .unwrap();
+        drop(tx);
+
+        assert!(!reader.in_transaction());
+        assert!(
+            reader.query_one("SELECT x FROM t", &[]).unwrap().is_none(),
+            "the write rolled back"
+        );
     }
 }

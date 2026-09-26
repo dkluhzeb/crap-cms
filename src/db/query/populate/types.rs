@@ -5,7 +5,9 @@ use std::collections::HashSet;
 use anyhow::Result;
 
 use crate::core::cache::CacheBackend;
-use crate::core::{Document, FieldDefinition, HookRef, Registry};
+use crate::core::{
+    Builder, CollectionDefinition, Document, FieldDefinition, HookRef, JoinConfig, Registry,
+};
 use crate::db::query::populate::{CachedDoc, Singleflight};
 use crate::db::query::{AccessResult, ReadLocale};
 use crate::db::{DbConnection, LocaleContext};
@@ -35,6 +37,33 @@ pub trait JoinAccessCheck {
         user: Option<&Document>,
         collection: &str,
     ) -> Result<AccessResult>;
+
+    /// For each of `children` — documents of `target` a join lists, each as
+    /// the reader will see it — whether its join `on` value survives the
+    /// reader's field read strip (`hidden`, and `access.read` judged with that
+    /// child as `ctx.document`). A child's presence in a join IS that value, so
+    /// a join lists only children for which this holds; deciding it before the
+    /// join's `limit` is applied keeps the limit counting listed children.
+    ///
+    /// The default keeps every child — for an implementation without a field
+    /// read strip. The strip applied to the populated result stays the
+    /// backstop either way.
+    fn on_readable(&self, _join: &JoinReaders<'_>, children: &[Document]) -> Vec<bool> {
+        vec![true; children.len()]
+    }
+}
+
+/// Who reads a join's children, and through which join: the input to
+/// [`JoinAccessCheck::on_readable`].
+#[derive(Builder)]
+pub struct JoinReaders<'a> {
+    #[builder(required)]
+    pub join: &'a JoinConfig,
+    #[builder(required)]
+    pub target: &'a CollectionDefinition,
+    pub user: Option<&'a Document>,
+    /// The locale field access is judged at.
+    pub locale: Option<&'a str>,
 }
 
 /// A populate cycle guard: the `(collection, id)` pairs on the current path —

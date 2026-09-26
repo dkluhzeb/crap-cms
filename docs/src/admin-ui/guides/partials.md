@@ -102,6 +102,8 @@ markup.
 | `partials/icon-font.hbs` | Material Symbols stylesheet `<link>`. Override for self-hosting / privacy. |
 | `partials/i18n-island.hbs` | The `#crap-i18n` JSON data island holding the translations the admin JavaScript reads. Rendered by `layout/base.hbs` and `layout/auth.hbs`; a custom layout that loads `/static/components/index.js` must include it, or components show raw translation keys. |
 | `partials/field.hbs` | Block-form wrapper around field inputs (label, required indicator, error, help). |
+| `partials/field-wrapper.hbs` | The `<div class="form__field">` every rendered field sits in — width, display-condition state and the attributes the admin JavaScript keys on (`data-field-name`, `data-kind`, `data-has-many`, `data-timezone`). One copy for every form: top level, groups, rows, collapsibles, tabs, array/blocks rows and the sidebar. Caller may pass `extra_class` and `no_width=true`. An override must keep those attributes, or live display conditions and error placement stop finding the field. |
+| `partials/implicit-submit.hbs` | The hidden default button of a drafts-enabled edit form: pressing Enter in a single-line input saves a draft instead of publishing. |
 | `partials/breadcrumb.hbs` | Page breadcrumb trail. |
 | `partials/pagination.hbs` | List-view next/previous controls. |
 | `partials/status-badge.hbs` | Document status pill (`published`, `draft`, etc.). Caller passes `status`. |
@@ -114,6 +116,7 @@ markup.
 | `partials/version-sidebar.hbs` | Version-history sidebar contents. |
 | `partials/version-table.hbs` | Version-history table on the standalone versions page. |
 | `partials/warning-card.hbs` | Block-form `<div class="card card--warning">` wrapper. |
+| `partials/revision-conflict.hbs` | The revision-conflict notice of an edit form: shown when the save was refused because someone else saved the document after the form was loaded; offers a reload (discarding the edits) and an overwrite that resubmits the form. Reads `revision_conflict.reload_url` / `.action`. |
 
 ## Worked example — swap the brand logo
 

@@ -273,8 +273,9 @@ fn read(h: &Harness, id: &str, mode: &LocaleMode, draft: bool) -> DocumentFields
     .expect("read")
     .expect("document");
 
+    // Bookkeeping every write moves: the revision counts writes, not content.
     let mut fields = doc.fields;
-    for key in ["created_at", "updated_at", "_status"] {
+    for key in ["created_at", "updated_at", "_status", "_revision"] {
         fields.remove(key);
     }
     for join_field in ["rows", "content"] {

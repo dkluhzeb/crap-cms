@@ -8,7 +8,10 @@ use crate::{
     core::{
         Builder, Document, DocumentFields, FieldDefinition, HookRef, ReqContext, collection::Hooks,
     },
-    db::{AccessResult, DbConnection, query::JoinAccessCheck},
+    db::{
+        AccessResult, DbConnection,
+        query::{JoinAccessCheck, JoinReaders},
+    },
     hooks::{
         HookRunner,
         lifecycle::{
@@ -17,7 +20,7 @@ use crate::{
             apply_after_read_inner, run_hooks_inner,
         },
     },
-    service::hooks::FieldReadStrip,
+    service::{hooks::FieldReadStrip, join_children_readable},
 };
 
 /// Trait for executing read hooks, abstracting over VM acquisition strategy.
@@ -236,6 +239,12 @@ impl JoinAccessCheck for ReadHooksJoinGuard<'_> {
                 .user(user)
                 .build(),
         )
+    }
+
+    /// Judged through this reader's own field read strip — the strip the
+    /// populated result goes through.
+    fn on_readable(&self, join: &JoinReaders<'_>, children: &[Document]) -> Vec<bool> {
+        join_children_readable(self.hooks, join, children)
     }
 }
 

@@ -2,7 +2,10 @@
 
 use mlua::{Lua, Table};
 
-use crate::{core::HookRef, hooks::lua_api::parse::fields::single::parse_field_access};
+use crate::{
+    core::{FieldType, HookRef},
+    hooks::lua_api::parse::fields::single::parse_field_access,
+};
 
 use super::helpers::field_with;
 
@@ -12,7 +15,7 @@ fn test_parse_field_access() {
     let tbl = lua.create_table().unwrap();
     tbl.set("read", "hooks.access.check_role").unwrap();
     tbl.set("create", "hooks.access.admin_only").unwrap();
-    let access = parse_field_access(&tbl).unwrap();
+    let access = parse_field_access(&tbl, &FieldType::Text, "f").unwrap();
     assert_eq!(
         access.read.as_ref().map(HookRef::reference),
         Some("hooks.access.check_role")
@@ -31,7 +34,9 @@ fn test_parse_field_access_non_string_errors() {
     let lua = Lua::new();
     let tbl = lua.create_table().unwrap();
     tbl.set("update", 1i64).unwrap();
-    let err = parse_field_access(&tbl).unwrap_err().to_string();
+    let err = parse_field_access(&tbl, &FieldType::Text, "f")
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("field access"), "got: {err}");
     assert!(err.contains("update"), "got: {err}");
 }
@@ -89,8 +94,8 @@ fn test_type_specific_key_accepted_on_right_type() {
     );
 }
 
-/// A row/collapsible/tabs child for a hook-placement test.
-fn set_layout_with_hook(lua: &Lua, f: &Table, ty: &str) {
+/// A row/collapsible/tabs/group field of type `ty` holding one text child.
+fn set_layout_with_children(lua: &Lua, f: &Table, ty: &str) {
     f.set("type", ty).unwrap();
 
     let fields = lua.create_table().unwrap();
@@ -99,23 +104,24 @@ fn set_layout_with_hook(lua: &Lua, f: &Table, ty: &str) {
     child.set("type", "text").unwrap();
     fields.set(1, child).unwrap();
 
-    if ty == "tabs" {
-        // Tabs nest fields under a tab, not directly.
-        let tab = lua.create_table().unwrap();
-        tab.set("label", "Tab").unwrap();
-        tab.set("fields", fields).unwrap();
-        let tabs = lua.create_table().unwrap();
-        tabs.set(1, tab).unwrap();
-        f.set("tabs", tabs).unwrap();
-    } else {
+    if ty != "tabs" {
         f.set("fields", fields).unwrap();
+        return;
     }
 
-    let hooks = lua.create_table().unwrap();
-    let bc = lua.create_table().unwrap();
-    bc.set(1, "hooks.transform").unwrap();
-    hooks.set("before_change", bc).unwrap();
-    f.set("hooks", hooks).unwrap();
+    // Tabs nest fields under a tab, not directly.
+    let tab = lua.create_table().unwrap();
+    tab.set("label", "Tab").unwrap();
+    tab.set("fields", fields).unwrap();
+    let tabs = lua.create_table().unwrap();
+    tabs.set(1, tab).unwrap();
+    f.set("tabs", tabs).unwrap();
+}
+
+/// A row/collapsible/tabs/group field for a hook-placement test.
+fn set_layout_with_hook(lua: &Lua, f: &Table, ty: &str) {
+    set_layout_with_children(lua, f, ty);
+    set_value_key(lua, f, "hooks");
 }
 
 /// Regression: a lifecycle hook placed on a transparent layout wrapper
@@ -133,6 +139,117 @@ fn test_lifecycle_hook_on_layout_wrapper_rejected() {
             err.contains("layout wrapper") || err.contains("transparent"),
             "{ty}: {err}"
         );
+    }
+}
+
+/// Set `key` on a field table to a value of the shape that key takes.
+fn set_value_key(lua: &Lua, f: &Table, key: &str) {
+    match key {
+        "access" => {
+            let access = lua.create_table().unwrap();
+            access.set("read", "hooks.access.admin_only").unwrap();
+            f.set("access", access).unwrap();
+        }
+        "mcp" => {
+            let mcp = lua.create_table().unwrap();
+            mcp.set("description", "Internal").unwrap();
+            f.set("mcp", mcp).unwrap();
+        }
+        "hooks" => {
+            let hooks = lua.create_table().unwrap();
+            let bc = lua.create_table().unwrap();
+            bc.set(1, "hooks.transform").unwrap();
+            hooks.set("before_change", bc).unwrap();
+            f.set("hooks", hooks).unwrap();
+        }
+        "required_locales" => f.set(key, "all").unwrap(),
+        "validate" | "required_when" | "default_value" => f.set(key, "hooks.x").unwrap(),
+        _ => f.set(key, true).unwrap(),
+    }
+}
+
+/// Regression: `access` and `hidden` on a layout wrapper were accepted and
+/// silently inert — every access/hidden walker only removes the wrapper's own
+/// (non-existent) column, so the wrapped fields stayed readable, writable,
+/// filterable and searchable by everyone. Every key that describes a stored
+/// value is now a load error on row/collapsible/tabs, pointing at the child
+/// fields or a group.
+#[test]
+fn value_keys_on_a_layout_wrapper_are_rejected() {
+    let value_keys = [
+        "access",
+        "hidden",
+        "hooks",
+        "required",
+        "required_when",
+        "unique",
+        "index",
+        "localized",
+        "required_locales",
+        "validate",
+        "default_value",
+        "mcp",
+    ];
+
+    for ty in ["row", "collapsible", "tabs"] {
+        for key in value_keys {
+            let lua = Lua::new();
+            let err = field_with(&lua, |f| {
+                set_layout_with_children(&lua, f, ty);
+                set_value_key(&lua, f, key);
+            })
+            .expect_err(&format!("{ty}: '{key}' must be rejected"))
+            .to_string();
+
+            assert!(err.contains(&format!("'{key}'")), "{ty}/{key}: {err}");
+            assert!(err.contains("layout wrapper"), "{ty}/{key}: {err}");
+            assert!(err.contains("group"), "{ty}/{key}: {err}");
+        }
+    }
+}
+
+/// A falsy value key is still refused: it can never have an effect on a
+/// wrapper, and accepting `hidden = false` would suggest `hidden = true` works.
+#[test]
+fn falsy_value_key_on_a_layout_wrapper_is_rejected() {
+    let lua = Lua::new();
+    let err = field_with(&lua, |f| {
+        set_layout_with_children(&lua, f, "row");
+        f.set("hidden", false).unwrap();
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(err.contains("'hidden'"), "{err}");
+}
+
+/// The keys a wrapper does use — name, type, admin and its children — parse.
+#[test]
+fn layout_wrapper_keys_are_accepted() {
+    for ty in ["row", "collapsible", "tabs"] {
+        let lua = Lua::new();
+        let parsed = field_with(&lua, |f| {
+            set_layout_with_children(&lua, f, ty);
+            let admin = lua.create_table().unwrap();
+            admin.set("description", "Layout").unwrap();
+            f.set("admin", admin).unwrap();
+        });
+
+        assert!(parsed.is_ok(), "{ty}: {parsed:?}");
+    }
+}
+
+/// The same value keys stay valid on a group, which does carry a value.
+#[test]
+fn value_keys_on_a_group_are_accepted() {
+    for key in ["access", "hidden", "localized", "mcp"] {
+        let lua = Lua::new();
+        let parsed = field_with(&lua, |f| {
+            set_layout_with_children(&lua, f, "group");
+            set_value_key(&lua, f, key);
+        });
+
+        assert!(parsed.is_ok(), "group/{key}: {parsed:?}");
     }
 }
 

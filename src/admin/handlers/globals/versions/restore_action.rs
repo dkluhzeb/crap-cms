@@ -11,7 +11,7 @@ use crate::{
         AdminState,
         handlers::shared::{finish_version_restore, get_user_doc, paths, redirect_response},
     },
-    core::{AuthUser, Document, GlobalDefinition, spawn_blocking_in_label_locale},
+    core::{AuthUser, Document, GlobalDefinition, spawn_request_blocking},
     service::{AppInfra, ServiceContext, ServiceError, restore_global_version},
 };
 
@@ -60,8 +60,7 @@ pub async fn restore_version(
         version_id,
     };
 
-    let result =
-        spawn_blocking_in_label_locale(move || restore_global_version_blocking(&input)).await;
+    let result = spawn_request_blocking(move || restore_global_version_blocking(&input)).await;
 
     finish_version_restore(&state, result, &redirect, "global version")
 }

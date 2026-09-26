@@ -56,6 +56,8 @@ serde = { version = "1", features = ["derive"] }
 # `float_roundtrip`: correctly-rounded f64 parsing so Number-field values
 # round-trip through JSON exactly (API/gRPC responses, blocks `data`, cursors).
 serde_json = { version = "1", features = ["float_roundtrip"] }
+# Paths of config decode errors, so every bad key of a section is reported.
+serde_path_to_error = "0.1"
 schemars = { version = "1", features = ["chrono04", "preserve_order"] }
 
 # Auth
@@ -236,6 +238,7 @@ toml.workspace = true
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
+serde_path_to_error.workspace = true
 schemars.workspace = true
 
 # Auth

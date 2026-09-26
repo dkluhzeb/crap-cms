@@ -169,6 +169,7 @@ mod tests {
         conn.execute(
             "CREATE TABLE users (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 _mfa_code TEXT,
                 _mfa_code_exp INTEGER
             )",

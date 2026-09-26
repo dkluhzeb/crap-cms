@@ -136,11 +136,11 @@ mod tests {
     fn conn() -> InMemoryConn {
         let conn = InMemoryConn::open();
         conn.setup(
-            "CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, seo__summary TEXT, \
+            "CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, seo__summary TEXT, \
              _status TEXT, created_at TEXT, updated_at TEXT);
              CREATE TABLE posts_items (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, \
              label TEXT);
-             INSERT INTO posts VALUES ('p1', 'Hello', 'Short', 'published', NULL, NULL);
+             INSERT INTO posts VALUES ('p1', 0, 'Hello', 'Short', 'published', NULL, NULL);
              INSERT INTO posts_items VALUES ('r1', 'p1', 0, 'first');",
         );
         conn

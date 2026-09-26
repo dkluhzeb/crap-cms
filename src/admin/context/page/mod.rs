@@ -30,4 +30,4 @@ pub(crate) mod schema_doc;
 
 pub use base::{AuthBasePageContext, BasePageContext};
 pub use meta::PageMeta;
-pub use types::{Breadcrumb, PageType};
+pub use types::{Breadcrumb, PageType, RevisionConflictNotice};

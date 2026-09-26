@@ -7,14 +7,13 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Response,
 };
-use tokio::task;
 use tracing::error;
 
 use crate::{
     admin::{
         AdminState, FormData, handlers::shared::response::on_blocking_section, parse_multipart_form,
     },
-    core::{CollectionDefinition, Document, upload::UploadedFile},
+    core::{CollectionDefinition, Document, spawn_request_blocking, upload::UploadedFile},
     service::{
         AppInfra, ServiceContext, ServiceError,
         upload::{UpdateUploadInput, UploadUpdateResult, update_upload as update_upload_document},
@@ -57,6 +56,7 @@ fn update_upload_blocking(
     let mut form = FormData::from_raw(input.form_data, &input.def.fields);
     let draft = form.take_action() == "save_draft";
     let password = form.take_password(&input.def);
+    let expected_revision = form.take_revision().map_err(ServiceError::HookError)?;
 
     update_upload_document(
         &ctx,
@@ -74,6 +74,7 @@ fn update_upload_blocking(
             // a shared field under a non-default locale stays a rejected write
             // rather than a silently dropped value.
             form_echoes_locked_fields: false,
+            expected_revision,
         },
     )
     .map_err(|e| e.reclassify(db_kind))
@@ -113,7 +114,7 @@ pub(super) async fn update_upload(
         image_max_attempts: state.config.jobs.system_image_max_attempts(),
     };
 
-    let result = task::spawn_blocking(move || update_upload_blocking(input)).await;
+    let result = spawn_request_blocking(move || update_upload_blocking(input)).await;
 
     match result {
         Ok(Ok(UploadUpdateResult { doc, .. })) => {

@@ -13,15 +13,13 @@
 //! the admin middleware enters it once per request, so every label resolved
 //! while building that request's page follows the viewer's UI locale without
 //! threading it through every context builder. Work moved onto a
-//! `spawn_blocking` thread carries it over with [`in_label_locale`].
+//! `spawn_blocking` thread carries it over with [`in_label_locale`] (which
+//! [`spawn_request_blocking`](crate::core::spawn_request_blocking) applies).
 
 use std::{collections::HashMap, future::Future, sync::OnceLock};
 
 use serde::{Deserialize, Serialize};
-use tokio::{
-    task::{JoinHandle, spawn_blocking},
-    task_local,
-};
+use tokio::task_local;
 
 use crate::typegen::lua::LuaAlias;
 
@@ -69,20 +67,6 @@ pub fn in_label_locale<R>(ui_locale: Option<String>, f: impl FnOnce() -> R) -> R
         Some(locale) => LABEL_LOCALE.sync_scope(locale, f),
         None => f(),
     }
-}
-
-/// Run `f` on a blocking thread inside the caller's active label locale — the
-/// one way request work moves onto `spawn_blocking`, so a label a hook or a
-/// template resolves there follows the viewer's UI locale like one resolved on
-/// the request task.
-pub fn spawn_blocking_in_label_locale<F, R>(f: F) -> JoinHandle<R>
-where
-    F: FnOnce() -> R + Send + 'static,
-    R: Send + 'static,
-{
-    let label_locale = current_label_locale();
-
-    spawn_blocking(move || in_label_locale(label_locale, f))
 }
 
 /// A string that can be plain or per-locale.
@@ -142,6 +126,8 @@ impl LocalizedString {
 
 #[cfg(test)]
 mod tests {
+    use tokio::task::spawn_blocking;
+
     use super::*;
 
     fn localized(pairs: &[(&str, &str)]) -> LocalizedString {
@@ -200,28 +186,6 @@ mod tests {
         assert_eq!(de.await, "Titel");
     }
 
-    /// Regression: work moved onto a blocking thread (every admin write, the
-    /// edit page's read, restore, empty trash) resolved labels against the
-    /// default locale instead of the viewer's UI locale.
-    #[tokio::test]
-    async fn blocking_work_keeps_the_caller_label_locale() {
-        let ls = localized(&[("de", "Titel"), ("en", "Title"), ("fr", "Titre")]);
-
-        let resolved = with_label_locale("fr".to_string(), async move {
-            spawn_blocking_in_label_locale(move || ls.resolve_current().to_string()).await
-        });
-
-        assert_eq!(resolved.await.unwrap(), "Titre");
-    }
-
-    /// Outside any label-locale scope the blocking work runs unscoped.
-    #[tokio::test]
-    async fn blocking_work_without_a_scope_stays_unscoped() {
-        let scoped = spawn_blocking_in_label_locale(current_label_locale).await;
-
-        assert_eq!(scoped.unwrap(), None);
-    }
-
     /// A UI locale the label does not translate falls back to the default
     /// locale (or, with none installed, the first key) — never blank.
     #[tokio::test]
@@ -240,11 +204,9 @@ mod tests {
         let resolved = with_label_locale("en".to_string(), async move {
             let captured = current_label_locale();
 
-            tokio::task::spawn_blocking(move || {
-                in_label_locale(captured, || ls.resolve_current().to_string())
-            })
-            .await
-            .unwrap()
+            spawn_blocking(move || in_label_locale(captured, || ls.resolve_current().to_string()))
+                .await
+                .unwrap()
         })
         .await;
 

@@ -55,7 +55,7 @@ fn input_ty(ty: &FieldTy) -> String {
 pub(super) fn ts_ty(ty: &FieldTy) -> String {
     match ty {
         FieldTy::Str => "string".to_string(),
-        FieldTy::Num => "number".to_string(),
+        FieldTy::Num | FieldTy::Int => "number".to_string(),
         FieldTy::Bool => "boolean".to_string(),
         FieldTy::Json => "unknown".to_string(),
         FieldTy::Map => "Record<string, unknown>".to_string(),

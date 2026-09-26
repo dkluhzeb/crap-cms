@@ -222,7 +222,9 @@ fn create_tables(slug: &str) -> Vec<String> {
     let blocks = "(id TEXT PRIMARY KEY, parent_id TEXT, _block_type TEXT, data TEXT)";
 
     vec![
-        format!("CREATE TABLE \"{slug}\" (id TEXT PRIMARY KEY)"),
+        format!(
+            "CREATE TABLE \"{slug}\" (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0)"
+        ),
         format!(
             "CREATE TABLE \"{slug}_items\" (id TEXT PRIMARY KEY, parent_id TEXT, \
              name TEXT, dims TEXT, sizes TEXT, parts TEXT)"

@@ -18,7 +18,9 @@ use crate::{
 use super::ServiceError;
 use super::admit::admit_update;
 use crate::service::helpers::{hydrate_reported, strip_reported};
-use crate::service::write::{UploadSettle, document_file_keys, settle_upload_write};
+use crate::service::write::{
+    UploadSettle, WriterHeldGate, document_file_keys, settle_upload_write,
+};
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -57,6 +59,14 @@ pub(crate) fn update_many_single_in_conn(
         .draft(is_draft)
         .build();
 
+    // The stored values a resubmitted value no check would now accept may lean
+    // on — only what this writer may read.
+    let held_gate = WriterHeldGate::builder(write_hooks, ctx.slug, &def.fields)
+        .draft_access(def.access.resolve_draft())
+        .user(ctx.user)
+        .locale(input.locale_ctx.map(LocaleContext::access_locale))
+        .build();
+
     // Same rule as the single-document update: a publish writes the draft's
     // other locales back after validation, so completeness judges that
     // snapshot and not the locales it replaces.
@@ -70,6 +80,7 @@ pub(crate) fn update_many_single_in_conn(
         .ui_locale(ctx.ui_locale.as_deref())
         .locale_overlay(publishing_draft.as_ref().and_then(Value::as_object))
         .versioned_drafts(def.has_drafts())
+        .held_gate(Some(&held_gate))
         .build();
 
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
@@ -240,6 +251,7 @@ mod tests {
                 title TEXT,
                 _status TEXT DEFAULT 'published',
                 _ref_count INTEGER DEFAULT 0,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT,
                 updated_at TEXT
             );
@@ -293,6 +305,10 @@ mod tests {
         .unwrap();
         assert_eq!(row.get_string("title").unwrap(), "Original");
         assert_eq!(row.get_string("_status").unwrap(), "published");
+
+        // A draft save is still a write to the document: its revision moves,
+        // so an editor holding the old one cannot save over the draft unseen.
+        assert_eq!(query::read_revision(&conn, "posts", "p1").unwrap(), Some(1));
 
         // A draft version captured the edit.
         let versions = query::list_versions(&conn, "posts", "p1", false, None, None).unwrap();

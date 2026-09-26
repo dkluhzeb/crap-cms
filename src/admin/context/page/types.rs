@@ -128,6 +128,30 @@ impl PageType {
     }
 }
 
+/// The notice an edit form re-renders with when its save was refused because
+/// someone else saved the document after the form was loaded. The form keeps
+/// the editor's unsaved values and now carries the document's current
+/// revision, so submitting it again overwrites the other change on purpose.
+#[derive(Serialize, Clone, JsonSchema)]
+pub struct RevisionConflictNotice {
+    /// The edit page, reloaded with the saved document — discards the edits.
+    pub reload_url: String,
+    /// The `_action` the refused save was submitted with (`publish`,
+    /// `save_draft`, `unpublish`, or empty): the overwrite button resubmits
+    /// the same one.
+    pub action: String,
+}
+
+impl RevisionConflictNotice {
+    #[must_use]
+    pub fn new(reload_url: impl Into<String>, action: impl Into<String>) -> Self {
+        Self {
+            reload_url: reload_url.into(),
+            action: action.into(),
+        }
+    }
+}
+
 /// A breadcrumb entry with a label and optional URL.
 #[derive(Serialize, Clone, JsonSchema, LuaAnnotation)]
 #[lua(class = "crap.template.breadcrumb")]

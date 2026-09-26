@@ -26,12 +26,16 @@ use serde_json::Value;
 
 use crate::{
     core::{DocumentFields, ValidationError},
-    db::{DbConnection, LocaleContext, query::helpers::global_table},
+    db::{
+        DbConnection, LocaleContext,
+        query::{StoredRow, helpers::global_table},
+    },
     service::{
-        Def, PendingDraft, RunnerWriteHooks, ServiceContext, ServiceError, ValidateContext,
-        WriteInput, admit_create_input, admit_global_update_input, admit_update_input,
-        check_create_access, check_global_update_access, check_update_access, hooks::WriteHooks,
-        stored_fields_for_update_rules, stored_global_fields_for_update_rules, validate_document,
+        Admission, Def, RunnerWriteHooks, ServiceContext, ServiceError, UpdateStored,
+        ValidateContext, WriteInput, admit_create_input, admit_global_update_input,
+        admit_update_input, check_create_access, check_global_update_access, check_update_access,
+        draft_save_base, hooks::WriteHooks, stored_fields_for_update_rules,
+        stored_global_fields_for_update_rules, validate_document, write::PublishStored,
     },
 };
 
@@ -80,18 +84,15 @@ impl<'a> DryRun<'a> {
     }
 }
 
-/// The input after the admission prefix, with the pending draft it adopted.
+/// The input after the admission prefix, with what admission made of it.
 struct Admitted<'i> {
     input: WriteInput<'i>,
-    pending_draft: PendingDraft,
+    admission: Admission,
 }
 
 impl<'i> Admitted<'i> {
-    fn new(input: WriteInput<'i>, pending_draft: PendingDraft) -> Self {
-        Self {
-            input,
-            pending_draft,
-        }
+    fn new(input: WriteInput<'i>, admission: Admission) -> Self {
+        Self { input, admission }
     }
 }
 
@@ -138,8 +139,8 @@ fn dry_run(
     vctx: &ValidateContext<'_>,
     mut input: WriteInput<'_>,
 ) -> Result<(), ServiceError> {
-    let pending_draft = admit(ctx, vctx, &mut input)?;
-    let admitted = Admitted::new(input, pending_draft);
+    let admission = admit(ctx, vctx, &mut input)?;
+    let admitted = Admitted::new(input, admission);
 
     let Some(wh) = ctx.write_hooks else {
         return judge_rolled_back(ctx, vctx, admitted);
@@ -176,12 +177,13 @@ fn judge_rolled_back(
 
 /// The write's admission prefix for the previewed operation — the same
 /// function the real create / update / global update calls, so the dry-run
-/// judges the input that write would judge.
+/// judges the input that write would judge. Its refusal is raised past the
+/// access gate, as the write raises it.
 fn admit(
     ctx: &ServiceContext<'_>,
     vctx: &ValidateContext<'_>,
     input: &mut WriteInput<'_>,
-) -> Result<PendingDraft, ServiceError> {
+) -> Result<Admission, ServiceError> {
     if let Def::Global(def) = &ctx.def {
         return admit_global_update_input(ctx, def, input);
     }
@@ -189,9 +191,7 @@ fn admit(
     let def = ctx.collection_def()?;
 
     let Some(id) = vctx.exclude_id else {
-        admit_create_input(def, input)?;
-
-        return Ok(PendingDraft::default());
+        return Ok(admit_create_input(def, input));
     };
 
     admit_update_input(ctx, def, id, input)
@@ -206,30 +206,67 @@ fn judge(
     vctx: &ValidateContext<'_>,
     admitted: Admitted<'_>,
 ) -> Result<(), ServiceError> {
-    let Admitted {
-        input,
-        pending_draft,
-    } = admitted;
+    let Admitted { input, admission } = admitted;
 
     check_validate_access(ctx, run.write_hooks, vctx, &input.data, input.locale_ctx)?;
 
+    let (pending_draft, groups) = admission.admit()?;
+
     let stored = stored_for_update_rules(ctx, vctx, run.conn, input.locale_ctx)?;
+    let draft = draft_for_read_rules(ctx, vctx, run.conn, &input)?;
 
     let empty = DocumentFields::default();
+    let row = stored.as_ref().unwrap_or(&empty);
+
+    // The write-back judges each locale against the row as that locale
+    // stores it, as the real publish does.
+    let load = |locale_ctx: Option<&LocaleContext>| {
+        stored_for_update_rules(ctx, vctx, run.conn, locale_ctx).map(Option::unwrap_or_default)
+    };
     let overlay = pending_draft.publishing_snapshot(
         ctx,
         run.write_hooks,
-        stored.as_ref().unwrap_or(&empty),
+        PublishStored::new(row, &load),
         input.locale_ctx,
     )?;
 
     let vctx = ValidateContext {
-        stored_document: stored.as_ref(),
+        stored_document: stored
+            .as_ref()
+            .map(|row| UpdateStored::new(row, draft.as_ref().unwrap_or(row))),
         locale_overlay: overlay.as_ref().and_then(Value::as_object),
+        input_groups: Some(&groups),
         ..*vctx
     };
 
     validate_document(run.conn, run.write_hooks, &vctx, input, ctx.user)
+}
+
+/// What a draft dry-run judges the values its writer cannot read against: the
+/// pending draft the real draft save replaces (see [`draft_save_base`]).
+/// `None` in create mode, for a non-draft run, or without a pending draft.
+fn draft_for_read_rules(
+    ctx: &ServiceContext<'_>,
+    vctx: &ValidateContext<'_>,
+    conn: &dyn DbConnection,
+    input: &WriteInput<'_>,
+) -> Result<Option<DocumentFields>, ServiceError> {
+    let Some(id) = vctx.exclude_id else {
+        return Ok(None);
+    };
+
+    let row = StoredRow {
+        table: vctx.table_name,
+        id,
+        fields: vctx.fields,
+        locale_ctx: input.locale_ctx,
+    };
+
+    draft_save_base(
+        conn,
+        &row,
+        input.draft && vctx.supports_drafts && ctx.has_versions(),
+    )
 }
 
 /// The stored document update-mode field rules judge, read on the dry-run's
@@ -331,6 +368,9 @@ impl Operation for Validate {
             stored_document: None,
             // Set inside the body from the admitted pending draft.
             locale_overlay: None,
+            draft_access: def.access.resolve_draft(),
+            // Set inside the body from the admission.
+            input_groups: None,
         };
 
         run_validate(ctx, &vctx, args)
@@ -367,6 +407,9 @@ impl Operation for ValidateGlobal {
             ui_locale: ctx.ui_locale.as_deref(),
             stored_document: None,
             locale_overlay: None,
+            draft_access: def.access.resolve_draft(),
+            // Set inside the body from the admission.
+            input_groups: None,
         };
 
         run_validate(ctx, &vctx, args)
@@ -584,6 +627,7 @@ mod tests {
             conn.execute_batch(
                 "CREATE TABLE posts (
                     id TEXT PRIMARY KEY,
+                    _revision INTEGER NOT NULL DEFAULT 0,
                     title TEXT,
                     body TEXT,
                     _status TEXT DEFAULT 'published',

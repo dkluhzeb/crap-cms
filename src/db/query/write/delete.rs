@@ -117,6 +117,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 status TEXT,
                 created_at TEXT,
@@ -166,6 +167,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 status TEXT,
                 _deleted_at TEXT,
@@ -284,6 +286,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 slug TEXT,
                 status TEXT,

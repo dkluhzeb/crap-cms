@@ -821,6 +821,7 @@ mod strategy_user_tests {
         conn.execute_batch(
             "CREATE TABLE users (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 email TEXT,
                 tenant_id TEXT,
                 _locked INTEGER DEFAULT 0,

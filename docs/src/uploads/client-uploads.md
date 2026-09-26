@@ -125,6 +125,12 @@ Authorization: Bearer <jwt>
 
 The form fields are the same as create. The `_file` field is optional — if omitted, only the metadata fields are updated.
 
+An optional `_revision` form field carries the document's `_revision` as you
+read it: when anyone wrote the document since, the request is refused with
+`409` and nothing is stored or changed (see
+[Concurrent Editing](../collections/concurrent-editing.md)). A `_revision` that
+is not an integer is refused with `400`.
+
 ```bash
 curl -X PATCH http://localhost:3000/api/upload/media/abc123 \
   -H "Authorization: Bearer $TOKEN" \
@@ -185,7 +191,7 @@ All error responses follow the same format:
 | `401` | Invalid or expired token, locked account, unverified email |
 | `403` | Access control denied |
 | `404` | Collection or document not found |
-| `409` | Refused by data state: unique-field violation, document referenced elsewhere, limit exceeded |
+| `409` | Refused by data state: unique-field violation, document referenced elsewhere, limit exceeded, a stale `_revision` |
 | `500` | Server error |
 | `503` | Transient database error — safe to retry |
 

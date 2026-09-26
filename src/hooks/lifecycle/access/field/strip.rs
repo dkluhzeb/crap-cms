@@ -11,7 +11,8 @@ use super::walk::{
     strip_read_access_data_aware,
 };
 use crate::core::{
-    Document, DocumentFields, FieldChildren, FieldDefinition, HookRef, field_children,
+    Document, DocumentFields, FieldChildren, FieldDefinition, HookRef,
+    field::flatten_array_sub_fields, field_children,
 };
 use crate::db::AccessResult;
 use crate::hooks::lifecycle::{AccessCheckInput, access::collection::check_access_with_lua};
@@ -84,12 +85,15 @@ pub(crate) fn strip_read_access_with_lua(
     // it meant to keep). Evaluate the rule PER-LOCALE and retain only the allowed
     // locales' entries; drop the field if none survive. These fields are then
     // excluded from the whole-field pass so it can't overrule the per-locale
-    // decision. (Localized fields nested inside a composite keep the default-
-    // locale decision — a documented limitation.)
+    // decision. A leaf inside a row / collapsible / tabs wrapper sits at this
+    // same level (wrappers are transparent), so it is judged per locale too.
+    // (Localized fields nested inside a composite keep the default-locale
+    // decision — a documented limitation.)
     let snapshot: DocumentFields = level.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let level_fields = flatten_array_sub_fields(fields);
 
     let mut handled: Vec<String> = Vec::new();
-    for field in fields {
+    for field in level_fields.iter().copied() {
         let Some(hook) = extract_read_access(field) else {
             continue;
         };
@@ -124,9 +128,10 @@ pub(crate) fn strip_read_access_with_lua(
     } else {
         // Whole-field pass over everything EXCEPT the per-locale-handled leaves,
         // evaluated against the full-level snapshot (ctx.data) so sibling rules
-        // still see the complete document.
-        let remaining: Vec<FieldDefinition> = fields
-            .iter()
+        // still see the complete document. Built from the wrapper-flattened
+        // level, so a handled leaf inside a wrapper is left out as well.
+        let remaining: Vec<FieldDefinition> = level_fields
+            .into_iter()
             .filter(|f| !handled.contains(&f.name))
             .cloned()
             .collect();
@@ -333,6 +338,56 @@ mod tests {
             !secret.contains_key("de"),
             "the denied locale's value is stripped"
         );
+    }
+
+    /// Regression: a localized leaf inside a row / collapsible / tabs wrapper
+    /// sits at the document level like a top-level one, but an `all`-locale
+    /// read judged it once at the default locale — `en` allowed kept the whole
+    /// map, leaking `de`. It is judged per locale like a top-level leaf.
+    #[test]
+    fn strip_read_access_all_locale_map_is_per_locale_inside_a_wrapper() {
+        let lua = setup_lua();
+        let secret = FieldDefinition::builder("secret", FieldType::Text)
+            .localized(true)
+            .access(FieldAccess {
+                read: Some("test_access.check_locale".into()),
+                ..Default::default()
+            })
+            .build();
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Row)
+                .fields(vec![
+                    FieldDefinition::builder("title", FieldType::Text).build(),
+                    secret,
+                ])
+                .build(),
+        ];
+
+        let mut doc = json!({
+            "title": "kept",
+            "secret": { "en": "visible", "de": "hidden" }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let document: DocumentFields = doc.clone().into_iter().collect();
+
+        strip_read_access_with_lua(
+            &lua,
+            &fields,
+            &mut doc,
+            &ReadStripInput {
+                document: &document,
+                collection: "",
+                user: None,
+                locale: None,
+            },
+        );
+
+        let secret = doc.get("secret").unwrap().as_object().unwrap();
+        assert_eq!(secret.get("en"), Some(&json!("visible")));
+        assert!(!secret.contains_key("de"), "the denied locale is stripped");
+        assert_eq!(doc.get("title"), Some(&json!("kept")));
     }
 
     /// Regression: an `all`-locale read trimmed a localized field's per-locale

@@ -337,3 +337,89 @@ async fn save_as_draft_skips_required_via_validate_endpoint() {
 
     server_handle.abort();
 }
+
+// ── an_error_in_an_inactive_tab_is_brought_into_view ─────────────────────
+
+fn make_tabbed_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("pages");
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("layout", FieldType::Tabs)
+            .tabs(vec![
+                FieldTab::new(
+                    "Content",
+                    vec![FieldDefinition::builder("title", FieldType::Text).build()],
+                ),
+                FieldTab::new(
+                    "SEO",
+                    vec![
+                        FieldDefinition::builder("seo_title", FieldType::Text)
+                            .required(true)
+                            .build(),
+                    ],
+                ),
+            ])
+            .build(),
+    ];
+    def
+}
+
+/// Regression: a pre-submit error on a field in an inactive tab was drawn
+/// inside the hidden panel — the save did nothing visible, and the tab
+/// showed no error count. The tab holding the first error is switched to,
+/// and it shows its count.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_error_in_an_inactive_tab_is_brought_into_view() {
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        browser: _browser,
+        ..
+    } = setup_browser_test(
+        vec![make_tabbed_def(), make_users_def()],
+        vec![],
+        "bvaltab@test.com",
+        "pass123",
+    )
+    .await;
+
+    page.goto(format!("{base_url}/admin/collections/pages/create"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    browser::wait_for_element(&page, "#edit-form").await;
+
+    page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
+        .await
+        .unwrap();
+
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('[data-field-name=\"seo_title\"] > .form__error') !== null"
+        )
+        .await,
+        "the error is drawn on the field"
+    );
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "!document.querySelector('[data-tab-panel=\"1\"]').classList.contains('form__tabs-panel--hidden')"
+        )
+        .await,
+        "the tab holding the error is switched to"
+    );
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('[data-tab-index=\"1\"] .form__tabs-tab-error')?.textContent === '1'"
+        )
+        .await,
+        "the tab shows its error count"
+    );
+
+    server_handle.abort();
+}

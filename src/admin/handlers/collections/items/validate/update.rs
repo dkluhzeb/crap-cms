@@ -11,7 +11,8 @@ use crate::{
         AdminState,
         handlers::{
             shared::{
-                ErrorLabels, get_user_doc, parse_request_locale, strip_locale_locked_form_fields,
+                ErrorLabels, collection_form_fields, get_user_doc, parse_request_locale,
+                strip_locale_locked_form_fields,
             },
             validate::{
                 ValidateRequest, handle_validation_outcome, validation_error_response_simple,
@@ -45,11 +46,22 @@ pub async fn validate_update(
         Err(msg) => return validation_error_response_simple(&msg),
     };
 
+    // Parsed against the fields the edit form rendered for this viewer, as
+    // its save is.
+    let form_fields = collection_form_fields(
+        &state,
+        &def,
+        &id,
+        auth_user.as_ref(),
+        payload.locale.as_deref(),
+    )
+    .await;
+
     // The edit form echoes shared fields read-only under a non-default locale;
     // the admin write drops them before the service's locale lock, so the
     // dry-run it previews does too.
     let data = strip_locale_locked_form_fields(
-        prepare_form_for_validation(&state, &def, auth_user.as_ref(), &payload, "update"),
+        prepare_form_for_validation(&def, &form_fields, &payload),
         &def.fields,
         locale_ctx.as_ref(),
     );

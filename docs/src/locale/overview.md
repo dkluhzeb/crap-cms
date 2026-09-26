@@ -59,13 +59,23 @@ translations stay in their columns — they are not merged. The move happens
 whenever the flag flips, not only when a column is first created, so flipping
 back after editing keeps the edits.
 
+Arrays, blocks and has-many relationships/uploads keep their rows in a join
+table with a `_locale` column. Marking one `localized` makes its existing rows
+the default locale's. Clearing `localized` — on the field or its group, or by
+turning localization off — keeps **only the default locale's rows**: the next
+start deletes the other locales' rows (there is no column to leave them in)
+and recomputes the reference counts, so back up first. A join table holding
+rows of other locales but none of the default locale stops the start instead
+of being emptied: set `default_locale` to the locale whose rows to keep, or
+mark the field localized again.
+
 ## Storage
 
 Localized fields use **suffixed columns** in SQLite:
 
 - A field `title` with locales `["en", "de"]` becomes columns `title__en` and `title__de`
 - Non-localized fields keep their single column
-- Only the default-locale column (`title__en`) is `NOT NULL` for a required field; per-locale completeness is enforced in the validation layer (see [Required across locales](#required-across-locales))
+- No user-field column is `NOT NULL`: `required` and per-locale completeness are enforced in the validation layer (see [Required across locales](#required-across-locales))
 - `unique` checks the locale-specific column being written to (e.g., writing locale `"de"` checks `title__de`)
 - Junction tables (arrays, blocks, has-many) get a `_locale` column
 
@@ -153,6 +163,11 @@ This also applies to fields inside a localized Group — uniqueness is checked a
   removes them with `--confirm`. A
   version taken before a locale was added leaves that locale untouched when
   restored.
+- **Turning localization off** (an empty `locales` list) makes every
+  localized field shared, as if `localized` were cleared on each: the default
+  locale's column values are carried into the plain columns and join tables
+  keep only the default locale's rows (see
+  [Enabling localization on an existing field](#enabling-localization-on-an-existing-field)).
 
 ## API Behavior
 

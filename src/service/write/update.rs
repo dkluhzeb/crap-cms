@@ -7,12 +7,15 @@ use crate::core::{CollectionDefinition, DocumentFields, FieldDefinition, flatten
 use crate::db::LocaleMode;
 
 use crate::{
-    db::{AccessResult, DbConnection, LocaleContext, query},
+    db::{AccessResult, DbConnection, LocaleContext, query, query::StoredRow},
     hooks::{AccessCheckInput, ValidationCtx, lifecycle::access::has_any_field_access},
     service::{
         AfterChangeInput, Gated, PersistOptions, ServiceContext, WriteInput, WriteResult,
-        persist_draft_version, persist_update, run_after_change_hooks,
-        write::{UploadSettle, admit::admit_update, document_file_keys, settle_upload_write},
+        persist_draft_version, persist_update, run_after_change_hooks, update_strip_needs_stored,
+        write::{
+            UploadSettle, WriterHeldGate, admit::admit_update, document_file_keys,
+            settle_upload_write,
+        },
     },
 };
 
@@ -132,7 +135,9 @@ pub(crate) fn reject_locale_locked_fields(
 ///
 /// Those rules decide whether the caller may change a field, so they must see
 /// the row as it stands — never the incoming patch, which the caller controls.
-/// Skips the read when no field configures `access.update`. A missing row
+/// The same document decides which values the writer cannot read, which the
+/// write keeps as stored. Skips the read when no field configures
+/// `access.update` or `access.read`. A missing row
 /// yields an empty document, so a rule keyed on stored values denies.
 ///
 /// # Errors
@@ -145,13 +150,38 @@ pub(crate) fn stored_fields_for_update_rules(
     id: &str,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<DocumentFields> {
-    if !has_any_field_access(&def.fields, |f| f.access.update.as_ref()) {
+    if !update_strip_needs_stored(&def.fields) {
         return Ok(DocumentFields::default());
     }
 
     let stored = query::find_by_id(conn, slug, def, id, locale_ctx)?;
 
     Ok(stored.map(|doc| doc.fields).unwrap_or_default())
+}
+
+/// The pending draft a draft save replaces, read for the write's locale as
+/// the draft edit form reads it — or `None` when `draft_save` is false, no
+/// field carries an `access.read` rule, or no draft is pending (the draft
+/// then starts from the stored row).
+///
+/// A draft save does not touch the row: it overlays the pending draft. The
+/// values its writer cannot read — and so keeps as they are — are the
+/// draft's, judged against the draft the writer's form showed, not against
+/// the published row.
+///
+/// # Errors
+///
+/// Returns an error if the version table cannot be read.
+pub(crate) fn draft_save_base(
+    conn: &dyn DbConnection,
+    row: &StoredRow<'_>,
+    draft_save: bool,
+) -> Result<Option<DocumentFields>> {
+    if !draft_save || !has_any_field_access(row.fields, |f| f.access.read.as_ref()) {
+        return Ok(None);
+    }
+
+    Ok(query::find_pending_draft_fields(conn, row)?)
 }
 
 /// Update a document on an existing connection/transaction.
@@ -218,6 +248,14 @@ pub(crate) fn update_document_gated(
         .draft(is_draft)
         .build();
 
+    // The stored values a resubmitted value no check would now accept may lean
+    // on — only what this writer may read.
+    let held_gate = WriterHeldGate::builder(write_hooks, ctx.slug, &def.fields)
+        .draft_access(def.access.resolve_draft())
+        .user(ctx.user)
+        .locale(input.locale_ctx.map(LocaleContext::access_locale))
+        .build();
+
     // A publish writes the draft's other locales back over the row after this
     // validation, so the completeness gate judges that snapshot rather than the
     // locales it is about to replace.
@@ -231,6 +269,7 @@ pub(crate) fn update_document_gated(
         .ui_locale(ui_locale)
         .locale_overlay(publishing_draft.as_ref().and_then(Value::as_object))
         .versioned_drafts(def.has_drafts())
+        .held_gate(Some(&held_gate))
         .build();
 
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
@@ -421,6 +460,7 @@ mod write_lock_tests {
                 url TEXT,
                 filename TEXT,
                 caption TEXT,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT,
                 updated_at TEXT
             );

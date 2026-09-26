@@ -96,7 +96,7 @@ async fn list_collections_hides_collections_the_admin_rule_denies() {
     posts.access.admin = Some("hooks.access.deny_all".into());
     let app = setup_app(vec![posts, make_users_def()], vec![]);
 
-    let hooks = app._tmp.path().join("hooks");
+    let hooks = app.tmp.path().join("hooks");
     fs::create_dir_all(&hooks).unwrap();
     fs::write(
         hooks.join("access.lua"),

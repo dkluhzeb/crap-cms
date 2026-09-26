@@ -12,7 +12,7 @@ use crate::{
     db::{
         DbConnection, DbValue,
         query::{
-            LocaleContext, LocaleMode, get_locale_select_columns_full,
+            LocaleContext, LocaleMode, REVISION_COLUMN, get_locale_select_columns_full,
             helpers::{decodes, locale_column},
             join::hydrate_document,
             per_locale_columns,
@@ -51,6 +51,11 @@ pub fn build_snapshot(
     )?;
 
     let mut data: Map<String, Value> = hydrated.fields.into_iter().collect();
+
+    // The revision counts writes to the ROW; a version is content. Recorded,
+    // it would come back through a draft read or a restore as a stale
+    // revision the next write is refused against.
+    data.remove(REVISION_COLUMN);
 
     // `doc` was resolved under ONE locale, so it carries a single value per
     // localized field. A snapshot must hold every locale's column: restore
@@ -719,6 +724,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE items (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title__en TEXT,
                 title__de TEXT,
                 seo__title TEXT,
@@ -762,6 +768,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE snippets (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 snippet__en TEXT,
                 snippet__de TEXT,
                 snippet_lang__en TEXT,

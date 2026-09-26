@@ -26,11 +26,13 @@ use std::{
 use anyhow::{Context as _, anyhow};
 
 use crate::{
-    core::upload::delete_storage_keys,
+    core::{request_deadline, upload::delete_storage_keys},
+    db::StatementDeadlineScope,
     hooks::LuaCrudInfra,
     service::{
         Def, DeferredQueue, EffectOutcome, RunnerWriteHooks, ServiceContext, ServiceError,
-        flush_deferred_effects, flush_queue, flush_verification_queue, warn_orphaned_files,
+        admit_commit, flush_deferred_effects, flush_queue, flush_verification_queue,
+        warn_orphaned_files,
     },
 };
 
@@ -93,6 +95,18 @@ fn mark_commit() {
             watch.set(true);
         }
     });
+}
+
+/// Run the envelope's body with every statement bounded by the deadline of
+/// the request it serves, if it has one: a statement still running when the
+/// request's time is up is interrupted, and the write rolls back.
+fn run_body<T>(
+    inner_ctx: &ServiceContext<'_>,
+    body: impl FnOnce(&ServiceContext<'_>) -> Result<T>,
+) -> Result<T> {
+    let _bound = StatementDeadlineScope::bound_to(request_deadline());
+
+    body(inner_ctx)
 }
 
 /// Run one pool-mode write inside the shared envelope.
@@ -171,11 +185,15 @@ pub(crate) fn run_pool_write<T>(
         .locale_config(ctx.locale_config)
         .build();
 
-    let result = body(&inner_ctx);
+    let result = run_body(&inner_ctx, body);
 
     // Release the borrows of `tx` before resolving it.
     drop(inner_ctx);
     drop(wh);
+
+    // The last point at which a write whose request already timed out can
+    // still be stopped without committing late (see `core::commit_gate`).
+    let result = result.and_then(|value| admit_commit().map(|()| value));
 
     let result = match result {
         Ok(v) => v,

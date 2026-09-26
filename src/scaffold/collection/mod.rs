@@ -7,7 +7,7 @@ pub(crate) mod parser;
 mod stubs;
 mod writer;
 
-pub use field_types::{CONTAINER_TYPES, VALID_FIELD_TYPES};
+pub use field_types::{CONTAINER_TYPES, VALID_FIELD_TYPES, holds_value};
 pub use generator::make_collection;
 pub use options::CollectionOptions;
 pub use parser::parse_fields_shorthand;

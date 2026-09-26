@@ -21,6 +21,7 @@ fn create_date_with_timezone_normalizes_and_stores_tz() {
     let (_dir, conn) = setup_db(
         "CREATE TABLE events (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             start_date TEXT,
             start_date_tz TEXT,
             created_at TEXT,
@@ -51,6 +52,7 @@ fn create_date_with_timezone_flag_but_no_tz_value_falls_back() {
     let (_dir, conn) = setup_db(
         "CREATE TABLE events (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             start_date TEXT,
             start_date_tz TEXT,
             created_at TEXT,
@@ -80,6 +82,7 @@ fn create_date_without_timezone_flag_no_tz_column() {
     let (_dir, conn) = setup_db(
         "CREATE TABLE events (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             event_date TEXT,
             created_at TEXT,
             updated_at TEXT
@@ -104,6 +107,7 @@ fn create_read_roundtrip_with_timezone() {
     let (_dir, conn) = setup_db(
         "CREATE TABLE events (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             title TEXT,
             start_date TEXT,
             start_date_tz TEXT,
@@ -148,6 +152,7 @@ fn create_read_roundtrip_timezone_in_group() {
     let (_dir, conn) = setup_db(
         "CREATE TABLE events (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             schedule__start TEXT,
             schedule__start_tz TEXT,
             created_at TEXT,
@@ -192,6 +197,7 @@ fn create_date_empty_value_with_timezone_stores_null() {
     let (_dir, conn) = setup_db(
         "CREATE TABLE events (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             start_date TEXT,
             start_date_tz TEXT,
             created_at TEXT,
@@ -247,6 +253,7 @@ fn create_read_roundtrip_with_code_language() {
     let (_dir, conn) = setup_db(
         "CREATE TABLE snippets (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             snippet TEXT,
             snippet_lang TEXT,
             created_at TEXT,
@@ -283,6 +290,7 @@ fn create_read_roundtrip_code_language_in_group() {
     let (_dir, conn) = setup_db(
         "CREATE TABLE snippets (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             meta__example TEXT,
             meta__example_lang TEXT,
             created_at TEXT,
@@ -320,6 +328,7 @@ fn create_localized_code_language_reads_per_locale() {
     let (_dir, conn) = setup_db(
         "CREATE TABLE snippets (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             snippet__en TEXT,
             snippet__de TEXT,
             snippet_lang__en TEXT,

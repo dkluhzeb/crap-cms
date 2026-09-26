@@ -12,7 +12,8 @@ use quote::quote;
 use syn::{Attribute, DeriveInput, Generics, parse_macro_input};
 
 use crate::shared::{
-    LuaField, build_class_header, build_field_emit, extract_docs, from_derive_input_or_return,
+    LuaField, apply_rename_all, build_class_header, build_field_emit, extract_docs,
+    from_derive_input_or_return,
 };
 
 #[derive(FromDeriveInput)]
@@ -49,6 +50,24 @@ struct LuaContainer {
     #[darling(default)]
     #[allow(dead_code)]
     discriminator: Option<syn::Path>,
+    #[darling(default)]
+    #[allow(dead_code)]
+    layout_base: Option<String>,
+    #[darling(default)]
+    #[allow(dead_code)]
+    layout_views: Option<String>,
+    #[darling(default)]
+    #[allow(dead_code)]
+    layout_doc: Option<String>,
+    #[darling(default)]
+    #[allow(dead_code)]
+    virtual_base: Option<String>,
+    #[darling(default)]
+    #[allow(dead_code)]
+    virtual_views: Option<String>,
+    #[darling(default)]
+    #[allow(dead_code)]
+    virtual_doc: Option<String>,
 }
 
 pub(crate) fn derive(input: TokenStream) -> TokenStream {
@@ -84,7 +103,7 @@ pub(crate) fn derive(input: TokenStream) -> TokenStream {
         let lua_name = f
             .rename
             .clone()
-            .unwrap_or_else(|| crate::shared::apply_rename_all(&name.to_string(), rename_all));
+            .unwrap_or_else(|| apply_rename_all(&name.to_string(), rename_all));
         match build_field_emit(&lua_name, f) {
             Ok(s) => stmts.extend(s),
             Err(e) => return e.write_errors().into(),

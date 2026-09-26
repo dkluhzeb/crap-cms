@@ -20,6 +20,7 @@ pub(super) fn setup_db(ddl: &str) -> (TempDir, BoxedConnection) {
 pub(super) fn posts_ddl() -> &'static str {
     "CREATE TABLE posts (
         id TEXT PRIMARY KEY,
+        _revision INTEGER NOT NULL DEFAULT 0,
         title TEXT,
         status TEXT,
         created_at TEXT,

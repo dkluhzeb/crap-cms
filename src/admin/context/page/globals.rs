@@ -5,7 +5,7 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::BasePageContext;
+use super::{BasePageContext, RevisionConflictNotice};
 use crate::admin::context::{FieldContext, GlobalContext, GlobalPermissions, PaginationContext};
 
 /// `/admin/globals/{slug}` edit form context.
@@ -27,6 +27,12 @@ pub struct GlobalEditPage {
     pub restore_url_prefix: String,
     pub versions_url: String,
     pub doc_status: String,
+
+    /// The global's revision the form was loaded at — submitted back as the
+    /// save's precondition (`_revision`), so a save over someone else's newer
+    /// change is refused instead of silently overwriting it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
 }
 
 /// Slim re-render context for the `globals/edit` template after a validation
@@ -45,6 +51,17 @@ pub struct GlobalFormErrorPage {
     /// Always `true`: the form re-renders a submission that was not saved, so
     /// the unsaved-changes guard starts out armed.
     pub unsaved: bool,
+
+    /// The revision the re-rendered form submits back (`_revision`): the one
+    /// it was loaded at — or, after a revision conflict, the global's
+    /// current one, so saving again overwrites on purpose.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+
+    /// Present when the save was refused because the global was saved by
+    /// someone else after the form was loaded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_conflict: Option<RevisionConflictNotice>,
 }
 
 /// `/admin/globals/{slug}/versions` versions-listing page context.

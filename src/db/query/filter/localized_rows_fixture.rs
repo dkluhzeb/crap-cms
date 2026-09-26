@@ -36,7 +36,9 @@ fn fields() -> Vec<FieldDefinition> {
 /// `items` array table. Plain literal SQL, so every backend runs it.
 fn seed(conn: &dyn DbConnection, slug: &str) {
     let statements = [
-        format!("CREATE TABLE \"{slug}\" (id TEXT PRIMARY KEY)"),
+        format!(
+            "CREATE TABLE \"{slug}\" (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0)"
+        ),
         format!(
             "CREATE TABLE \"{slug}_tags\" \
              (parent_id TEXT, related_id TEXT, _order INTEGER, _locale TEXT)"

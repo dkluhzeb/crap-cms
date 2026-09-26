@@ -11,7 +11,14 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use crap_cms::core::{collection::*, field::*};
+use std::collections::HashMap;
+
+use serde_json::json;
+
+use crap_cms::{
+    core::{DocumentFields, collection::*, field::*},
+    db::query,
+};
 
 use crap_cms_e2e::{BrowserTestCtx, browser, helpers::*, setup_browser_test};
 
@@ -239,6 +246,166 @@ async fn only_the_forms_own_accepted_save_clears_the_dirty_flag() {
     assert_eq!(
         outcome, "true,true,true,false",
         "only the form's own accepted save clears the flag"
+    );
+
+    server_handle.abort();
+}
+
+// ── a_drag_reorder_marks_the_form_dirty ──────────────────────────────────
+
+fn make_array_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("lists");
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("label", FieldType::Text).build(),
+            ])
+            .build(),
+    ];
+    def
+}
+
+/// Regression: the dirty guard watched a click allow-list of row actions,
+/// so a drag-and-drop reorder (no click, no input event) and a block added
+/// from the card picker (a click inside a shadow root) left the form clean
+/// and navigating away discarded them without a prompt. Every row mutation
+/// now announces itself with `crap:change`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_drag_reorder_marks_the_form_dirty() {
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        browser: _browser,
+        ..
+    } = setup_browser_test(
+        vec![make_array_def(), make_users_def()],
+        vec![],
+        "bdirty4@test.com",
+        "pass123",
+    )
+    .await;
+
+    page.goto(format!("{base_url}/admin/collections/lists/create"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('crap-dirty-form')?._armed === true"
+        )
+        .await,
+        "dirty form should arm itself after load"
+    );
+
+    browser::click_until_element_count(
+        &page,
+        "button[data-action=\"add-array-row\"]",
+        ".form__array-rows > .form__array-row",
+        2,
+    )
+    .await;
+
+    let result = page
+        .evaluate(
+            "() => { \
+               const df = document.querySelector('crap-dirty-form'); \
+               df._dirty = false; \
+               const rows = document.querySelectorAll('.form__array-rows > .form__array-row'); \
+               const handle = rows[1].querySelector('[draggable][data-drag]'); \
+               const dt = new DataTransfer(); \
+               handle.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt })); \
+               rows[0].dispatchEvent(new DragEvent('drop', \
+                 { bubbles: true, cancelable: true, dataTransfer: dt, clientY: 0 })); \
+               return df._dirty; \
+             }",
+        )
+        .await
+        .unwrap();
+    let dirty: bool = result.into_value().unwrap_or(false);
+    assert!(dirty, "a drag-and-drop reorder must mark the form dirty");
+
+    server_handle.abort();
+}
+
+// ── unpublishing_a_dirty_form_asks_first ─────────────────────────────────
+
+/// Regression: Unpublish submitted the whole edit form, which the server
+/// ignored — unsaved edits were discarded without a word (and an unrelated
+/// invalid field blocked the unpublish in pre-submit validation). With
+/// unsaved edits the editor is now asked before anything is sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn unpublishing_a_dirty_form_asks_first() {
+    let mut def = make_dirty_def();
+    def.versions = Some(VersionsConfig::new(true, 10));
+
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        browser: _browser,
+        app,
+        ..
+    } = setup_browser_test(
+        vec![def.clone(), make_users_def()],
+        vec![],
+        "bdirty5@test.com",
+        "pass123",
+    )
+    .await;
+
+    let id = {
+        let mut conn = app.pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let data: DocumentFields = HashMap::from([("title".to_string(), json!("Live"))]).into();
+        let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
+        tx.commit().unwrap();
+        doc.id.to_string()
+    };
+
+    page.goto(format!("{base_url}/admin/collections/posts/{id}"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('crap-dirty-form')?._armed === true"
+        )
+        .await,
+        "dirty form should arm itself after load"
+    );
+
+    page.evaluate(
+        "() => { \
+           const el = document.querySelector('[name=\"title\"]'); \
+           el.value = 'Edited'; \
+           el.dispatchEvent(new Event('input', { bubbles: true })); \
+         }",
+    )
+    .await
+    .unwrap();
+
+    page.find_element("button[data-action=\"unpublish\"]")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('crap-confirm-dialog')?.shadowRoot?.querySelector('dialog')?.open === true"
+        )
+        .await,
+        "unpublishing a form with unsaved edits asks first"
     );
 
     server_handle.abort();

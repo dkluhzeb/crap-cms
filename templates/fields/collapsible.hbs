@@ -21,15 +21,7 @@
     </button>
     <div class="form__collapsible-body">
       {{#each sub_fields}}
-        <div
-          class="form__field{{#if width}} form__field--sized form__field--{{width}}{{/if}}{{#if (eq condition_visible false)}} form__field--hidden{{/if}}"
-          {{#if condition_json}}data-condition='{{{json condition_json}}}'{{/if}}
-          {{#if condition_ref}}data-condition-ref="{{condition_ref}}"{{/if}}
-          {{#if width_value}}data-field-width="{{width_value}}"{{/if}}
-          data-field-name="{{name}}"
-        >
-          {{{render_field this}}}
-        </div>
+        {{> partials/field-wrapper}}
       {{/each}}
     </div>
     {{#if error}}

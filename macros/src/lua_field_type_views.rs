@@ -11,6 +11,22 @@
 //!    discriminator variant carrying
 //!    `#[lua(view_class = "crap.XField")]`, with only the fields whose
 //!    `applies_to` list includes that variant's slug.
+//!
+//! With `layout_base = "crap.LayoutField"` and `layout_views = "row, …"`
+//! on the container, the common fields marked `#[lua(layout)]` move to a
+//! `--- @class crap.LayoutField` block emitted first, the base class
+//! extends it, and the views listed in `layout_views` extend it instead of
+//! the base class — so a layout wrapper's view offers only the keys a
+//! wrapper accepts. `layout_doc` is that block's doc line.
+//!
+//! `virtual_base` / `virtual_views` / `virtual_doc` add one more tier between
+//! the two, for a field with no stored value (a join): the common fields
+//! marked `#[lua(virtual_field)]` move to that class, which extends the
+//! layout base, and the base class extends it instead. The chain is
+//! `LayoutField ← VirtualField ← BaseField`, each class holding only the keys
+//! the narrower one lacks.
+
+use std::collections::BTreeMap;
 
 use darling::{FromDeriveInput, ast};
 use proc_macro::TokenStream;
@@ -19,8 +35,8 @@ use quote::quote;
 use syn::{Attribute, DeriveInput, parse_macro_input};
 
 use crate::shared::{
-    LuaField, build_class_header, build_field_emit, extract_docs, from_derive_input_or_return,
-    strip_option,
+    LuaField, apply_rename_all, build_class_header, build_field_emit, extract_docs,
+    from_derive_input_or_return, strip_option,
 };
 
 #[derive(FromDeriveInput)]
@@ -51,53 +67,117 @@ struct LuaFieldTypeViewsContainer {
     #[darling(default)]
     #[allow(dead_code)]
     extra_field: Option<String>,
+    /// The layout-wrapper base class (e.g. `"crap.LayoutField"`): holds the
+    /// common fields marked `#[lua(layout)]`; `base` extends it.
+    #[darling(default)]
+    layout_base: Option<String>,
+    /// `"row, collapsible, tabs"` — the discriminator slugs whose views
+    /// extend `layout_base` instead of `base`.
+    #[darling(default)]
+    layout_views: Option<String>,
+    /// Doc line of the `layout_base` class block.
+    #[darling(default)]
+    layout_doc: Option<String>,
+    /// The virtual-field base class (e.g. `"crap.VirtualField"`): holds the
+    /// common fields marked `#[lua(virtual_field)]`; extends `layout_base`,
+    /// and `base` extends it.
+    #[darling(default)]
+    virtual_base: Option<String>,
+    /// `"join"` — the discriminator slugs whose views extend `virtual_base`
+    /// instead of `base`.
+    #[darling(default)]
+    virtual_views: Option<String>,
+    /// Doc line of the `virtual_base` class block.
+    #[darling(default)]
+    virtual_doc: Option<String>,
 }
 
-pub(crate) fn derive(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
+/// The `--- @field` statements of every non-skipped field `keep` selects.
+fn field_stmts(
+    fields: &[LuaField],
+    rename_all: Option<&str>,
+    keep: impl Fn(&LuaField) -> bool,
+) -> darling::Result<Vec<TokenStream2>> {
+    let mut stmts = Vec::new();
 
-    let container = from_derive_input_or_return!(LuaFieldTypeViewsContainer, &input);
-
-    let ident = &container.ident;
-    let base_class = &container.base;
-    let discriminator = &container.discriminator;
-    let struct_docs = extract_docs(&container.attrs);
-
-    let Some(struct_fields) = container.data.take_struct() else {
-        unreachable!("supports(struct_named) guarantees this");
-    };
-    let fields = struct_fields.fields;
-
-    // Honor `rename_all` the same way `LuaAnnotation` does — both derive off the
-    // same shared `#[lua(...)]` container, so the emitted field names must agree.
-    let rename_all = container.rename_all.as_deref();
-
-    // ── BaseField: every field with no `applies_to` (and not `skip`)
-    let base_header = build_class_header(base_class, None, &struct_docs);
-    let mut base_stmts: Vec<TokenStream2> = Vec::new();
-    for f in &fields {
-        if f.skip || f.applies_to.is_some() {
-            continue;
-        }
+    for f in fields.iter().filter(|f| !f.skip && keep(f)) {
         let Some(name) = f.ident.as_ref() else {
             continue;
         };
+
         let lua_name = f
             .rename
             .clone()
-            .unwrap_or_else(|| crate::shared::apply_rename_all(&name.to_string(), rename_all));
-        match build_field_emit(&lua_name, f) {
-            Ok(s) => base_stmts.extend(s),
-            Err(e) => return e.write_errors().into(),
-        }
+            .unwrap_or_else(|| apply_rename_all(&name.to_string(), rename_all));
+
+        stmts.extend(build_field_emit(&lua_name, f)?);
     }
 
-    // ── Per-view: bucket fields by `applies_to` slug, emit one match
-    //    arm per unique slug. At runtime, iterate the discriminator's
-    //    VIEWS table and dispatch on each slug.
-    let mut slug_to_fields: std::collections::BTreeMap<String, Vec<&LuaField>> =
-        std::collections::BTreeMap::new();
-    for f in &fields {
+    Ok(stmts)
+}
+
+/// One narrowed base class the container declares (`layout_base` or
+/// `virtual_base`), borrowed apart from its `data`.
+struct TierAttrs<'a> {
+    /// The class name; `None` when the container declares no such tier.
+    class: Option<&'a str>,
+    /// The class it extends (the next narrower tier), if any.
+    parent: Option<&'a str>,
+    views: Option<&'a str>,
+    doc: Option<&'a str>,
+    /// The attribute names, for the error when the tier is half-declared.
+    attrs: &'static str,
+}
+
+/// A tier's class block (header + the fields `keep` selects) and the view
+/// slugs that extend it; empty when the container declares no such tier.
+fn tier_block(
+    tier: &TierAttrs<'_>,
+    rename_all: Option<&str>,
+    fields: &[LuaField],
+    keep: impl Fn(&LuaField) -> bool,
+) -> darling::Result<(TokenStream2, Vec<String>)> {
+    let Some(class) = tier.class else {
+        if tier.views.is_some() || fields.iter().any(&keep) {
+            return Err(darling::Error::custom(format!(
+                "{} need their container base class",
+                tier.attrs
+            )));
+        }
+
+        return Ok((TokenStream2::new(), Vec::new()));
+    };
+
+    let docs: Vec<String> = tier.doc.iter().map(ToString::to_string).collect();
+    let header = build_class_header(class, tier.parent, &docs);
+    let stmts = field_stmts(fields, rename_all, |f| keep(f) && f.applies_to.is_none())?;
+
+    let slugs = tier
+        .views
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+
+    let block = quote! {
+        out.push_str(#header);
+        #(#stmts)*
+        out.push('\n');
+    };
+
+    Ok((block, slugs))
+}
+
+/// Bucket the fields by `applies_to` slug and emit one match arm per unique
+/// slug, each writing that view's `--- @field` lines.
+fn view_match_arms(
+    fields: &[LuaField],
+    rename_all: Option<&str>,
+) -> darling::Result<Vec<TokenStream2>> {
+    let mut slug_to_fields: BTreeMap<String, Vec<&LuaField>> = BTreeMap::new();
+    for f in fields {
         if f.skip {
             continue;
         }
@@ -109,7 +189,7 @@ pub(crate) fn derive(input: TokenStream) -> TokenStream {
         }
     }
 
-    let mut match_arms: Vec<TokenStream2> = Vec::new();
+    let mut match_arms = Vec::new();
     for (slug, fs) in &slug_to_fields {
         let mut arm_stmts: Vec<TokenStream2> = Vec::new();
         for f in fs {
@@ -132,36 +212,125 @@ pub(crate) fn derive(input: TokenStream) -> TokenStream {
             let lua_name = f
                 .rename
                 .clone()
-                .unwrap_or_else(|| crate::shared::apply_rename_all(&name.to_string(), rename_all));
-            match build_field_emit(&lua_name, f) {
-                Ok(s) => arm_stmts.extend(s),
-                Err(e) => return e.write_errors().into(),
-            }
+                .unwrap_or_else(|| apply_rename_all(&name.to_string(), rename_all));
+            arm_stmts.extend(build_field_emit(&lua_name, f)?);
         }
         match_arms.push(quote! {
             #slug => { #(#arm_stmts)* }
         });
     }
 
+    Ok(match_arms)
+}
+
+pub(crate) fn derive(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    let container = from_derive_input_or_return!(LuaFieldTypeViewsContainer, &input);
+
+    let ident = &container.ident;
+    let base_class = &container.base;
+    let discriminator = &container.discriminator;
+    let struct_docs = extract_docs(&container.attrs);
+
+    let Some(struct_fields) = container.data.take_struct() else {
+        unreachable!("supports(struct_named) guarantees this");
+    };
+    let fields = struct_fields.fields;
+
+    // Honor `rename_all` the same way `LuaAnnotation` does — both derive off the
+    // same shared `#[lua(...)]` container, so the emitted field names must agree.
+    let rename_all = container.rename_all.as_deref();
+
+    // ── LayoutField (optional): the common fields a layout wrapper accepts.
+    let layout_class = container.layout_base.as_deref();
+    let layout = TierAttrs {
+        class: layout_class,
+        parent: None,
+        views: container.layout_views.as_deref(),
+        doc: container.layout_doc.as_deref(),
+        attrs: "`layout_views` / `#[lua(layout)]`",
+    };
+    let (layout_block, layout_slugs) = match tier_block(&layout, rename_all, &fields, |f| f.layout)
+    {
+        Ok(block) => block,
+        Err(e) => return e.write_errors().into(),
+    };
+
+    // ── VirtualField (optional): the further common fields a virtual field
+    //    (no stored value) accepts; extends the layout base.
+    let virtual_class = container.virtual_base.as_deref();
+    let virtual_tier = TierAttrs {
+        class: virtual_class,
+        parent: layout_class,
+        views: container.virtual_views.as_deref(),
+        doc: container.virtual_doc.as_deref(),
+        attrs: "`virtual_views` / `#[lua(virtual_field)]`",
+    };
+    let (virtual_block, virtual_slugs) =
+        match tier_block(&virtual_tier, rename_all, &fields, |f| f.virtual_field) {
+            Ok(block) => block,
+            Err(e) => return e.write_errors().into(),
+        };
+
+    // ── BaseField: every other field with no `applies_to` (and not `skip`),
+    //    extending the nearest declared tier.
+    let base_parent = virtual_class.or(layout_class);
+    let base_header = build_class_header(base_class, base_parent, &struct_docs);
+    let base_stmts = match field_stmts(&fields, rename_all, |f| {
+        f.applies_to.is_none()
+            && !(f.layout && layout_class.is_some())
+            && !(f.virtual_field && virtual_class.is_some())
+    }) {
+        Ok(stmts) => stmts,
+        Err(e) => return e.write_errors().into(),
+    };
+    let layout_parent = layout_class.unwrap_or(base_class.as_str());
+    let virtual_parent = virtual_class.unwrap_or(base_class.as_str());
+
+    // ── Per-view: one match arm per `applies_to` slug. At runtime, iterate
+    //    the discriminator's VIEWS table and dispatch on each slug.
+    let match_arms = match view_match_arms(&fields, rename_all) {
+        Ok(arms) => arms,
+        Err(e) => return e.write_errors().into(),
+    };
+
     let expanded = quote! {
         impl LuaFieldTypeViews for #ident {
             fn render_lua_field_type_views(out: &mut ::std::string::String) {
-                // 1. Base class block — all common fields.
+                // The views that extend a narrowed base instead of the base.
+                const LAYOUT_VIEWS: &[&str] = &[#(#layout_slugs),*];
+                const VIRTUAL_VIEWS: &[&str] = &[#(#virtual_slugs),*];
+
+                // 1. Narrowed base blocks (when declared) — the common fields a
+                //    layout wrapper accepts, then those a virtual field adds.
+                #layout_block
+                #virtual_block
+
+                // 2. Base class block — all (other) common fields.
                 out.push_str(#base_header);
                 #(#base_stmts)*
                 out.push('\n');
 
-                // 2. Per-variant subclasses — driven by the discriminator's
+                // 3. Per-variant subclasses — driven by the discriminator's
                 //    `VIEWS` table at runtime. Fully-qualified path so
                 //    users don't need to import
                 //    `LuaFieldTypeViewsDiscriminator`.
                 for (slug, class)
                     in <#discriminator as crate::typegen::lua::LuaFieldTypeViewsDiscriminator>::VIEWS
                 {
+                    let parent = if LAYOUT_VIEWS.contains(slug) {
+                        #layout_parent
+                    } else if VIRTUAL_VIEWS.contains(slug) {
+                        #virtual_parent
+                    } else {
+                        #base_class
+                    };
+
                     out.push_str("--- @class ");
                     out.push_str(class);
                     out.push_str(" : ");
-                    out.push_str(#base_class);
+                    out.push_str(parent);
                     out.push('\n');
                     match *slug {
                         #(#match_arms)*

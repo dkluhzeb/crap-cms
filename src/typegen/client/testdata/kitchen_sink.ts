@@ -29,6 +29,7 @@ export interface N2faDocument {
   "2fa"?: string | null;
   end?: string | null;
   private?: string | null;
+  _revision?: number | null;
   /** Set when the document is embedded as a populated relationship */
   collection?: "2fa";
   created_at?: string;
@@ -74,6 +75,7 @@ export interface MediaDocument {
   focal_y?: number | null;
   sizes?: MediaSizes | null;
   alt?: string | null;
+  _revision?: number | null;
   /** Set when the document is embedded as a populated relationship */
   collection?: "media";
   created_at?: string;
@@ -187,6 +189,7 @@ export interface PostsDocument {
   byline?: string | null;
   aside?: string | null;
   tab_note?: string | null;
+  _revision?: number | null;
   _status?: "draft" | "published" | null;
   _deleted_at?: string | null;
   /** Set when the document is embedded as a populated relationship */
@@ -233,6 +236,7 @@ export interface PostsLocalizedDocument {
   byline?: string | null;
   aside?: string | null;
   tab_note?: string | null;
+  _revision?: number | null;
   _status?: "draft" | "published" | null;
   _deleted_at?: string | null;
   /** Set when the document is embedded as a populated relationship */
@@ -250,6 +254,7 @@ export interface TagsData {
 export interface TagsDocument {
   id: string;
   name?: string | null;
+  _revision?: number | null;
   /** Set when the document is embedded as a populated relationship */
   collection?: "tags";
   created_at?: string;
@@ -269,6 +274,7 @@ export interface UsersDocument {
   email?: string | null;
   name?: string | null;
   authored?: Record<string, unknown>[] | null;
+  _revision?: number | null;
   /** Set when the document is embedded as a populated relationship */
   collection?: "users";
   created_at?: string;
@@ -298,6 +304,7 @@ export interface SettingsDocument {
   id: string;
   site_name?: string | null;
   nav?: SettingsNav[] | null;
+  _revision?: number | null;
   _status?: "draft" | "published" | null;
   created_at?: string;
   updated_at?: string;
@@ -308,6 +315,7 @@ export interface SettingsLocalizedDocument {
   id: string;
   site_name?: Localized<string> | null;
   nav?: SettingsNav[] | null;
+  _revision?: number | null;
   _status?: "draft" | "published" | null;
   created_at?: string;
   updated_at?: string;

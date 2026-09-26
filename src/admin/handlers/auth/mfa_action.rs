@@ -8,7 +8,6 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Redirect, Response},
 };
-use tokio::task;
 use tracing::error;
 
 use crate::{
@@ -22,7 +21,7 @@ use crate::{
             shared::paths,
         },
     },
-    core::{auth::Claims, collection::Surface, rate_limit::AttemptBudget},
+    core::{auth::Claims, collection::Surface, rate_limit::AttemptBudget, spawn_request_blocking},
     db::query::MfaCode,
     service::{
         self, AppInfra, ServiceError,
@@ -131,7 +130,7 @@ pub async fn verify_mfa_action(
         code: form.code.clone(),
     };
 
-    let verify_result = task::spawn_blocking(move || verify_mfa_blocking(&input)).await;
+    let verify_result = spawn_request_blocking(move || verify_mfa_blocking(&input)).await;
 
     let verified = match verify_result {
         Ok(Ok(v)) => v,
@@ -159,7 +158,7 @@ pub async fn verify_mfa_action(
     let infra = Arc::clone(&state.infra);
     let claims_for_load = pending_claims.clone();
     let reloaded =
-        task::spawn_blocking(move || reload_authenticated_user(&infra, &claims_for_load)).await;
+        spawn_request_blocking(move || reload_authenticated_user(&infra, &claims_for_load)).await;
     if !matches!(reloaded, Ok(Some(_))) {
         return Redirect::to(paths::LOGIN).into_response();
     }

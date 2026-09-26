@@ -58,6 +58,10 @@ pub(crate) struct UpdateOptions {
     /// Set `false` for a quiet write.
     #[lua(optional)]
     pub(crate) events: bool,
+    /// The document revision this write is based on — the `_revision` of the
+    /// read it edits. Set, the write fails with a revision conflict when
+    /// anyone has written the document since; nil writes unconditionally.
+    pub(crate) expected_revision: Option<i64>,
 }
 
 impl Default for UpdateOptions {
@@ -69,6 +73,7 @@ impl Default for UpdateOptions {
             hooks: true,
             unpublish: false,
             events: true,
+            expected_revision: None,
         }
     }
 }
@@ -128,6 +133,7 @@ fn collections_update(
                 .override_access(opts.override_access)
                 .hooks(opts.hooks)
                 .events(opts.events)
+                .expected_revision(opts.expected_revision)
                 .build(),
         );
     }
@@ -159,6 +165,7 @@ fn collections_update(
         .locale_ctx(locale_ctx)
         .draft(opts.draft)
         .events(opts.events)
+        .expected_revision(opts.expected_revision)
         .build();
 
     let (doc, _) =

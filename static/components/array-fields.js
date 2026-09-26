@@ -12,7 +12,7 @@
  * @stability experimental
  */
 
-import { EV_REQUEST_ADD_BLOCK } from './events.js';
+import { EV_CHANGE, EV_REQUEST_ADD_BLOCK } from './events.js';
 
 /**
  * Kinds of reference sites a row contains. Each call to {@link rewriteRefs}
@@ -322,8 +322,20 @@ class CrapArrayField extends HTMLElement {
    * Re-number rows after add/remove/reorder. Walks each row's outer DOM
    * and any nested template content, swapping the existing numeric index
    * for the row's new position.
+   *
+   * Every row mutation — add (an array row, a block row from the select or
+   * the card picker), remove, duplicate, move up/down, drag-and-drop — ends
+   * here, so this is where the field announces the edit: a bubbling
+   * `crap:change` the dirty guard and the display conditions listen for.
+   * A new mutation cannot be forgotten by the guard.
    */
   _reindexRows() {
+    this._renumberRows();
+    this.dispatchEvent(new Event(EV_CHANGE, { bubbles: true }));
+  }
+
+  /** The renumbering half of {@link _reindexRows}. */
+  _renumberRows() {
     const fs = this._fieldset;
     if (!fs) return;
     const fieldName = fs.getAttribute('data-field-name') || '';

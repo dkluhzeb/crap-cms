@@ -28,6 +28,10 @@ pub struct UpdateArgs {
     /// upload path). Bypasses the write chokepoint's derived-column strip.
     #[builder(default = false)]
     pub trusted_upload_metadata: bool,
+    /// The document revision the caller last read (`expected_revision`). Set,
+    /// the update is refused with a conflict when the document has been
+    /// written since; `None` writes unconditionally.
+    pub expected_revision: Option<i64>,
 }
 
 /// Update a document with the full write lifecycle.
@@ -54,6 +58,7 @@ impl Operation for Update {
             draft,
             events: _,
             trusted_upload_metadata,
+            expected_revision,
         } = args;
 
         let locale_ctx = write_locale_ctx(locale_ctx)?;
@@ -66,6 +71,7 @@ impl Operation for Update {
                 .locale_ctx(locale_ctx.as_ref())
                 .draft(draft)
                 .trusted_upload_metadata(trusted_upload_metadata)
+                .expected_revision(expected_revision)
                 .build(),
         )
     }

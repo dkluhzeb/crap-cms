@@ -383,6 +383,7 @@ async fn grpc_update_localized_field() {
             locale: Some("de".to_string()),
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -474,6 +475,7 @@ async fn grpc_unpublish_via_update() {
             locale: None,
             draft: None,
             unpublish: Some(true),
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -543,6 +545,7 @@ async fn grpc_unpublish_response_has_draft_status() {
             locale: None,
             draft: None,
             unpublish: Some(true),
+            expected_revision: None,
         }))
         .await
         .unwrap()
@@ -827,6 +830,7 @@ async fn grpc_create_and_update_has_many() {
             locale: None,
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();

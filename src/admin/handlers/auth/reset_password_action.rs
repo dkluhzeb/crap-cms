@@ -5,7 +5,6 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Redirect, Response},
 };
-use tokio::task;
 use tracing::error;
 
 use crate::{
@@ -18,10 +17,10 @@ use crate::{
         },
     },
     config::PasswordViolation,
-    core::{collection::Auth, rate_limit::IP_RESET_PASSWORD_KEYSPACE},
+    core::{rate_limit::IP_RESET_PASSWORD_KEYSPACE, spawn_request_blocking},
     service::{
-        AppInfra, ServiceContext, ServiceError,
-        auth::consume_reset_token as service_consume_reset_token,
+        AppInfra, ServiceError,
+        auth::{PasswordReset, reset_password_with_token},
     },
 };
 
@@ -84,62 +83,35 @@ fn render_policy_violation(
     render_reset_page(state, base, Some(token), message)
 }
 
-/// Find the reset token across all auth collections, validate it, and update the password.
-///
-/// Searches every auth collection (with local auth enabled) for the token.
-/// On success the password is updated and the token cleared inside a transaction.
-///
-/// On success the user's open live-update streams are torn down POST-COMMIT (a
-/// password reset is a privilege-revoking action and an already-connected stream
-/// never makes another request to pick up the bumped `_session_version`).
-/// Publishing after commit ensures a rolled-back reset never spuriously tears
-/// down a stream.
-fn consume_reset_token(infra: &AppInfra, token: &str, password: &str) -> Result<(), ServiceError> {
-    let mut conn = infra.pool.write()?;
-    // SELECT-then-UPDATE (find token row, then write the new hash): take a write
-    // lock up front. A DEFERRED tx would risk `SQLITE_BUSY_SNAPSHOT` under
-    // concurrent writers — same reasoning as the gRPC reset path.
-    let tx = conn.transaction_immediate()?;
+/// Reset the password with the token, searching every auth collection for it.
+/// The service owns the transaction (committed under the request's commit gate
+/// only on success) and the post-commit live-stream teardown.
+fn reset_password_blocking(
+    infra: &AppInfra,
+    token: &str,
+    password: &str,
+) -> Result<(), ServiceError> {
+    let candidates = infra.registry.collections.values().map(Arc::as_ref);
 
-    for def in infra.registry.collections.values() {
-        if !def.is_auth_collection() {
-            continue;
-        }
+    reset_password_with_token(infra, candidates, &PasswordReset::new(token, password))
+}
 
-        if !def.auth.as_ref().is_some_and(Auth::password_login_enabled) {
-            continue;
-        }
+/// The error the reset page shows for a failed reset. Matches the TYPED
+/// refusal: an expired link reads as expired, any other token refusal as
+/// invalid. Anything else is not the link's fault — the backend failed or the
+/// request ran out of time — so it reads as an internal error, logged here.
+fn reset_error_key(e: &ServiceError) -> &'static str {
+    match e {
+        ServiceError::InvalidToken {
+            reason: "expired", ..
+        } => "error_reset_link_expired",
+        ServiceError::InvalidToken { .. } => "error_reset_link_invalid",
+        _ => {
+            error!("Reset password failed: {e}");
 
-        let ctx = ServiceContext::collection(&def.slug, def)
-            .conn(&tx)
-            .locale_config(Some(&infra.locale_config))
-            .build();
-
-        match service_consume_reset_token(&ctx, token, password) {
-            Ok(user_id) => {
-                tx.commit()?;
-                // Tear down the user's open live-update streams POST-COMMIT.
-                ServiceContext::slug_only(&def.slug)
-                    .invalidation_transport(Some(infra.invalidation_transport.clone()))
-                    .build()
-                    .publish_user_invalidation(&user_id);
-                return Ok(());
-            }
-            Err(ServiceError::InvalidToken {
-                reason: "not found",
-                ..
-            }) => {}
-            Err(e) => {
-                tx.commit()?;
-                return Err(e);
-            }
+            "error_internal"
         }
     }
-
-    Err(ServiceError::InvalidToken {
-        kind: "reset",
-        reason: "not found",
-    })
 }
 
 /// POST /admin/reset-password — validate token, update password, redirect to login.
@@ -183,26 +155,14 @@ pub async fn reset_password_action(
     let token = form.token.clone();
     let password = form.password.clone();
 
-    let result = task::spawn_blocking(move || consume_reset_token(&infra, &token, &password)).await;
+    let result =
+        spawn_request_blocking(move || reset_password_blocking(&infra, &token, &password)).await;
 
     match result {
         Ok(Ok(())) => {
             Redirect::to(&paths::login_with_success("success_password_reset")).into_response()
         }
-        Ok(Err(e)) => {
-            // Match the TYPED refusal: the service returns
-            // `InvalidToken { reason }`, and flattening it to a string here
-            // meant the expired branch could never be reached, so a dead link
-            // always read as "invalid".
-            let msg = match e {
-                ServiceError::InvalidToken {
-                    reason: "expired", ..
-                } => "error_reset_link_expired",
-                _ => "error_reset_link_invalid",
-            };
-
-            render_reset_error(&state, None, msg)
-        }
+        Ok(Err(e)) => render_reset_error(&state, None, reset_error_key(&e)),
         Err(e) => {
             error!("Reset password task error: {}", e);
 
@@ -215,7 +175,28 @@ pub async fn reset_password_action(
 mod tests {
     use std::path::Path;
 
+    use anyhow::anyhow;
+
     use super::*;
+
+    /// Regression: a failure that is not a token refusal (a refused commit, a
+    /// backend error) read as "invalid link"; only token refusals do now.
+    #[test]
+    fn only_token_refusals_blame_the_link() {
+        let expired = ServiceError::InvalidToken {
+            kind: "reset",
+            reason: "expired",
+        };
+        let missing = ServiceError::InvalidToken {
+            kind: "reset",
+            reason: "not found",
+        };
+        let late = ServiceError::Transient(anyhow!("deadline passed"));
+
+        assert_eq!(reset_error_key(&expired), "error_reset_link_expired");
+        assert_eq!(reset_error_key(&missing), "error_reset_link_invalid");
+        assert_eq!(reset_error_key(&late), "error_internal");
+    }
 
     /// Regression: a policy violation on the reset page rendered the English
     /// `Display` text whatever the page's locale; it renders through its

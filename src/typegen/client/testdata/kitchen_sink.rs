@@ -35,6 +35,8 @@ pub struct N2fa {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub private: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub _revision: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
@@ -93,6 +95,8 @@ pub struct Media {
     pub sizes: Option<MediaSizes>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _revision: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -193,6 +197,8 @@ pub struct Posts {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tab_note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub _revision: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub _status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _deleted_at: Option<String>,
@@ -273,6 +279,8 @@ pub struct PostsLocalized {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tab_note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub _revision: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub _status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _deleted_at: Option<String>,
@@ -288,6 +296,8 @@ pub struct Tags {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub _revision: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
@@ -302,6 +312,8 @@ pub struct Users {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authored: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _revision: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -326,6 +338,8 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nav: Option<Vec<SettingsNav>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub _revision: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub _status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
@@ -341,6 +355,8 @@ pub struct SettingsLocalized {
     pub site_name: Option<std::collections::HashMap<String, Option<String>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nav: Option<Vec<SettingsNav>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _revision: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

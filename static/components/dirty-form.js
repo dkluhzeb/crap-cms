@@ -2,9 +2,9 @@
  * Dirty Form Guard — `<crap-dirty-form>`.
  *
  * Warns users before navigating away from unsaved changes on the
- * `#edit-form` it wraps. Tracks input/change events, custom
- * `crap:change` events from child components, and array/block row
- * mutations. Intercepts HTMX GET navigation, browser back/forward, and
+ * `#edit-form` it wraps. Tracks input/change events and the custom
+ * `crap:change` events child components (array/block rows included)
+ * announce their edits with. Intercepts HTMX GET navigation, browser back/forward, and
  * tab close.
  *
  * @attr data-unsaved  Start out dirty: the server re-rendered a submission
@@ -19,18 +19,6 @@
 import { t } from './_internal/i18n.js';
 import { getHttpVerb } from './_internal/util/htmx.js';
 import { EV_CHANGE, EV_CONFIRM_DIALOG_REQUEST } from './events.js';
-
-/**
- * Array/blocks row actions that should mark the form dirty when the
- * user clicks them.
- */
-const DIRTY_ROW_ACTIONS = new Set([
-  'remove-array-row',
-  'add-array-row',
-  'duplicate-row',
-  'move-row-up',
-  'move-row-down',
-]);
 
 /** ms to keep `_bypassing` true after triggering a programmatic navigation. */
 const BYPASS_GRACE_MS = 500;
@@ -77,19 +65,19 @@ class CrapDirtyForm extends HTMLElement {
     }
 
     // `crap:change` is the agreed signal from custom inputs (relationship,
-    // uploads, tags) that don't fire native input/change.
+    // uploads, tags) that don't fire native input/change, and from
+    // `<crap-array-field>` after every row mutation (add — the card picker
+    // included —, remove, duplicate, move, drag-and-drop).
     this.addEventListener(EV_CHANGE, this._markDirty);
 
-    this._onRowAction = (e) => {
-      if (!this._armed) return;
-      const target = e.target;
-      if (!(target instanceof Element)) return;
-      const action = target.closest('[data-action]');
-      if (!action) return;
-      const name = action.getAttribute('data-action') || '';
-      if (DIRTY_ROW_ACTIONS.has(name)) this._dirty = true;
+    this._onUnpublishClick = (e) => {
+      const btn =
+        e.target instanceof Element ? e.target.closest('[data-action="unpublish"]') : null;
+      if (!btn || !this.contains(btn)) return;
+      e.preventDefault();
+      this._unpublish();
     };
-    document.addEventListener('click', this._onRowAction);
+    this.addEventListener('click', this._onUnpublishClick);
 
     this._onConfigRequest = (e) => this._onHtmxConfigRequest(e);
     document.addEventListener('htmx:configRequest', this._onConfigRequest);
@@ -130,7 +118,7 @@ class CrapDirtyForm extends HTMLElement {
       this._form = null;
     }
     if (this._markDirty) this.removeEventListener(EV_CHANGE, this._markDirty);
-    if (this._onRowAction) document.removeEventListener('click', this._onRowAction);
+    if (this._onUnpublishClick) this.removeEventListener('click', this._onUnpublishClick);
     if (this._onConfigRequest)
       document.removeEventListener('htmx:configRequest', this._onConfigRequest);
     if (this._onPopState) window.removeEventListener('popstate', this._onPopState);
@@ -155,6 +143,68 @@ class CrapDirtyForm extends HTMLElement {
     if (!(await this._askLeave())) return;
     this._bypassNavigate(() => {
       window.location.href = evt.detail.path;
+    });
+  }
+
+  /**
+   * Ask before a navigation a component starts itself (the editor locale
+   * picker's reload): resolves `true` when nothing is unsaved or the editor
+   * chose to leave — clearing the flag, so the unload that follows does not
+   * ask a second time — and `false` when they chose to stay. The caller acts
+   * (writes its cookie, reloads) only on `true`.
+   *
+   * @returns {Promise<boolean>}
+   */
+  async confirmLeave() {
+    if (!this._dirty) return true;
+    if (!(await this._askLeave())) return false;
+    this._dirty = false;
+    return true;
+  }
+
+  /**
+   * The Unpublish action. It is not a save: it takes the document out of
+   * publication and keeps nothing the form holds. So it posts only the
+   * action (and the form's meta inputs — locale, method, revision), never the
+   * form's fields, and runs no pre-submit validation of fields it ignores.
+   * When the form holds unsaved edits the editor is asked first: they would
+   * be discarded, so the choice is to discard them and unpublish, or to stay
+   * and save first.
+   */
+  async _unpublish() {
+    const form = this._form;
+    const url = form?.getAttribute('action');
+    if (!form || !url) return;
+    if (this._dirty && !(await this._askDiscardForUnpublish())) return;
+
+    /** @type {Record<string, string>} */
+    const values = { _action: 'unpublish' };
+    for (const name of ['_method', '_locale', '_revision']) {
+      const input = /** @type {HTMLInputElement|null} */ (
+        form.querySelector(`:scope > input[name="${name}"]`)
+      );
+      if (input) values[name] = input.value;
+    }
+
+    this._bypassNavigate(() => {
+      htmx.ajax('POST', url, { values, target: '#main', swap: 'innerHTML show:window:top' });
+    });
+  }
+
+  /**
+   * Ask whether to discard the unsaved edits and unpublish.
+   *
+   * @returns {Promise<boolean>}
+   */
+  _askDiscardForUnpublish() {
+    const evt = new CustomEvent(EV_CONFIRM_DIALOG_REQUEST, { detail: {} });
+    document.dispatchEvent(evt);
+    const dialog = evt.detail.instance;
+    const message = t('unpublish_unsaved_changes');
+    if (!dialog) return Promise.resolve(window.confirm(message));
+    return dialog.prompt(message, {
+      confirmLabel: t('discard_and_unpublish'),
+      cancelLabel: t('stay'),
     });
   }
 

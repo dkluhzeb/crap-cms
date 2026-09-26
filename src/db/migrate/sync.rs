@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result, bail};
 use tracing::error;
 
 use crate::{
-    config::LocaleConfig,
+    config::{ErrorReport, LocaleConfig},
     core::{
         Registry, ScheduledBy,
         upload::{
@@ -14,11 +14,7 @@ use crate::{
     },
     db::{
         BoxedConnection, BoxedTransaction, DbConnection, DbPool, UnboundedStatements,
-        query::{
-            fts::{FtsIndex, sync_fts_table},
-            helpers::global_table,
-            jobs as job_query,
-        },
+        query::{helpers::global_table, jobs as job_query},
     },
 };
 
@@ -27,7 +23,7 @@ use super::{
     helpers::{get_table_columns, table_exists},
     identifier_check, legacy_timestamps, locale_change, meta, nested_values,
     orphan_tables::warn_orphan_tables,
-    reference_cardinality,
+    reference_cardinality, search_index,
     tracking::drop_all_tables,
 };
 
@@ -243,6 +239,11 @@ fn sync_in_transaction(
     warn_orphan_tables(tx, registry)?;
 
     run_conversions(tx, registry, locale_config)?;
+    create_indexes(tx, registry, locale_config)?;
+
+    // After the conversions too: an index built over values a conversion then
+    // rewrites would hold their old text until the next rebuild.
+    search_index::sync_search_indexes(tx, registry, locale_config)?;
 
     if !rebuilt.is_empty() {
         assert_no_dangling_references(tx, rebuilt)?;
@@ -254,20 +255,43 @@ fn sync_in_transaction(
 /// Portability guard: reject any generated identifier that would overflow
 /// Postgres's 63-byte limit (and silently truncate/collide) BEFORE creating
 /// any table — on every backend, so it surfaces in `SQLite` development.
-fn check_all_identifiers(registry: &Registry, locale_config: &LocaleConfig) -> Result<()> {
+/// Every offending collection and global is reported, not only the first.
+/// Needs no database, so `crap-cms check` runs it too.
+///
+/// # Errors
+///
+/// Returns an error listing every identifier that is too long or collides.
+pub fn check_all_identifiers(registry: &Registry, locale_config: &LocaleConfig) -> Result<()> {
+    let mut report = ErrorReport::new();
+
     for (slug, def) in &registry.collections {
-        identifier_check::check_identifiers(slug, &def.fields, locale_config)?;
-        identifier_check::check_index_names(slug, def, locale_config)?;
+        report.check(identifier_check::check_identifiers(
+            slug,
+            &def.fields,
+            locale_config,
+        ));
+        report.check(identifier_check::check_index_names(
+            slug,
+            def,
+            locale_config,
+        ));
     }
 
-    identifier_check::check_index_name_collisions(registry, locale_config)?;
+    report.check(identifier_check::check_index_name_collisions(
+        registry,
+        locale_config,
+    ));
 
     for (slug, def) in &registry.globals {
         let table = global_table(slug);
-        identifier_check::check_identifiers(&table, &def.fields, locale_config)?;
+        report.check(identifier_check::check_identifiers(
+            &table,
+            &def.fields,
+            locale_config,
+        ));
     }
 
-    Ok(())
+    report.into_result()
 }
 
 /// Create or alter every collection's and global's tables.
@@ -284,19 +308,25 @@ fn sync_tables(
 
     for (slug, def) in &registry.collections {
         collection::sync_collection_table(tx, slug, def, locale_config)?;
-
-        // Rebuilt with the registry, so rich text custom nodes contribute
-        // their `searchable_attrs` exactly as the per-write upsert indexes them.
-        if tx.supports_fts() {
-            let index = FtsIndex::builder(slug, def, locale_config)
-                .registry(Some(registry))
-                .build();
-            sync_fts_table(tx, &index)?;
-        }
     }
 
     for (slug, def) in &registry.globals {
         global::sync_global_table(tx, slug, def, locale_config)?;
+    }
+
+    Ok(())
+}
+
+/// Create every collection's missing indexes — after the conversions, which
+/// rewrite the values a unique index is built over and report the documents
+/// whose values collide once rewritten (see [`collection::create_indexes`]).
+fn create_indexes(
+    tx: &dyn DbConnection,
+    registry: &Registry,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    for (slug, def) in &registry.collections {
+        collection::create_indexes(tx, slug, def, locale_config)?;
     }
 
     Ok(())
@@ -584,9 +614,92 @@ mod tests {
     use super::*;
     use crate::{
         config::CrapConfig,
-        core::CollectionDefinition,
+        core::{CollectionDefinition, FieldDefinition, FieldType, collection::Auth},
         db::{DbValue, InMemoryConn, pool},
     };
+
+    /// An auth collection `users` with its unique `email` field.
+    fn users_registry() -> Registry {
+        let mut def = CollectionDefinition::new("users");
+        def.auth = Some(Auth::new(true));
+        def.fields = vec![
+            FieldDefinition::builder("email", FieldType::Email)
+                .required(true)
+                .unique(true)
+                .build(),
+        ];
+
+        let mut registry = Registry::new();
+        registry.register_collection(def);
+
+        registry
+    }
+
+    /// Regression: an older release compared emails as typed, so one address
+    /// could be stored twice in different capitals. The first start stopped on
+    /// a raw `UNIQUE constraint failed` from creating an index — naming no
+    /// document — before the pass that reports such duplicates ran. The sync
+    /// now reports every pair with the ids holding it, non-ASCII capitals
+    /// included, and creates nothing.
+    #[test]
+    fn case_variant_duplicate_emails_are_reported_by_document() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = pool::create_pool(dir.path(), &CrapConfig::default()).unwrap();
+
+        p.get()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, \
+                 _password_hash TEXT, created_at TEXT, updated_at TEXT); \
+                 INSERT INTO users (id, email) VALUES ('u1', 'Bob@x.com'), ('u2', 'bob@x.com'), \
+                 ('u3', '\u{c4}rger@x.com'), ('u4', '\u{e4}rger@x.com');",
+            )
+            .unwrap();
+
+        let err = sync_all(&p, &users_registry(), &LocaleConfig::default())
+            .expect_err("duplicate accounts stop the start");
+        let msg = format!("{err:#}");
+
+        assert!(msg.contains("canonical form"), "{msg}");
+        assert!(msg.contains("u1, u2"), "{msg}");
+        assert!(msg.contains("u3, u4"), "{msg}");
+        assert!(!msg.contains("UNIQUE constraint failed"), "{msg}");
+    }
+
+    /// Regression: the search index was built before the conversions rewrote
+    /// the stored text (with plain `UPDATE`s the per-write upsert never sees),
+    /// so it held the text as it was stored before — an NFC query missed a
+    /// title stored decomposed. It is built from the rewritten text.
+    #[test]
+    fn the_search_index_holds_the_converted_text() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = pool::create_pool(dir.path(), &CrapConfig::default()).unwrap();
+
+        p.get()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, \
+                 _ref_count INTEGER NOT NULL DEFAULT 0, created_at TEXT, updated_at TEXT); \
+                 INSERT INTO posts (id, title) VALUES ('p1', 'Cafe\u{301}');",
+            )
+            .unwrap();
+
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+        def.admin.list_searchable_fields = vec!["title".to_string()];
+        let mut registry = Registry::new();
+        registry.register_collection(def);
+
+        sync_all(&p, &registry, &LocaleConfig::default()).expect("sync");
+
+        let indexed = p
+            .get()
+            .unwrap()
+            .query_one("SELECT title FROM _fts_posts WHERE id = 'p1'", &[])
+            .unwrap()
+            .and_then(|row| row.opt_text_at(0));
+        assert_eq!(indexed.as_deref(), Some("Caf\u{e9}"));
+    }
 
     /// Only an orphan pointing at a rebuilt table is the sync's doing; one in
     /// an unrelated table predates the boot and must not block it.

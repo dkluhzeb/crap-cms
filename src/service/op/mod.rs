@@ -20,7 +20,7 @@ use anyhow::anyhow;
 use tracing::error;
 
 use crate::{
-    core::{CollectionDefinition, Document, collection::Surface, spawn_blocking_in_label_locale},
+    core::{CollectionDefinition, Document, collection::Surface, spawn_request_blocking},
     db::BoxedConnection,
     service::{
         AppInfra, RunnerReadHooks, ServiceContext, ServiceError,
@@ -245,7 +245,7 @@ pub async fn run_blocking<O: Operation>(
     target: TargetRef,
     args: O::Args,
 ) -> Result<O::Output, CoreError> {
-    spawn_blocking_in_label_locale(move || run::<O>(&infra, principal, &target, args))
+    spawn_request_blocking(move || run::<O>(&infra, principal, &target, args))
         .await
         .inspect_err(|e| error!("{} task join error: {e}", O::NAME))
         .map_err(|e| CoreError::Internal(anyhow!("{} task join error: {e}", O::NAME)))?

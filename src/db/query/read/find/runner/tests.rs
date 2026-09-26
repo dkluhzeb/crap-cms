@@ -131,8 +131,10 @@ fn find_default_sort_without_timestamps() {
     };
     let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
     let conn = db_pool.get().unwrap();
-    conn.execute_batch("CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT)")
-        .unwrap();
+    conn.execute_batch(
+        "CREATE TABLE items (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT)",
+    )
+    .unwrap();
 
     let mut def = CollectionDefinition::new("items");
     def.timestamps = false; // No timestamps
@@ -200,6 +202,7 @@ fn setup_soft_delete_db() -> (TempDir, DbPool) {
         .execute_batch(
             "CREATE TABLE articles (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 _deleted_at TEXT,
                 created_at TEXT,
@@ -339,6 +342,33 @@ fn sorted_ids(
     ids
 }
 
+/// Regression: the bulk ops lock each matched document in the order
+/// `find_ids` returns them, and that order was whatever the query plan
+/// produced — two concurrent bulk updates / deletes over overlapping sets
+/// could lock the same rows in opposite orders and deadlock on Postgres.
+/// The ids come back in id order, whatever order the rows were written in.
+#[test]
+fn find_ids_returns_ids_in_id_order() {
+    let (_tmp, pool) = setup_soft_delete_db();
+    let conn = pool.get().unwrap();
+    let def = soft_delete_def();
+
+    for id in ["c", "a", "b"] {
+        conn.execute(
+            "INSERT INTO articles (id, title, created_at, updated_at) VALUES (?1, 'x', ?2, ?2)",
+            &[
+                DbValue::Text(id.into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+    }
+
+    let ids = find_ids(&conn, "articles", &def, &FindQuery::default(), None).unwrap();
+
+    assert_eq!(ids, vec!["a", "b", "c"]);
+}
+
 /// `find`'s result projected to a sorted id set, for parity comparison.
 fn find_id_set(
     conn: &dyn DbConnection,
@@ -372,6 +402,7 @@ fn setup_drafts_db() -> (TempDir, DbPool) {
         .execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 published_at TEXT,
                 _status TEXT NOT NULL DEFAULT 'published',

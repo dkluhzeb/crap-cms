@@ -294,6 +294,7 @@ mod tests {
     fn posts_ddl() -> &'static str {
         "CREATE TABLE posts (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             title TEXT,
             status TEXT,
             created_at TEXT,
@@ -367,6 +368,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 meta__color TEXT,
                 meta__size TEXT,
                 created_at TEXT,
@@ -410,6 +412,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE events (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 name TEXT
             )",
         );
@@ -458,7 +461,8 @@ mod tests {
     fn an_update_without_set_clauses_locks_the_row_before_the_join_diff() {
         let (_dir, conn) = setup_db(
             "CREATE TABLE events (
-                id TEXT PRIMARY KEY
+                id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE events_slides (
                 id TEXT PRIMARY KEY,
@@ -506,6 +510,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 social__github TEXT,
                 social__twitter TEXT,
                 body TEXT,
@@ -573,6 +578,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 meta__title TEXT,
                 meta__slug TEXT,
                 created_at TEXT,
@@ -623,6 +629,7 @@ mod tests {
     fn checkbox_ddl() -> &'static str {
         "CREATE TABLE items (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             title TEXT,
             active INTEGER DEFAULT 0,
             created_at TEXT,
@@ -715,6 +722,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE events (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 start_date TEXT,
                 start_date_tz TEXT,
                 created_at TEXT,
@@ -756,6 +764,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE events (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 start_date TEXT,
                 start_date_tz TEXT,
                 created_at TEXT,
@@ -809,6 +818,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE snippets (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 snippet TEXT,
                 snippet_lang TEXT,
                 created_at TEXT,
@@ -841,6 +851,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE snippets (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 snippet__en TEXT,
                 snippet__de TEXT,
                 snippet_lang__en TEXT,
@@ -887,6 +898,7 @@ mod tests {
     fn snippets_with_language_ddl() -> &'static str {
         "CREATE TABLE snippets (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             snippet TEXT,
             snippet_lang TEXT,
             created_at TEXT,
@@ -953,6 +965,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE events (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 start_date TEXT,
                 start_date_tz TEXT,
                 created_at TEXT,
@@ -992,6 +1005,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE snippets (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 snippet TEXT,
                 snippet_lang TEXT,
                 created_at TEXT,

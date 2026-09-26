@@ -1,6 +1,7 @@
 use std::{net::SocketAddr, time::Duration};
 
 use chromiumoxide::{Browser, BrowserConfig, Element, Page};
+use tempfile::TempDir;
 use tokio::{
     net::TcpListener,
     task::JoinHandle,
@@ -247,18 +248,29 @@ pub async fn shadow_eval(page: &Page, host_selector: &str, js: &str) -> String {
 
 /// Launch a headless Chrome browser. Returns the browser and a join handle
 /// for the websocket event loop.
+///
+/// Every launch gets its own throwaway profile. chromiumoxide's default is one
+/// fixed directory under the temp dir shared by every launch, so cookies
+/// (which ignore the port) and storage written by one test — or one run —
+/// were still there in the next. The profile lives as long as the event loop.
 pub async fn launch_browser() -> (Browser, JoinHandle<()>) {
+    let profile = TempDir::new().expect("browser profile dir");
+
     let (browser, mut handler) = Browser::launch(
         BrowserConfig::builder()
             .no_sandbox()
             .arg("--headless=new")
+            .user_data_dir(profile.path())
             .build()
             .unwrap(),
     )
     .await
     .unwrap();
 
-    let handle = tokio::spawn(async move { while handler.next().await.is_some() {} });
+    let handle = tokio::spawn(async move {
+        let _profile = profile;
+        while handler.next().await.is_some() {}
+    });
 
     (browser, handle)
 }

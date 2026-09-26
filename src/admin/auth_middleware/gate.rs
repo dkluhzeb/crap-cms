@@ -7,11 +7,10 @@
 //! a useless session).
 
 use axum::response::Response;
-use tokio::task::spawn_blocking;
 use tracing::error;
 
 use crate::admin::{AdminState, auth_middleware::pages::admin_denied_response};
-use crate::core::{AuthUser, Document, HookRef};
+use crate::core::{AuthUser, Document, HookRef, spawn_request_blocking};
 use crate::db::{DbPool, query};
 use crate::hooks::{AccessCheckInput, HookRunner};
 
@@ -60,7 +59,7 @@ pub(crate) async fn check_admin_gate_for_doc(
     let hook_runner = state.infra.hook_runner.clone();
     let user_doc = user_doc.clone();
 
-    let result = spawn_blocking(move || {
+    let result = spawn_request_blocking(move || {
         check_admin_access_blocking(&pool, &hook_runner, &access, &user_doc)
     })
     .await;
@@ -128,7 +127,7 @@ pub(crate) async fn check_collection_admin_gate(
     let slug_owned = slug.to_string();
     let user_doc = user_doc.clone();
 
-    let result = spawn_blocking(move || {
+    let result = spawn_request_blocking(move || {
         check_collection_admin_access_blocking(&pool, &hook_runner, &access, &slug_owned, &user_doc)
     })
     .await;

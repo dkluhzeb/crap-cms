@@ -186,6 +186,7 @@ const DEPTH_DOC: &str = "Relationship population depth";
 const SEARCH_DOC: &str = "Full-text search query";
 const HOOKS_DOC: &str = "Run per-document lifecycle hooks (default: true)";
 const EVENT_SINGLE_DOC: &str = "Emit a live-update event for this change (default: true)";
+const EXPECTED_REVISION_DOC: &str = "Optimistic-locking precondition: the document's _revision as last read. When it has been written since, the write is refused with a revision conflict and nothing changes; omit to write unconditionally";
 
 /// The collection operations' wire options.
 pub static COLLECTION_OPS: &[OpWire] = &[
@@ -314,6 +315,7 @@ pub static COLLECTION_OPS: &[OpWire] = &[
                 ),
             ),
             f("events", WireKind::Bool, EVENT_SINGLE_DOC),
+            f("expected_revision", WireKind::Int, EXPECTED_REVISION_DOC),
         ],
     },
     OpWire {
@@ -369,6 +371,12 @@ pub static COLLECTION_OPS: &[OpWire] = &[
                 f("hooks", WireKind::Bool, HOOKS_DOC),
             ),
             f("events", WireKind::Bool, EVENT_SINGLE_DOC),
+            // gRPC spells unpublish as `UpdateRequest.unpublish`, whose
+            // message carries the update's own `expected_revision`.
+            on(
+                WireSurfaces::MCP_LUA,
+                f("expected_revision", WireKind::Int, EXPECTED_REVISION_DOC),
+            ),
         ],
     },
     OpWire {
@@ -540,6 +548,7 @@ pub static GLOBAL_OPS: &[OpWire] = &[
                 f("hooks", WireKind::Bool, HOOKS_DOC),
             ),
             f("events", WireKind::Bool, EVENT_SINGLE_DOC),
+            f("expected_revision", WireKind::Int, EXPECTED_REVISION_DOC),
         ],
     },
     OpWire {

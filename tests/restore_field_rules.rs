@@ -1,6 +1,8 @@
 //! Version restore honors field-level `access.update` rules the way an update
 //! does: a write-denied field keeps its live value in every locale, and the
-//! rule judges the live document — not the snapshot being restored.
+//! rule judges the live document — not the snapshot being restored. It honors
+//! `access.read` the same way: a write never changes a value its writer cannot
+//! read, so a field the restorer cannot read keeps its current value.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,7 +24,8 @@ struct Harness {
     locale: LocaleConfig,
 }
 
-/// `salary` is localized and writable only by the document's owner.
+/// `salary` is localized and writable only by the document's owner; `memo` is
+/// localized and readable only by the document's owner.
 fn make_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("payroll");
     def.timestamps = true;
@@ -35,6 +38,13 @@ fn make_def() -> CollectionDefinition {
             .localized(true)
             .access(FieldAccess {
                 update: Some(HookRef::new("access.owner_only")),
+                ..Default::default()
+            })
+            .build(),
+        FieldDefinition::builder("memo", FieldType::Text)
+            .localized(true)
+            .access(FieldAccess {
+                read: Some(HookRef::new("access.owner_only")),
                 ..Default::default()
             })
             .build(),
@@ -93,7 +103,7 @@ fn fields(pairs: &[(&str, &str)]) -> DocumentFields {
         .collect()
 }
 
-/// Seed a document owned by `owner` with a salary in both locales.
+/// Seed a document owned by `owner` with a salary and a memo in both locales.
 fn seed(h: &Harness, owner: &str) -> String {
     let conn = h.pool.get().unwrap();
     let en = locale_ctx(h, "en");
@@ -101,7 +111,12 @@ fn seed(h: &Harness, owner: &str) -> String {
         &conn,
         "payroll",
         &h.def,
-        &fields(&[("owner", owner), ("title", "T1"), ("salary", "100")]),
+        &fields(&[
+            ("owner", owner),
+            ("title", "T1"),
+            ("salary", "100"),
+            ("memo", "m1"),
+        ]),
         Some(&en),
     )
     .expect("create");
@@ -112,7 +127,7 @@ fn seed(h: &Harness, owner: &str) -> String {
         "payroll",
         &h.def,
         &doc.id,
-        &fields(&[("salary", "90")]),
+        &fields(&[("salary", "90"), ("memo", "m1-de")]),
         Some(&de),
     )
     .expect("german salary");
@@ -205,4 +220,42 @@ fn restore_judges_owner_rules_against_the_live_document() {
         Some("200"),
         "the rule must judge the live owner (user-a), not the snapshot's"
     );
+}
+
+/// The owner edits the memo after the oldest version was recorded, then
+/// restores it: the memo goes back with the rest of the document.
+#[test]
+fn restore_rolls_back_a_field_its_restorer_can_read() {
+    let h = setup();
+    let owner = Document::new("user-a".to_string());
+    let id = seed(&h, "user-a");
+
+    update_as(&h, Some(&owner), &id, &[("title", "T2")]);
+    update_as(&h, Some(&owner), &id, &[("title", "T3"), ("memo", "m2")]);
+
+    restore_oldest_as(&h, &owner, &id);
+
+    assert_eq!(value_in(&h, &id, "title", "en").as_deref(), Some("T2"));
+    assert_eq!(value_in(&h, &id, "memo", "en").as_deref(), Some("m1"));
+}
+
+/// Regression: a restore wrote the snapshot's value into every field, so a
+/// restorer overwrote values they could not see. A field the restorer cannot
+/// read keeps its current value in every locale — the restore is partial for
+/// them — while every field they can read is restored.
+#[test]
+fn restore_leaves_a_field_its_restorer_cannot_read_at_its_current_value() {
+    let h = setup();
+    let owner = Document::new("user-a".to_string());
+    let editor = Document::new("user-b".to_string());
+    let id = seed(&h, "user-a");
+
+    update_as(&h, Some(&owner), &id, &[("title", "T2")]);
+    update_as(&h, Some(&owner), &id, &[("title", "T3"), ("memo", "m2")]);
+
+    restore_oldest_as(&h, &editor, &id);
+
+    assert_eq!(value_in(&h, &id, "title", "en").as_deref(), Some("T2"));
+    assert_eq!(value_in(&h, &id, "memo", "en").as_deref(), Some("m2"));
+    assert_eq!(value_in(&h, &id, "memo", "de").as_deref(), Some("m1-de"));
 }

@@ -1,7 +1,7 @@
 //! Join targets and flags, and date bounds, are checked at load.
 
 use anyhow::Result;
-use mlua::{Lua, Table};
+use mlua::{IntoLua, Lua, Table, Value};
 
 use super::helpers::field_with;
 use crate::{core::FieldDefinition, hooks::lua_api::parse::fields::parse_fields};
@@ -150,12 +150,9 @@ fn test_join_inside_rows_rejected_but_allowed_in_a_group() {
     parse_one_container(&lua, in_group).expect("a join in a group is valid");
 }
 
-/// A Join is virtual/read-only, so `required` / `localized` /
-/// `required_locales` are meaningless and rejected at load (a
-/// `localized + required` Join previously wedged non-draft writes).
-fn join_with_flag(set_flag: impl Fn(&Table)) -> String {
-    let lua = Lua::new();
-    field_with(&lua, |f| {
+/// A join table with `set_flag` applied, parsed in `lua`; the error text.
+fn join_error_in(lua: &Lua, set_flag: impl FnOnce(&Table)) -> String {
+    field_with(lua, |f| {
         f.set("type", "join").unwrap();
         f.set("collection", "posts").unwrap();
         f.set("on", "author").unwrap();
@@ -165,31 +162,108 @@ fn join_with_flag(set_flag: impl Fn(&Table)) -> String {
     .to_string()
 }
 
-#[test]
-fn test_join_required_flag_rejected() {
-    let err = join_with_flag(|f| f.set("required", true).unwrap());
-    assert!(
-        err.contains("required") && err.contains("meaningless"),
-        "{err}"
-    );
+/// [`join_error_in`] on a fresh Lua state.
+fn join_with_flag(set_flag: impl FnOnce(&Table)) -> String {
+    join_error_in(&Lua::new(), set_flag)
 }
 
+/// Regression: a join accepted every common key, yet only the read-side ones
+/// can act on a virtual, never-written field — `unique`, `index`, `validate`,
+/// `default_value`, `required_when`, `mcp` were silently inert, and `required`
+/// / `localized` were refused only when truthy. Each is refused by presence,
+/// its falsy form included.
 #[test]
-fn test_join_localized_flag_rejected() {
-    let err = join_with_flag(|f| f.set("localized", true).unwrap());
-    assert!(
-        err.contains("localized") && err.contains("meaningless"),
-        "{err}"
-    );
+fn inert_keys_on_a_join_are_refused_by_presence() {
+    let lua = Lua::new();
+    let mcp = lua.create_table().unwrap();
+    mcp.set("description", "related posts").unwrap();
+
+    let cases: Vec<(&str, Value)> = vec![
+        ("required", Value::Boolean(false)),
+        ("localized", Value::Boolean(false)),
+        ("unique", Value::Boolean(true)),
+        ("index", Value::Boolean(false)),
+        ("required_locales", "all".into_lua(&lua).unwrap()),
+        ("validate", "hooks.validate".into_lua(&lua).unwrap()),
+        ("required_when", "hooks.when".into_lua(&lua).unwrap()),
+        ("default_value", "x".into_lua(&lua).unwrap()),
+        ("mcp", Value::Table(mcp)),
+    ];
+
+    for (key, value) in cases {
+        let err = join_error_in(&lua, |f| f.set(key, value).unwrap());
+
+        assert!(
+            err.contains(&format!("'{key}'")) && err.contains("no effect on a join"),
+            "{key}: {err}"
+        );
+    }
 }
 
+/// Regression: a join accepted `access.create` / `access.update` and every
+/// write-side lifecycle hook, none of which can ever run on a field no write
+/// carries. Refused by presence; the read side stays accepted.
 #[test]
-fn test_join_required_locales_rejected() {
-    let err = join_with_flag(|f| f.set("required_locales", "all").unwrap());
-    assert!(
-        err.contains("required_locales") && err.contains("meaningless"),
-        "{err}"
-    );
+fn write_side_access_and_hooks_on_a_join_are_refused() {
+    let lua = Lua::new();
+
+    for (sub, key) in [
+        ("access", "create"),
+        ("access", "update"),
+        ("hooks", "before_validate"),
+        ("hooks", "before_change"),
+        ("hooks", "after_change"),
+    ] {
+        let tbl = lua.create_table().unwrap();
+        let value: Value = if sub == "hooks" {
+            Value::Table(lua.create_sequence_from(["hooks.h"]).unwrap())
+        } else {
+            "hooks.h".into_lua(&lua).unwrap()
+        };
+        tbl.set(key, value).unwrap();
+
+        let err = join_error_in(&lua, |f| f.set(sub, tbl).unwrap());
+
+        assert!(
+            err.contains(&format!("'{sub}.{key}'")) && err.contains("no effect on a join"),
+            "{sub}.{key}: {err}"
+        );
+    }
+}
+
+/// Every key a join does honor parses: its target, `limit`, `hidden`,
+/// `admin`, `access.read` and an `after_read` hook.
+#[test]
+fn a_join_with_every_accepted_key_parses() {
+    let lua = Lua::new();
+    let fields_tbl = lua.create_table().unwrap();
+    let join = join_table(&lua);
+
+    join.set("limit", 5).unwrap();
+    join.set("hidden", false).unwrap();
+
+    let admin = lua.create_table().unwrap();
+    admin.set("description", "Posts by this author").unwrap();
+    join.set("admin", admin).unwrap();
+
+    let access = lua.create_table().unwrap();
+    access.set("read", "hooks.access.read").unwrap();
+    join.set("access", access).unwrap();
+
+    let hooks = lua.create_table().unwrap();
+    hooks
+        .set(
+            "after_read",
+            lua.create_sequence_from(["hooks.shape"]).unwrap(),
+        )
+        .unwrap();
+    join.set("hooks", hooks).unwrap();
+
+    fields_tbl.set(1, join).unwrap();
+    let parsed = parse_fields(&lua, &fields_tbl).expect("every accepted join key parses");
+
+    assert!(parsed[0].access.read.is_some());
+    assert_eq!(parsed[0].hooks.after_read.len(), 1);
 }
 
 // ── date-bound strictness ───────────────────────────────────────────

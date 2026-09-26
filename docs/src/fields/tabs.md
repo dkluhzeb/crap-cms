@@ -42,6 +42,8 @@ Each tab has:
 - `description` (optional) — help text shown inside the tab panel
 - `fields` — array of field definitions (same syntax as any other field list)
 
+A tabs field accepts only `name`, `admin` and `tabs` (a tab entry only `label`, `description` and `fields`). Keys that describe a stored value — `access`, `hidden`, `hooks`, `required`, `localized`, `validate`, … — are a load error on a layout wrapper; set them on the child fields or use a [Group](group.md). See [Accepted keys](overview.md#accepted-keys).
+
 ## API Representation
 
 In API responses, all tab sub-fields appear as flat top-level fields (not nested by tab):

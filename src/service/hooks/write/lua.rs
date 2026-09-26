@@ -60,6 +60,10 @@ impl WriteHooks for LuaWriteHooks<'_> {
         Some(self.registry)
     }
 
+    fn overrides_access(&self) -> bool {
+        self.override_access
+    }
+
     fn run_before_write(
         &self,
         hooks: &Hooks,

@@ -69,8 +69,8 @@ A field `name` is rejected at definition time if it would collide with an
 automatically generated column or a key the framework adds to documents:
 
 - **Must not start with `_`.** The underscore prefix is reserved for system
-  columns (`_status`, `_ref_count`, `_deleted_at`, `_order`, `_locale`, the
-  auth columns, …).
+  columns (`_status`, `_ref_count`, `_revision`, `_deleted_at`, `_order`,
+  `_locale`, the auth columns, …).
 - **Must not contain `__`** (double underscore) — that separator is reserved
   for group-field column nesting (`group__subfield`).
 - **Must not be `id`, `parent_id`, `created_at`, or `updated_at`** — these are
@@ -155,6 +155,40 @@ The remaining keys apply to every field type.
 ## Layout Wrappers
 
 Row, Collapsible, and Tabs are **layout wrappers** — they exist only for admin UI grouping. They are transparent at the data layer: sub-fields are promoted as top-level columns with no prefix (unlike [Group](group.md), which creates prefixed columns).
+
+### Accepted keys
+
+A wrapper has no value of its own, so it accepts only `name`, `type`, `admin`
+and its children (`fields`, or `tabs` for Tabs). Every key that describes a
+stored value — `access`, `hidden`, `hooks`, `required`, `required_when`,
+`unique`, `index`, `localized`, `required_locales`, `validate`,
+`default_value`, `mcp` — is a **load error** on a wrapper, even with a falsy
+value. Such a key could never take effect: the wrapped fields sit at the
+wrapper's own level, and access checks, `hidden`, validation, search indexing
+and the MCP schema all look straight through the wrapper to them. Set the key
+on each child field, or use a [Group](group.md) when one rule should cover
+several fields under a single value:
+
+```lua
+-- Rejected: access on a row would protect nothing.
+crap.fields.row({ name = "pay", access = { read = "access.admin_only" }, fields = { ... } })
+
+-- Per field:
+crap.fields.row({
+    name = "pay",
+    fields = {
+        crap.fields.number({ name = "salary", access = { read = "access.admin_only" } }),
+        crap.fields.number({ name = "bonus", access = { read = "access.admin_only" } }),
+    },
+})
+
+-- Or one group (stored as `pay__salary`, `pay__bonus`):
+crap.fields.group({
+    name = "pay",
+    access = { read = "access.admin_only" },
+    fields = { crap.fields.number({ name = "salary" }), crap.fields.number({ name = "bonus" }) },
+})
+```
 
 ### Nesting
 

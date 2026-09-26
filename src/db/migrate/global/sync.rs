@@ -10,6 +10,7 @@ use crate::{
     db::{
         DbConnection,
         migrate::{
+            collection::REVISION_COLUMN,
             global::defaults::apply_default_row_values,
             helpers::{
                 ColumnSpec, add_column_if_missing, check_type_mismatch, collect_column_specs,
@@ -71,6 +72,7 @@ fn create_global_table(
     }
 
     columns.push("_ref_count INTEGER NOT NULL DEFAULT 0".to_string());
+    columns.push(REVISION_COLUMN.to_string());
     columns.push(format!("created_at {}", conn.timestamp_column_default()));
     columns.push(format!("updated_at {}", conn.timestamp_column_default()));
 
@@ -123,6 +125,7 @@ fn alter_global_table(
         true,
         &existing,
     )?;
+    add_column_if_missing(conn, table_name, "_revision", REVISION_COLUMN, &existing)?;
 
     // The same report a collection table gets: a field removed from a global
     // leaves its column behind exactly as it does on a collection.

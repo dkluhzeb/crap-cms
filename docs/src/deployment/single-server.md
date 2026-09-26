@@ -49,7 +49,9 @@ limit first, so raise the hard limit — systemd `LimitNOFILE`, `ulimit -Hn` —
 raise it), a connection
 that has not sent complete request headers (admin) or the HTTP/2 preface (gRPC)
 within `header_read_timeout` (default 30s) is closed, an admin request must
-arrive and be answered within `request_timeout` (default 60s), the public login
+arrive and be answered within `request_timeout` (default 60s) — a save still
+running at that point is rolled back, so the `408` it gets means nothing
+changed — the public login
 / reset / MFA / callback routes accept at most `auth_body_limit` (default
 64KB), and the gRPC server caps streams per connection
 (`grpc_max_concurrent_streams`) and drops peers that stop answering keep-alive

@@ -97,6 +97,16 @@ impl DbPool {
         self.write.get()
     }
 
+    /// Whether reads and writes come from separate pools (`SQLite`). An
+    /// unsplit pool (Postgres) hands both out of one set of connections, so
+    /// a scope that already holds a read connection must write on it rather
+    /// than check out a second: `N` such scopes on an `N`-connection pool
+    /// would otherwise each hold one connection while waiting for another.
+    #[must_use]
+    pub fn is_split(&self) -> bool {
+        !Arc::ptr_eq(&self.read, &self.write)
+    }
+
     /// Return the backend identifier (e.g. `"sqlite"`, `"postgres"`).
     #[must_use]
     pub fn kind(&self) -> &str {
@@ -330,6 +340,22 @@ mod tests {
 
     fn timed_out(err: &Error) -> bool {
         err.downcast_ref::<StatementTimedOut>().is_some()
+    }
+
+    /// The configured `SQLite` pool splits reads from writes; a pool wrapping
+    /// one backend for both (as Postgres does) does not.
+    #[test]
+    fn is_split_tells_a_split_pool_from_a_shared_one() {
+        let (_dir, pool) = temp_pool();
+        assert!(pool.is_split());
+
+        let shared = DbPool::from_pool(
+            Pool::builder()
+                .max_size(1)
+                .build(SqliteConnectionManager::memory())
+                .unwrap(),
+        );
+        assert!(!shared.is_split());
     }
 
     /// Regression: a runaway query held its connection — on `SQLite` the

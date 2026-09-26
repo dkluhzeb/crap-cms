@@ -8,6 +8,8 @@
 //!   credential check).
 //! - [`tokens`] — password-reset + email-verification token
 //!   generation / consumption.
+//! - [`password_reset`] — the reset-with-token operation every surface calls
+//!   (one transaction, committed only on success).
 //! - [`account`] — lock / unlock / verified-flag mutation + the
 //!   accessors used by middleware to decide whether to accept a
 //!   token (session version, `is_locked`, `user_exists`).
@@ -34,6 +36,7 @@ pub mod local;
 pub mod login_flow;
 pub mod mfa;
 pub mod mfa_gate;
+pub mod password_reset;
 pub mod session;
 pub mod strategy_user;
 pub mod tokens;
@@ -59,10 +62,11 @@ pub use mfa::{
     verify_mfa_code,
 };
 pub use mfa_gate::{MfaGateRequest, mfa_gate, second_factor_required};
+pub use password_reset::{PasswordReset, reset_password_with_token};
 pub use session::{MintedSession, SessionGrant, SessionGrantBuilder, mint_session};
 pub use strategy_user::{StrategyAdmission, StrategyRefusal, admit_strategy_user};
 pub use tokens::{
-    ResetTokenResult, VERIFICATION_TOKEN_EXPIRY, VerificationTokenResult, consume_reset_token,
+    ResetTokenResult, VERIFICATION_TOKEN_EXPIRY, VerificationTokenResult,
     consume_verification_token, find_by_reset_token, generate_reset_token, generate_security_token,
     generate_verification_token, issue_verification_token,
 };

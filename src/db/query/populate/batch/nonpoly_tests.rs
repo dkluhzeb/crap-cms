@@ -17,13 +17,13 @@ fn batch_shared_has_one_refs() {
     // 3 posts all referencing the same author — batch should fetch author once
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, author TEXT, created_at TEXT, updated_at TEXT);
-         CREATE TABLE authors (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
-         INSERT INTO authors VALUES ('a1', 'Alice', '2024-01-01', '2024-01-01');
-         INSERT INTO authors VALUES ('a2', 'Bob', '2024-01-01', '2024-01-01');
-         INSERT INTO posts VALUES ('p1', 'Post 1', 'a1', '2024-01-01', '2024-01-01');
-         INSERT INTO posts VALUES ('p2', 'Post 2', 'a1', '2024-01-01', '2024-01-01');
-         INSERT INTO posts VALUES ('p3', 'Post 3', 'a2', '2024-01-01', '2024-01-01');"
+        "CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, author TEXT, created_at TEXT, updated_at TEXT);
+         CREATE TABLE authors (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT);
+         INSERT INTO authors VALUES ('a1', 0, 'Alice', '2024-01-01', '2024-01-01');
+         INSERT INTO authors VALUES ('a2', 0, 'Bob', '2024-01-01', '2024-01-01');
+         INSERT INTO posts VALUES ('p1', 0, 'Post 1', 'a1', '2024-01-01', '2024-01-01');
+         INSERT INTO posts VALUES ('p2', 0, 'Post 2', 'a1', '2024-01-01', '2024-01-01');
+         INSERT INTO posts VALUES ('p3', 0, 'Post 3', 'a2', '2024-01-01', '2024-01-01');"
     ).unwrap();
 
     let registry = make_registry_with_posts_and_authors();
@@ -110,13 +110,13 @@ fn batch_shared_has_one_refs() {
 fn batch_has_many_fields() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE categories (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
-         CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT);
-         INSERT INTO categories VALUES ('c1', 'Tech', '2024-01-01', '2024-01-01');
-         INSERT INTO categories VALUES ('c2', 'Science', '2024-01-01', '2024-01-01');
-         INSERT INTO categories VALUES ('c3', 'Art', '2024-01-01', '2024-01-01');
-         INSERT INTO posts VALUES ('p1', 'Post 1', '2024-01-01', '2024-01-01');
-         INSERT INTO posts VALUES ('p2', 'Post 2', '2024-01-01', '2024-01-01');"
+        "CREATE TABLE categories (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT);
+         CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, created_at TEXT, updated_at TEXT);
+         INSERT INTO categories VALUES ('c1', 0, 'Tech', '2024-01-01', '2024-01-01');
+         INSERT INTO categories VALUES ('c2', 0, 'Science', '2024-01-01', '2024-01-01');
+         INSERT INTO categories VALUES ('c3', 0, 'Art', '2024-01-01', '2024-01-01');
+         INSERT INTO posts VALUES ('p1', 0, 'Post 1', '2024-01-01', '2024-01-01');
+         INSERT INTO posts VALUES ('p2', 0, 'Post 2', '2024-01-01', '2024-01-01');"
     ).unwrap();
 
     let cats_def = make_collection_def("categories", vec![make_field("name", FieldType::Text)]);
@@ -237,10 +237,10 @@ fn batch_has_one_cache_hit() {
 fn batch_has_many_cache_hit() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE categories (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
-         CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT);
-         INSERT INTO categories VALUES ('c1', 'DBTech', '2024-01-01', '2024-01-01');
-         INSERT INTO posts VALUES ('p1', 'Post', '2024-01-01', '2024-01-01');"
+        "CREATE TABLE categories (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT);
+         CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, created_at TEXT, updated_at TEXT);
+         INSERT INTO categories VALUES ('c1', 0, 'DBTech', '2024-01-01', '2024-01-01');
+         INSERT INTO posts VALUES ('p1', 0, 'Post', '2024-01-01', '2024-01-01');"
     ).unwrap();
 
     let cats_def = make_collection_def("categories", vec![make_field("name", FieldType::Text)]);
@@ -359,10 +359,10 @@ fn batch_has_one_unknown_collection_skips() {
 fn batch_has_many_missing_related_dropped() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE categories (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
-         CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT);
-         INSERT INTO categories VALUES ('c1', 'Tech', '2024-01-01', '2024-01-01');
-         INSERT INTO posts VALUES ('p1', 'Post 1', '2024-01-01', '2024-01-01');"
+        "CREATE TABLE categories (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT);
+         CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, created_at TEXT, updated_at TEXT);
+         INSERT INTO categories VALUES ('c1', 0, 'Tech', '2024-01-01', '2024-01-01');
+         INSERT INTO posts VALUES ('p1', 0, 'Post 1', '2024-01-01', '2024-01-01');"
     ).unwrap();
 
     let cats_def = make_collection_def("categories", vec![make_field("name", FieldType::Text)]);
@@ -416,13 +416,13 @@ fn batch_has_many_missing_related_dropped() {
 fn batch_has_many_soft_deleted_target_dropped() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE categories (id TEXT PRIMARY KEY, name TEXT, _deleted_at TEXT, created_at TEXT, updated_at TEXT);
-         CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT);
+        "CREATE TABLE categories (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, _deleted_at TEXT, created_at TEXT, updated_at TEXT);
+         CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, created_at TEXT, updated_at TEXT);
          INSERT INTO categories (id, name, _deleted_at, created_at, updated_at)
             VALUES ('c1', 'Tech', NULL, '2024-01-01', '2024-01-01');
          INSERT INTO categories (id, name, _deleted_at, created_at, updated_at)
             VALUES ('c2', 'Science', '2024-02-01', '2024-01-01', '2024-01-01');
-         INSERT INTO posts VALUES ('p1', 'Post 1', '2024-01-01', '2024-01-01');"
+         INSERT INTO posts VALUES ('p1', 0, 'Post 1', '2024-01-01', '2024-01-01');"
     ).unwrap();
 
     let mut cats_def = make_collection_def("categories", vec![make_field("name", FieldType::Text)]);
@@ -475,11 +475,11 @@ fn batch_has_many_soft_deleted_target_dropped() {
 fn batch_has_one_soft_deleted_target_null() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE authors (id TEXT PRIMARY KEY, name TEXT, _deleted_at TEXT, created_at TEXT, updated_at TEXT);
-         CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, author TEXT, created_at TEXT, updated_at TEXT);
+        "CREATE TABLE authors (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, _deleted_at TEXT, created_at TEXT, updated_at TEXT);
+         CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, author TEXT, created_at TEXT, updated_at TEXT);
          INSERT INTO authors (id, name, _deleted_at, created_at, updated_at)
             VALUES ('a1', 'Alice', '2024-02-01', '2024-01-01', '2024-01-01');
-         INSERT INTO posts VALUES ('p1', 'Post', 'a1', '2024-01-01', '2024-01-01');"
+         INSERT INTO posts VALUES ('p1', 0, 'Post', 'a1', '2024-01-01', '2024-01-01');"
     ).unwrap();
 
     let mut authors_def = make_collection_def("authors", vec![make_field("name", FieldType::Text)]);
@@ -539,8 +539,8 @@ fn batch_has_many_visited_kept_as_string() {
     // string (NOT dropped, NOT populated).
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE categories (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
-         INSERT INTO categories VALUES ('c1', 'Tech', '2024-01-01', '2024-01-01');",
+        "CREATE TABLE categories (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT);
+         INSERT INTO categories VALUES ('c1', 0, 'Tech', '2024-01-01', '2024-01-01');",
     )
     .unwrap();
 
@@ -594,8 +594,8 @@ fn batch_has_many_visited_kept_as_string() {
 fn batch_has_many_unknown_collection_skips() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT);
-         INSERT INTO posts VALUES ('p1', 'Post', '2024-01-01', '2024-01-01');",
+        "CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, created_at TEXT, updated_at TEXT);
+         INSERT INTO posts VALUES ('p1', 0, 'Post', '2024-01-01', '2024-01-01');",
     )
     .unwrap();
 

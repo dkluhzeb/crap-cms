@@ -118,6 +118,7 @@ document.
 | `override_access` | boolean | Bypass the global's `access.update` check (default `false`). |
 | `hooks` | boolean | Run lifecycle hooks (default `true`). Set `false` for seeding/migrations. |
 | `draft` | boolean | When `true` and the global has `versions.drafts`, performs a version-only save (main row unchanged, only a draft snapshot). Default `false`. Mirrors `crap.collections.update`. |
+| `expected_revision` | integer | The global's `_revision` as you read it. When anyone has written the global since, the update fails with a `Revision conflict` error and nothing changes. `nil` (the default) writes unconditionally. See [Concurrent Editing](../collections/concurrent-editing.md). |
 
 ```lua
 local settings = crap.globals.site_settings.update({

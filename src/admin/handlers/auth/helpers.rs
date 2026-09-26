@@ -27,7 +27,7 @@ use crate::{
         ClientIp, CollectionDefinition, Document, Registry,
         auth::Claims,
         collection::{Auth, MfaMode},
-        email,
+        email, spawn_request_blocking,
     },
     service::auth::{
         MintedSession, SessionGrantBuilder, TotpProvisioning, mint_session, totp_challenge,
@@ -348,7 +348,7 @@ pub(in crate::admin::handlers) async fn render_mfa(
     let s = state.clone();
     let c = claims.clone();
 
-    let (totp, provisioning) = tokio::task::spawn_blocking(move || totp_state_blocking(&s, &c))
+    let (totp, provisioning) = spawn_request_blocking(move || totp_state_blocking(&s, &c))
         .await
         .unwrap_or((false, None));
 

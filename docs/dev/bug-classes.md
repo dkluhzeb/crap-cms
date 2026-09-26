@@ -92,7 +92,7 @@ most).
 | S8 | Loose truthiness at a security gate (`_locked = "1"`); falsy-zero swallowing a real value (`\|\| 0.5`, `Number(0)` falsy) | typed coercion set at the evaluator; explicit `Number.isNaN`; Rust+JS evaluators fixed in lockstep | PARTIAL |
 | S9 | Duplicate keys/elements silently collapsed or double-applied (HashMap form parsing truncated `<select multiple>`, dup field names → one column, dup has-many IDs double-incremented refs) | `Vec<(String,String)>` ingress, parse-time dup-name error (wrapper-flattened), dedup + `SELECT DISTINCT` | PARTIAL |
 | S10 | Untrusted string used as filesystem/template path (traversal) | `validate_template_name` (15 vectors), storage `validate_key`, scaffold `validate_template_slug`, custom-page rules — 4 converging validators, no single chokepoint/meta-test | PARTIAL |
-| S11 | Degenerate or cross-field-inconsistent config accepted at load, detonates at runtime | per-key startup validation in `config/validate.rs` + completeness pin `every_numeric_knob_is_validated_or_exempt` (pattern-matched numeric keys must be validated or carry a reviewed exemption with its reason) | GUARDED |
+| S11 | Degenerate or cross-field-inconsistent config accepted at load, detonates at runtime | per-key startup validation in `config/validate/` + completeness pin `every_numeric_knob_is_validated_or_exempt` (pattern-matched numeric keys must be validated or carry a reviewed exemption with its reason) | GUARDED |
 
 ## F — Fail-closed security
 
@@ -321,6 +321,26 @@ Each convergence lens ends with a CLEAN list. Re-verifying those areas the
 next round is where most of a round's reading goes, so they are recorded
 here per round; a lens prompt carries the instruction to skip them unless the
 files changed since. Entries are dropped when the area is touched.
+
+- **R29 (2026-09-26)**
+  - *Access:* global read + population views, embedded-doc strip by field
+    definition, query-path oracle, admin default sort, cursor tokens, search
+    view scope, live-event removal gate, upload serve visibility, shared
+    `admit_update` order.
+  - *Admin forms:* checkbox absent-key handling, locale-locked echo + strip,
+    `<crap-conditions>` wiring (the endpoint runs only the configured ref),
+    tabs ownership + ARIA, array add/duplicate limits + reindexing, typed
+    buttons, `admin.width` via CSSOM, `novalidate` forms, rich-text load
+    error kept read-only, dirty-guard navigation hooks.
+  - *Limits + transactions:* live slots, accept permits + h2 preface sniff,
+    client-IP resolution, RLIMIT raise, request-deadline routing, statement
+    deadline guards never held across `.await`, SQLite lost-transaction and PG
+    aborted-transaction guards, savepoint per Lua step, rate-limit budgets,
+    filter/search caps, decode slots, job deferral CAS.
+  - *Upgrade:* sync run order + one crash-safe transaction under the advisory
+    lock, multi-node boot, alpha.9 column/system-table shapes, first-boot
+    record-only gates, session carry-over, queued alpha.9 jobs, removed
+    config keys covered by the guide.
 
 - **R28 (2026-09-25)**
   - *Search:* index freshness on every write path, row/draft/trash filters
@@ -1303,6 +1323,89 @@ files changed since. Entries are dropped when the area is touched.
     chokepoint pass needs its own completeness review — the new primitive's
     call sites are exactly where the next copies are written — and a scan
     guard the day the chokepoint lands, not later. UNCOMMITTED.
+- 2026-09-26 (39) — **CONVERGENCE ROUND 29** (budget lifted; live Postgres 16;
+  a real alpha.9 → HEAD upgrade on SQLite and Postgres, run again on the
+  final code; 5 Opus lenses — last round's newest code, the access cross-cut
+  after R26–R28, Postgres concurrency and locks, admin form features, the
+  upgrade path from alpha.9 — 5 fix batches, 5 post-fix reviews, 2 follow-up
+  batches). **~50 confirmed — 6 HIGH, ~20 MED, ~24 LOW — NOT quiet; no new
+  class.**
+  - **HIGH (data safety) — Postgres deadlocks between ordinary writes.** The
+    reference-count target locks were taken per collection in hash-map order,
+    fresh per write. Live: 200 concurrent creates sharing an author, two
+    categories and two tags → 186 failed (181 deadlocks → 503). Now one lock
+    pass sorted by collection and id (bulk id lists ordered too). Same load
+    after the fix: 0 failures, counts exact. Delete/trash now lock the row
+    before judging its constraints (TOCTOU). A per-request auth strategy that
+    writes now writes on the reader of an unsplit pool instead of holding two
+    connections. User settings saves lock the row. Cron ticks go in slug
+    order.
+  - **HIGH (data safety) — Postgres: a has-many number inside an array row
+    made every write of that row fail** (numeric column, JSON-text writer;
+    live verified). Every scalar has-many sub-field column is `TEXT`, and the
+    Postgres column is reconciled.
+  - **HIGH (data safety) — a save wiped fields its writer could not read.**
+    Unreadable inputs rendered empty and were submitted back. Rule: a write
+    never changes a field its writer cannot read. Applied at every depth on
+    update, draft save (judged against the pending draft), publish (per
+    locale), restore and the admin form. A per-row read denial also invented
+    `false` for checkboxes (**caught by the post-fix review**).
+  - **HIGH — display conditions judged 5 different data shapes** (the
+    example's own `show_event_url` was broken client-side). There is now one
+    condition-data decoder on the server and the same coercion in the
+    browser (dates, numbers, NFC text, emails, has-many), pinned by a
+    browser parity test.
+  - **HIGH (security) — `access`/`hidden` on Row/Collapsible/Tabs were
+    inert** (the children stayed readable). User decision: refused at load,
+    like every other key a wrapper cannot honour. Joins refuse their no-op
+    value keys too. The Lua types gained `crap.LayoutField` /
+    `crap.VirtualField` tiers, so LuaLS no longer offers them.
+  - **New (user decision): optimistic locking.** Every document and global
+    carries a `_revision`; update/unpublish take an optional
+    `expected_revision` (gRPC ABORTED, admin 409 conflict toast that keeps
+    the form's edits). Import advances it. Verified live on Postgres.
+  - **408 while the write committed later:** the request deadline now gates
+    COMMIT (`CommitGate`), so a timed-out request rolls back. Account flows
+    (login/MFA/reset/verify/callback) run under it; reset-password is one
+    service op on both surfaces.
+  - **Upgrade:** case-duplicate emails gave a raw index error. Email
+    uniqueness now goes through the canonical column (the `LOWER` index is
+    removed). The FTS index was rebuilt every boot inside the sync
+    transaction (now gated by a recorded shape). Old inline `UNIQUE`
+    constraints are dropped once. Junction and array locale shapes are
+    reconciled. Config errors are all reported at once instead of one per
+    boot (`ErrorReport`, per-section decode naming the path; `crap-cms
+    check`).
+  - **Other:** write responses honour the read view (id-only when the new
+    state is unreadable); references to documents the writer cannot read are
+    refused as not found; held values are accepted only when readable; join
+    population refills windows after readability; MCP limiter atomic; the
+    admin dirty guard, error reveal in hidden tabs, Enter-to-publish and
+    unpublish-discards-edits fixed.
+    Gates (2026-09-26): clippy clean in both forms; full suite 9,323 green
+    over 130 binaries + lib 7,561 under `--all-features`; Postgres harness
+    57/57; live on Postgres with the final build: 200 concurrent creates
+    sharing targets → 0 failures and exact counts, the has-many list in array
+    rows round-trips, a stale `expected_revision` is ABORTED; the real alpha.9 →
+    HEAD upgrade repeated on SQLite and Postgres (data, ref counts,
+    integrity, NOT NULL relax, `LOWER` index dropped, login, admin pages,
+    writes); LuaLS clean on golden + usage + example; all five `gen-*` checks,
+    `cargo fmt`, `crap-cms fmt`, biome clean; e2e 362 green over 82 binaries.
+    The gate pass caught what the agents could not run: a new test missing
+    its locale on a localized collection; a guard still reading the split
+    `config/validate.rs`; ~20 clippy findings; two e2e failures — every
+    browser shared one chromiumoxide profile directory, so a cookie from one
+    test or run leaked into the next (each launch now gets its own profile),
+    and a rich-text test pinned the load-time rewrite this round removed. The
+    first full run had 8 failures, fixed before the one re-run: import
+    advanced the revision of a document it created (a created document now
+    keeps its exported revision; an overwritten one advances), two tests
+    compared `_revision` as content, a test predating id-only write responses,
+    two guard gaps, and a restore refused under load — a child forked while
+    the lock file was open held a copy of the instance lock until exec
+    (reproduced deterministically; the exclusive lock now waits up to a
+    second for a holder that is letting go).
+    Streak: 0 quiet rounds.
 - 2026-09-25 (38) — **CONVERGENCE ROUND 28** (budget lifted; live Postgres 16;
   the new binary booted on the round-start PG example and an old SQLite example
   DB; 5 Opus lenses — last round's newest code, search + i18n, resource limits

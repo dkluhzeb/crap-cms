@@ -4,7 +4,6 @@ use axum::{
     extract::{Query, State},
     response::Response,
 };
-use tokio::task;
 
 use crate::{
     admin::{
@@ -12,6 +11,7 @@ use crate::{
         context::{AuthBasePageContext, PageMeta, PageType, page::auth::ResetPasswordPage},
         handlers::{auth::ResetPasswordQuery, shared::render_auth_page},
     },
+    core::spawn_request_blocking,
     service::{self, AppInfra, ServiceContext},
 };
 
@@ -47,7 +47,7 @@ pub async fn reset_password_page(
     let infra = Arc::clone(&state.infra);
     let token = query.token.clone();
 
-    let valid = task::spawn_blocking(move || is_valid_reset_token(&infra, &token))
+    let valid = spawn_request_blocking(move || is_valid_reset_token(&infra, &token))
         .await
         .unwrap_or(false);
 

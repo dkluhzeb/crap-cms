@@ -764,4 +764,88 @@ mod tests {
             "render_static_file produced different output on two consecutive runs — non-deterministic ordering in a derive"
         );
     }
+
+    /// The `--- @field` names of `class`'s block in `out`, and its parent.
+    fn class_block(out: &str, class: &str) -> (String, Vec<String>) {
+        let header = format!("--- @class {class} : ");
+        let start = out.find(&header).expect("class block");
+        let block = &out[start..];
+        let end = block.find("\n\n").unwrap_or(block.len());
+        let mut lines = block[..end].lines();
+
+        let parent = lines.next().unwrap()[header.len()..].to_string();
+        let fields = lines
+            .filter_map(|line| line.strip_prefix("--- @field "))
+            .map(|rest| rest.split([' ', '?']).next().unwrap().to_string())
+            .collect();
+
+        (parent, fields)
+    }
+
+    /// Regression: the layout wrappers' views extended `crap.BaseField`, so
+    /// `LuaLS` offered `access`, `hidden` and every other key a wrapper refuses
+    /// at load. A wrapper view extends `crap.LayoutField` — the keys every
+    /// field accepts and a wrapper accepts besides its children — and the
+    /// base extends that.
+    #[test]
+    fn a_layout_wrapper_view_offers_only_the_keys_a_wrapper_accepts() {
+        let mut out = String::new();
+        FieldDefinition::render_lua_field_type_views(&mut out);
+
+        let layout_start = out
+            .find("--- @class crap.LayoutField\n")
+            .expect("layout base");
+        let layout: Vec<&str> = out[layout_start..]
+            .lines()
+            .skip(1)
+            .take_while(|line| line.starts_with("--- @field "))
+            .collect();
+        assert_eq!(layout.len(), 2, "{layout:?}");
+        assert!(layout[0].starts_with("--- @field name string"));
+        assert!(layout[1].starts_with("--- @field admin? crap.FieldAdmin"));
+
+        let (base_parent, base_fields) = class_block(&out, "crap.BaseField");
+        assert_eq!(base_parent, "crap.VirtualField");
+        assert!(base_fields.contains(&"required".to_string()));
+        assert!(!base_fields.contains(&"name".to_string()));
+
+        for (class, children) in [
+            ("crap.RowField", "fields"),
+            ("crap.CollapsibleField", "fields"),
+            ("crap.TabsField", "tabs"),
+        ] {
+            assert_eq!(
+                class_block(&out, class),
+                ("crap.LayoutField".to_string(), vec![children.to_string()]),
+                "{class}"
+            );
+        }
+
+        assert_eq!(class_block(&out, "crap.GroupField").0, "crap.BaseField");
+    }
+
+    /// Regression: the join view extended `crap.BaseField`, so `LuaLS` offered
+    /// `required`, `unique`, `default_value` and every other value key a join
+    /// refuses at load. The join view extends `crap.VirtualField` — the read
+    /// side keys (`hidden`, `access`, `hooks`) on top of `crap.LayoutField` —
+    /// and adds only its own config.
+    #[test]
+    fn the_join_view_offers_only_the_keys_a_join_accepts() {
+        let mut out = String::new();
+        FieldDefinition::render_lua_field_type_views(&mut out);
+
+        let (virtual_parent, mut virtual_fields) = class_block(&out, "crap.VirtualField");
+        virtual_fields.sort();
+        assert_eq!(virtual_parent, "crap.LayoutField");
+        assert_eq!(virtual_fields, ["access", "hidden", "hooks"]);
+
+        let (join_parent, join_fields) = class_block(&out, "crap.JoinField");
+        assert_eq!(join_parent, "crap.VirtualField");
+        assert_eq!(join_fields, ["collection", "on", "limit"]);
+
+        let base_fields = class_block(&out, "crap.BaseField").1;
+        for key in ["access", "hidden", "hooks"] {
+            assert!(!base_fields.contains(&key.to_string()), "{key}");
+        }
+    }
 }

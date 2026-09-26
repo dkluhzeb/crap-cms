@@ -64,7 +64,10 @@ The double-underscore separator is used in all write operations (forms, gRPC). O
 A nested object (`{ "seo": { "title": "…" } }`) is accepted too. A group has
 no value of its own — only its sub-fields do — so a write that sets the group
 key itself to `null` (Lua `crap.null`, gRPC `null_value`, JSON `null`) or to
-anything but an object is refused with a validation error on the group. To
+anything but an object is refused with a validation error on the group —
+unless the caller's field-level `access.create` / `access.update` rule (or, on
+update, its `access.read` rule) denies the group, in which case the value is
+dropped silently like any other field the caller may not write. To
 clear a group, set its sub-fields to `null`: `{ "seo": { "title": null,
 "description": null } }`. (Inside an array or blocks row a group is stored as
 part of the row, and `null` clears it there.)

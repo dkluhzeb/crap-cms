@@ -28,7 +28,7 @@ const VERSION: &str = "1";
 
 /// The columns a collection table declares `NOT NULL` on purpose: the primary
 /// key and the system columns that always hold a value.
-const SYSTEM_NOT_NULL: &[&str] = &["id", "_status", "_ref_count"];
+const SYSTEM_NOT_NULL: &[&str] = &["id", "_status", "_ref_count", "_revision"];
 
 /// The `_crap_meta` key gating the pass for one collection.
 fn gate_key(slug: &str) -> String {

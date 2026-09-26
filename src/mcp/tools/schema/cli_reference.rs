@@ -30,6 +30,10 @@ static EXAMPLES: &[(&str, &[&str])] = &[
             "crap-cms work -d --queues heavy --concurrency 2",
         ],
     ),
+    (
+        "check",
+        &["crap-cms check", "crap-cms -C ./my-project check"],
+    ),
     ("status", &["crap-cms status", "crap-cms status --check"]),
     ("init", &["crap-cms init"]),
     (

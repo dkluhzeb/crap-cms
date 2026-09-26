@@ -410,7 +410,7 @@ mod tests {
     #[test]
     fn save_join_table_data_polymorphic_has_many() {
         let (_dir, conn) = setup_conn(
-            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+            "CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0);
              CREATE TABLE posts_refs (
                  parent_id TEXT,
                  related_id TEXT,
@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn save_group_array_data() {
         let (_dir, conn) = setup_conn(
-            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+            "CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0);
              CREATE TABLE posts_config__items (
                  id TEXT PRIMARY KEY,
                  parent_id TEXT,
@@ -494,7 +494,7 @@ mod tests {
     #[test]
     fn save_group_blocks_data() {
         let (_dir, conn) = setup_conn(
-            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+            "CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0);
              CREATE TABLE posts_config__content (
                  id TEXT PRIMARY KEY,
                  parent_id TEXT,
@@ -530,7 +530,7 @@ mod tests {
     #[test]
     fn save_group_relationship_data() {
         let (_dir, conn) = setup_conn(
-            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+            "CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0);
              CREATE TABLE posts_config__tags (
                  parent_id TEXT,
                  related_id TEXT,
@@ -562,7 +562,7 @@ mod tests {
     #[test]
     fn save_group_group_array_data() {
         let (_dir, conn) = setup_conn(
-            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+            "CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0);
              CREATE TABLE posts_outer__inner__items (
                  id TEXT PRIMARY KEY,
                  parent_id TEXT,

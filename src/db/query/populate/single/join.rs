@@ -280,12 +280,12 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(&versions_table_sql("posts")).unwrap();
         conn.execute_batch(
-            "CREATE TABLE authors (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
+            "CREATE TABLE authors (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT);
              CREATE TABLE posts (
-                id TEXT PRIMARY KEY, title TEXT, author TEXT,
+                id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, author TEXT,
                 _status TEXT NOT NULL DEFAULT 'published', created_at TEXT, updated_at TEXT
              );
-             INSERT INTO authors VALUES ('a1', 'Alice', '2024-01-01', '2024-01-01');
+             INSERT INTO authors VALUES ('a1', 0, 'Alice', '2024-01-01', '2024-01-01');
              INSERT INTO posts (id, title, author, _status, created_at, updated_at)
                 VALUES ('p1', 'Published Post', 'a1', 'published', '2024-01-01', '2024-01-01');
              INSERT INTO posts (id, title, author, _status, created_at, updated_at)

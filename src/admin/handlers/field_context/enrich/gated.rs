@@ -15,11 +15,14 @@ use std::slice;
 use tracing::warn;
 
 use crate::{
-    core::{CollectionDefinition, Document},
-    db::{Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query},
+    core::{CollectionDefinition, Document, JoinConfig},
+    db::{
+        Filter, FilterClause, FilterOp, FindQuery, LocaleContext,
+        query::{self, PopulateOpts, join_children},
+    },
     service::{
         ReadAccessCtx, ReadStripArgs, RunnerReadHooks, helpers::strip_unreadable_docs,
-        requested_views, resolve_view_scope,
+        hooks::ReadHooksJoinGuard, join_child_readable, requested_views, resolve_view_scope,
     },
 };
 
@@ -104,36 +107,40 @@ fn strip_label_docs(
     );
 }
 
-/// Gated reverse-lookup / list read for a display label set: `base_filters` AND
-/// the viewer's view filters, at most `limit` rows in the collection's default
-/// order. Empty when nothing is visible — so a join field never enumerates or
-/// counts rows of a collection the viewer cannot read.
-pub(in crate::admin::handlers::field_context) fn gated_find(
+/// The children a join lists for the edited document `parent_id`, labelled
+/// for the viewer: the very lookup a read populates the join with — the
+/// target's views (drafts shown through the draft view), children whose `on`
+/// value the viewer may not read left out before the join's `limit` cuts the
+/// list — then stripped of what the viewer may not read. Empty when nothing
+/// is visible or the lookup fails.
+pub(in crate::admin::handlers::field_context) fn gated_join_children(
     ctx: &EnrichCtx,
-    (slug, def): (&str, &CollectionDefinition),
-    base_filters: Vec<FilterClause>,
-    limit: i64,
+    (jc, target_def): (&JoinConfig, &CollectionDefinition),
+    parent_id: &str,
 ) -> Vec<Document> {
-    let Some(mut filters) = view_filters(ctx, slug, def) else {
-        return Vec::new();
-    };
-    filters.extend(base_filters);
+    let hooks = RunnerReadHooks::new(&ctx.state.infra.hook_runner, ctx.conn, ctx.user, None);
+    let guard = ReadHooksJoinGuard::new(&hooks);
 
-    let fq = FindQuery::builder()
-        .filters(filters)
-        .limit(Some(limit))
-        .build();
-    let mut docs = query::find(ctx.conn, slug, def, &fq, ctx.rel_locale_ctx)
-        .inspect_err(|e| warn!("enrichment label list read for '{slug}' failed: {e}"))
+    let mut opts = PopulateOpts::new(0).join_access(&guard, ctx.user);
+    if let Some(locale_ctx) = ctx.rel_locale_ctx {
+        opts = opts.locale_ctx(locale_ctx);
+    }
+
+    let mut docs = join_children(ctx.conn, ctx.reg, (jc, parent_id), &opts)
+        .inspect_err(|e| warn!("enrichment join read for '{}' failed: {e}", jc.collection))
         .unwrap_or_default();
 
-    strip_label_docs(ctx, slug, def, &mut docs);
+    strip_label_docs(ctx, &jc.collection, target_def, &mut docs);
+
+    // The lookup already left these out; kept as a backstop so a label can
+    // never name a child whose `on` value the viewer may not read.
+    docs.retain(|doc| join_child_readable(jc, &doc.fields));
 
     docs
 }
 
-/// How many rows a [`gated_find`] with no limit would read: `base_filters` AND
-/// the viewer's view filters, counted in SQL. `None` when nothing is visible
+/// How many visible rows match `base_filters`: they AND the viewer's view
+/// filters (the published/draft union), counted in SQL. `None` when nothing is visible
 /// or the count fails — the caller then shows no total rather than a wrong one.
 pub(in crate::admin::handlers::field_context) fn gated_count(
     ctx: &EnrichCtx,
@@ -159,7 +166,7 @@ mod tests {
     use super::*;
     use crate::{
         admin::handlers::field_context::enrich::test_helpers::make_test_state_with_deny,
-        core::{FieldDefinition, FieldType, Registry},
+        core::{FieldDefinition, FieldType, Registry, RelationshipConfig},
     };
 
     /// Regression: a label read skipped the read strips, so a hidden (or
@@ -169,7 +176,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE posts (
-                id TEXT PRIMARY KEY, title TEXT,
+                id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT,
                 _status TEXT DEFAULT 'published', created_at TEXT, updated_at TEXT
             );
             INSERT INTO posts (id, title) VALUES ('p1', 'Secret Title');",
@@ -202,18 +209,18 @@ mod tests {
         assert_eq!(doc.get_str("title"), None);
     }
 
-    /// A label list read strips every document it returns, not only the first:
-    /// the hidden title field names none of the listed items.
+    /// A join's label list strips every document it returns, not only the
+    /// first: the hidden title field names none of the listed items.
     #[test]
-    fn a_hidden_title_is_not_read_for_any_label_in_a_list() {
+    fn a_hidden_title_is_not_read_for_any_join_label() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE posts (
-                id TEXT PRIMARY KEY, title TEXT,
+                id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, author TEXT,
                 _status TEXT DEFAULT 'published', created_at TEXT, updated_at TEXT
             );
-            INSERT INTO posts (id, title) VALUES ('p1', 'Secret One');
-            INSERT INTO posts (id, title) VALUES ('p2', 'Secret Two');",
+            INSERT INTO posts (id, title, author) VALUES ('p1', 'Secret One', 'au1');
+            INSERT INTO posts (id, title, author) VALUES ('p2', 'Secret Two', 'au1');",
         )
         .unwrap();
 
@@ -222,8 +229,12 @@ mod tests {
             FieldDefinition::builder("title", FieldType::Text)
                 .hidden(true)
                 .build(),
+            FieldDefinition::builder("author", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("authors", false))
+                .build(),
         ];
-        let reg = Registry::new();
+        let mut reg = Registry::new();
+        reg.register_collection(def.clone());
         let errors = HashMap::new();
         let state = make_test_state_with_deny(false);
         let ctx = EnrichCtx {
@@ -238,7 +249,8 @@ mod tests {
             ancestor_readonly: false,
         };
 
-        let docs = gated_find(&ctx, ("posts", &def), Vec::new(), 10);
+        let join = JoinConfig::new("posts", "author");
+        let docs = gated_join_children(&ctx, (&join, &def), "au1");
 
         assert_eq!(docs.len(), 2, "both readable targets are listed");
         for doc in &docs {
@@ -255,7 +267,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE posts (
-                id TEXT PRIMARY KEY, title TEXT,
+                id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT,
                 _status TEXT DEFAULT 'published', created_at TEXT, updated_at TEXT
             );
             INSERT INTO posts (id, title) VALUES ('p1', 'Secret Title');",

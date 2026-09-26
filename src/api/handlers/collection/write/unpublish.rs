@@ -26,7 +26,10 @@ impl ContentService {
         headers: HashMap<String, String>,
         req: &content::UpdateRequest,
     ) -> Result<Response<content::UpdateResponse>, Status> {
-        let args = UnpublishArgs::new(req.id.clone()).events(req.events.unwrap_or(true));
+        let args = UnpublishArgs::builder(req.id.clone())
+            .events(req.events.unwrap_or(true))
+            .expected_revision(req.expected_revision)
+            .build();
 
         let principal = Principal::Credentials(Credentials {
             surface: Surface::Grpc,

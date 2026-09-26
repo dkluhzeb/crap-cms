@@ -128,6 +128,32 @@ impl FormData {
         self.take("_locale")
     }
 
+    /// Remove and parse the `_revision` meta key: the document revision the
+    /// edit form was rendered from, sent back as the write's precondition so a
+    /// save over someone else's newer change is refused. Absent or blank means
+    /// an unconditional write.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the key holds anything but an integer — a
+    /// precondition that cannot be read must not decay into a blind write.
+    pub fn take_revision(&mut self) -> Result<Option<i64>, String> {
+        let Some(raw) = self.take("_revision") else {
+            return Ok(None);
+        };
+
+        let trimmed = raw.trim();
+
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+
+        trimmed
+            .parse()
+            .map(Some)
+            .map_err(|_| format!("'_revision' must be an integer, got '{raw}'"))
+    }
+
     /// Remove and return the `password` meta key — auth collections only.
     ///
     /// Every write surface extracts it the same way: a collection without auth
@@ -157,6 +183,32 @@ mod tests {
 
     fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
         FieldDefinition::builder(name, ft).build()
+    }
+
+    /// The revision precondition leaves the form as a number, never as field
+    /// data; a blank one is no precondition and garbage is refused.
+    #[test]
+    fn take_revision_parses_and_removes_the_meta_key() {
+        let form_with = |value: &str| {
+            let raw = HashMap::from([
+                ("_revision".to_string(), value.to_string()),
+                ("title".to_string(), "Hello".to_string()),
+            ]);
+
+            FormData::from_raw(raw, &[make_field("title", FieldType::Text)])
+        };
+
+        let mut form = form_with("7");
+        assert_eq!(form.take_revision(), Ok(Some(7)));
+        assert_eq!(form.get("_revision"), None, "taken out of the data");
+        assert_eq!(form.get("title"), Some("Hello"));
+
+        assert_eq!(form_with(" ").take_revision(), Ok(None));
+        assert_eq!(
+            FormData::from_raw(HashMap::new(), &[]).take_revision(),
+            Ok(None)
+        );
+        assert!(form_with("seven").take_revision().is_err());
     }
 
     #[test]

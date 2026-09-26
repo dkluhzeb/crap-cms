@@ -395,6 +395,7 @@ async fn dispatch_command(command: Command, config_flag: Option<PathBuf>) -> Res
     match command {
         cmd @ Command::Serve { .. } => dispatch_serve(cmd, config_flag).await,
         cmd @ Command::Work { .. } => dispatch_work(cmd, config_flag).await,
+        Command::Check => with_config(config_flag, commands::check::run),
         Command::Status { check } => with_config(config_flag, |c| commands::status::run(c, check)),
         Command::User { action } => with_config(config_flag, |c| commands::user::run(c, action)),
         Command::Init { dir, no_input } => commands::init::run(dir, no_input),

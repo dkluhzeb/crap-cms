@@ -16,9 +16,7 @@ use crate::{
         },
     },
     config::LocaleConfig,
-    core::{
-        CollectionDefinition, Document, Registry, auth::AuthUser, spawn_blocking_in_label_locale,
-    },
+    core::{CollectionDefinition, Document, Registry, auth::AuthUser, spawn_request_blocking},
     db::{DbPool, query::AccessResult},
     hooks::HookRunner,
     service::{
@@ -107,7 +105,7 @@ pub async fn back_references(
 
     // The viewer's label locale comes along, so the report's field and
     // collection labels follow the UI locale.
-    match spawn_blocking_in_label_locale(move || load_back_references_blocking(&params)).await {
+    match spawn_request_blocking(move || load_back_references_blocking(&params)).await {
         Ok(Ok(report)) => Json(json!(report)).into_response(),
         Ok(Err(ServiceError::AccessDenied(_))) => {
             // Row-scoped `read` rule didn't match the target — fail closed

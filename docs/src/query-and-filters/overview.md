@@ -621,7 +621,7 @@ or group name, a hidden field, or a number, checkbox, date, JSON or
 relationship field fails the load with an error naming the entry. Filter those
 with `where` instead.
 
-The FTS index is automatically created and rebuilt on server startup for every collection with text fields.
+The FTS index is created at startup for every collection with text fields, and every write through crap-cms keeps it current. A start rebuilds it only when what it is built from changed — the searchable fields, their locale columns, the rich text nodes they index — or a startup conversion rewrote the collection's stored text. Rows written around crap-cms (raw SQL) are not indexed; deleting the collection's `fts_shape:<collection>` row from `_crap_meta` makes the next start rebuild its index.
 
 ## Query Size Limits
 

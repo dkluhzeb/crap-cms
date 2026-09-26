@@ -79,6 +79,10 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
         "The field values to apply to every matching document.",
     ),
     ("version_id", "The version snapshot to restore from."),
+    (
+        "expected_revision",
+        "The document's `_revision` as last read: when the document was written since, the write is refused with a `Revision conflict` error and nothing changes. Omit to write unconditionally.",
+    ),
 ];
 
 /// Every op this table covers, collections first, then globals.

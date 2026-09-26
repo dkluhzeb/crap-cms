@@ -9,8 +9,11 @@ use crate::db::migrate::helpers::{sync_join_tables, sync_versions_table, table_e
 use super::{alter, create, indexes};
 
 /// Sync a collection's schema: create or alter table, join tables, versions,
-/// and indexes. The search index is rebuilt by the caller, which holds the
-/// registry its rich text custom nodes are resolved against.
+/// and drop the indexes the definition no longer asks for. The missing indexes
+/// are created by the caller once the conversions have rewritten the stored
+/// values ([`super::create_indexes`]), and the search index is rebuilt by the
+/// caller, which holds the registry its rich text custom nodes are resolved
+/// against.
 pub(in crate::db::migrate) fn sync_collection_table(
     conn: &dyn DbConnection,
     slug: &str,
@@ -29,7 +32,7 @@ pub(in crate::db::migrate) fn sync_collection_table(
         sync_versions_table(conn, slug)?;
     }
 
-    indexes::sync_indexes(conn, slug, def, locale_config)?;
+    indexes::drop_stale_indexes(conn, slug, def, locale_config)?;
 
     Ok(())
 }

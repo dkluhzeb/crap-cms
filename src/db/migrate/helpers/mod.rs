@@ -16,6 +16,7 @@ pub(in crate::db::migrate) use alter::{
 pub(super) use column_specs::{ColumnSpec, collect_column_specs};
 pub(super) use gate::{block_paths, field_paths, holds_leaf, versioned_fingerprint};
 pub use introspection::sanitize_locale;
+pub(super) use introspection::{ConstraintKind, table_constraints};
 pub(crate) use introspection::{get_table_column_types, get_table_columns, table_exists};
 pub(super) use join_tables::sync_join_tables;
 pub(super) use paged::{Scan, for_each_row, update_by_id};

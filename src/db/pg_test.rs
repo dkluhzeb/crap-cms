@@ -54,18 +54,25 @@ pub(crate) fn unique_slug(prefix: &str) -> String {
     format!("{prefix}_{}_{n}", std::process::id())
 }
 
+mod array_scalar_lists;
 mod cache_pool;
+mod delete_lock;
 mod draft_parents;
 mod errors_sql_cron;
 mod has_many_toggle;
+mod lazy_tx_pool;
 mod list_filters;
 mod localized_join_filters;
 mod not_null_relax;
 mod populate_queries;
 mod queries;
+mod ref_count_locks;
+mod revision_lock;
 mod row_paths;
 mod search;
 mod soft_delete;
 mod support;
 mod transactions;
 mod unpublish_lock;
+mod upgrade_shapes;
+mod user_settings_lock;

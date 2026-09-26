@@ -187,9 +187,20 @@ impl<'de> Deserialize<'de> for RequiredLocales {
 /// autocompletion; this catch-all class lists every option the system
 /// understands.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, LuaFieldTypeViews, LuaAnnotation)]
-#[lua(base = "crap.BaseField", discriminator = FieldType, class = "crap.FieldDefinition")]
+#[lua(
+    base = "crap.BaseField",
+    discriminator = FieldType,
+    class = "crap.FieldDefinition",
+    layout_base = "crap.LayoutField",
+    layout_views = "row, collapsible, tabs",
+    layout_doc = "The keys every field accepts — and all a layout wrapper (row / collapsible / tabs) accepts besides its `fields` / `tabs`: a wrapper holds no value, so every value key (`access`, `hidden`, `required`, …) is a load error on it.",
+    virtual_base = "crap.VirtualField",
+    virtual_views = "join",
+    virtual_doc = "The keys a field with no stored value (a join) accepts besides its own config: its reads can be hidden, access-checked and shaped, but nothing validates, defaults, indexes, localizes or writes it, so every other value key (`required`, `unique`, `default_value`, …) is a load error on it."
+)]
 pub struct FieldDefinition {
     /// Column name (required).
+    #[lua(layout)]
     pub name: String,
     /// Field type (required).
     #[serde(rename = "type")]
@@ -229,15 +240,17 @@ pub struct FieldDefinition {
     pub options: Vec<SelectOption>,
     /// Admin UI display options.
     #[serde(default)]
-    #[lua(optional)]
+    #[lua(optional, layout)]
     pub admin: FieldAdmin,
-    /// Per-field lifecycle hooks.
+    /// Per-field lifecycle hooks. A join accepts only `after_read`: no write
+    /// ever carries it.
     #[serde(default)]
-    #[lua(optional)]
+    #[lua(optional, virtual_field)]
     pub hooks: FieldHooks,
-    /// Field-level access control (read/create/update).
+    /// Field-level access control (read/create/update). A join accepts only
+    /// `read`: no write ever carries it.
     #[serde(default)]
-    #[lua(optional)]
+    #[lua(optional, virtual_field)]
     pub access: FieldAccess,
     /// MCP tool schema options.
     #[serde(default)]
@@ -339,7 +352,7 @@ pub struct FieldDefinition {
     pub join: Option<JoinConfig>,
     /// Strip from all read responses (gRPC/Lua/MCP/admin/REST) and skip in the admin form. For admin-form-only hiding (value still returned in API), use `admin.hidden` instead. Default: false.
     #[serde(default)]
-    #[lua(optional)]
+    #[lua(optional, virtual_field)]
     pub hidden: bool,
 }
 

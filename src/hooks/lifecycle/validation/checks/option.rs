@@ -210,7 +210,9 @@ mod tests {
     use crate::core::DocumentFields;
     use crate::core::validate::ValidationError;
     use crate::core::{FieldDefinition, FieldType, LocalizedString, SelectOption};
-    use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
+    use crate::hooks::lifecycle::validation::{
+        HeldSource, HeldValueGate, ValidationCtx, validate_fields_inner,
+    };
     use serde_json::{Value, json};
 
     fn choice(name: &str, has_many: bool, values: &[&str]) -> FieldDefinition {
@@ -268,6 +270,55 @@ mod tests {
         assert!(
             result.is_ok(),
             "the value the row already holds must not block the edit: {:?}",
+            error_keys(&result)
+        );
+    }
+
+    /// A writer that may not read `status`: the gate strips it from every
+    /// stored source.
+    struct CannotReadStatus;
+
+    impl HeldValueGate for CannotReadStatus {
+        fn admit(&self, _: HeldSource, fields: &mut DocumentFields) -> bool {
+            fields.remove("status");
+
+            true
+        }
+    }
+
+    /// Regression: a retired value was accepted whenever the stored row held
+    /// it, whether or not the writer may read the field — so a writer denied
+    /// `status` could confirm a guess at its stored value by whether the write
+    /// passed. A held value counts only where the writer may read it; for this
+    /// writer the retired value is judged on the declared options alone.
+    #[test]
+    fn a_retired_option_the_writer_cannot_read_is_not_held() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE test (id TEXT PRIMARY KEY, status TEXT);
+             INSERT INTO test (id, status) VALUES ('doc1', 'legacy');",
+        )
+        .unwrap();
+
+        let fields = vec![choice("status", false, &["draft", "published"])];
+
+        let mut data = DocumentFields::new();
+        data.insert("status".to_string(), json!("legacy"));
+
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test")
+                .exclude_id(Some("doc1"))
+                .held_gate(Some(&CannotReadStatus))
+                .build(),
+        );
+
+        assert!(
+            error_keys(&result).contains(&"validation.invalid_option".to_string()),
+            "the retired value is refused: {:?}",
             error_keys(&result)
         );
     }

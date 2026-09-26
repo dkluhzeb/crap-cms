@@ -11,10 +11,10 @@ use tracing::warn;
 
 use crate::{
     config::LocaleConfig,
-    core::{Document, Registry},
+    core::{Document, HookRef, Registry, collection::GlobalDefinition},
     db::{
         AccessResult, DbConnection, FilterClause, LocaleContext,
-        query::{self, BackReference, filter_visible_ids},
+        query::{self, BackReference, filter_visible_ids, helpers::global_table},
     },
     hooks::AccessCheckInput,
     service::{
@@ -113,9 +113,13 @@ impl OwnerScan<'_> {
     }
 
     /// Resolve how much of one owner (collection or global) the viewer may see.
-    fn owner_visibility(&self, group: &BackReference) -> Result<Visibility, ServiceError> {
+    fn owner_visibility(
+        &self,
+        conn: &dyn DbConnection,
+        group: &BackReference,
+    ) -> Result<Visibility, ServiceError> {
         if group.is_global {
-            return self.global_visibility(&group.owner_slug);
+            return self.global_visibility(conn, &group.owner_slug);
         }
 
         let Some(def) = self.registry.get_collection(&group.owner_slug) else {
@@ -139,17 +143,22 @@ impl OwnerScan<'_> {
         })
     }
 
-    /// Globals are a single row gated by a boolean `read` rule — no status,
-    /// lifecycle, or row constraints apply. Anything other than `Allowed`
-    /// hides it.
-    fn global_visibility(&self, slug: &str) -> Result<Visibility, ServiceError> {
+    /// Globals are a single row gated by a boolean view rule — no row
+    /// constraints apply. The scan reads the main row, so the view is the one
+    /// that row sits in ([`scanned_global_view`]). Anything other than
+    /// `Allowed` hides it.
+    fn global_visibility(
+        &self,
+        conn: &dyn DbConnection,
+        slug: &str,
+    ) -> Result<Visibility, ServiceError> {
         let Some(def) = self.registry.get_global(slug) else {
             return Ok(Visibility::Hidden);
         };
 
         let result = self.hooks.check_access(
             &AccessCheckInput::builder("find", slug)
-                .access(def.access.read.as_ref())
+                .access(scanned_global_view(conn, slug, def)?)
                 .user(self.user)
                 .build(),
         )?;
@@ -204,6 +213,30 @@ impl OwnerScan<'_> {
 
         Ok(narrow_group(group, &visible))
     }
+}
+
+/// The access rule of the view a global's main row sits in — the row a
+/// back-reference scan reads. A drafts global whose row is unpublished (or was
+/// never published) holds draft content there, which only the draft view
+/// (`access.draft ?? access.update`) may see — a published-only reader reads
+/// that global as empty. Otherwise the row is the published content, gated by
+/// `access.read`.
+fn scanned_global_view<'a>(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &'a GlobalDefinition,
+) -> Result<Option<&'a HookRef>, ServiceError> {
+    if !def.has_drafts() {
+        return Ok(def.access.read.as_ref());
+    }
+
+    let status = query::get_document_status(conn, &global_table(slug), "default")?;
+
+    if status.as_deref() == Some("draft") {
+        return Ok(def.access.resolve_draft());
+    }
+
+    Ok(def.access.read.as_ref())
 }
 
 /// Keep only the `visible` ids of `group`, reporting whether any were lost.
@@ -302,7 +335,7 @@ pub fn find_back_references(
 
         let key = (group.owner_slug.clone(), group.is_global);
         if !cache.contains_key(&key) {
-            cache.insert(key.clone(), scan.owner_visibility(&group)?);
+            cache.insert(key.clone(), scan.owner_visibility(conn.as_ref(), &group)?);
         }
 
         match scan.keep_visible(conn.as_ref(), group, &cache[&key])? {
@@ -330,8 +363,8 @@ mod tests {
     use crate::{
         config::{CrapConfig, DatabaseConfig},
         core::{
-            CollectionDefinition, DocumentFields, FieldAccess, FieldDefinition, FieldType, HookRef,
-            RelationshipConfig, ReqContext, collection::Hooks,
+            CollectionDefinition, DocumentFields, FieldAccess, FieldDefinition, FieldType,
+            RelationshipConfig, ReqContext, VersionsConfig, collection::Hooks,
         },
         db::{DbPool, Filter, FilterOp, migrate, pool},
         hooks::lifecycle::{AfterReadCtx, access::strip_read_access_data_aware},
@@ -443,6 +476,94 @@ mod tests {
             &LocaleConfig::default(),
         )
         .unwrap()
+    }
+
+    /// Read hooks allowing every view but a global's draft view (`draft_fn`).
+    struct PublishedOnlyViewer;
+
+    impl ReadHooks for PublishedOnlyViewer {
+        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<ReqContext> {
+            Ok(ReqContext::new())
+        }
+
+        fn after_read_one(&self, _: &AfterReadCtx, doc: Document) -> Document {
+            doc
+        }
+
+        fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult> {
+            Ok(match input.access.map(HookRef::reference) {
+                Some("draft_fn") => AccessResult::Denied,
+                _ => AccessResult::Allowed,
+            })
+        }
+    }
+
+    impl FieldReadStrip for PublishedOnlyViewer {}
+
+    /// `media/m1` referenced by the drafts global `settings` (`featured`),
+    /// whose main row has status `status`.
+    fn global_referrer(status: &str) -> (tempfile::TempDir, DbPool, Registry) {
+        let mut settings = GlobalDefinition::new("settings");
+        settings.fields = vec![
+            FieldDefinition::builder("featured", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", false))
+                .build(),
+        ];
+        settings.versions = Some(VersionsConfig::new(true, 0));
+        settings.access.draft = Some(HookRef::new("draft_fn"));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+
+        let shared = Registry::shared();
+        {
+            let mut reg = shared.write().unwrap();
+            reg.register_collection(CollectionDefinition::new("media"));
+            reg.register_global(settings);
+        }
+        migrate::sync_all(&db_pool, &shared.read().unwrap(), &LocaleConfig::default()).unwrap();
+
+        let conn = db_pool.get().unwrap();
+        conn.execute("INSERT INTO media (id) VALUES ('m1')", &[])
+            .unwrap();
+        conn.execute("DELETE FROM _global_settings", &[]).unwrap();
+        conn.execute(
+            &format!(
+                "INSERT INTO _global_settings (id, featured, _status) \
+                 VALUES ('default', 'm1', '{status}')"
+            ),
+            &[],
+        )
+        .unwrap();
+        drop(conn);
+
+        let registry = (*Registry::snapshot(&shared)).clone();
+        (tmp, db_pool, registry)
+    }
+
+    /// Regression: a global's back-references were gated by its `read` rule
+    /// alone, but an unpublished drafts global holds draft content in the row
+    /// the scan reads — a reader without the draft view learned that the
+    /// global's draft references the target. That row now needs the draft
+    /// view; a published row still needs only `read`.
+    #[test]
+    fn an_unpublished_globals_references_need_the_draft_view() {
+        let (_tmp, pool, registry) = global_referrer("draft");
+        let r = report(&pool, &registry, &PublishedOnlyViewer);
+        assert!(r.references.is_empty(), "draft content stays hidden");
+        assert!(r.has_inaccessible);
+
+        let (_tmp, pool, registry) = global_referrer("published");
+        let r = report(&pool, &registry, &PublishedOnlyViewer);
+        assert_eq!(r.references.len(), 1, "published content is listed");
+        assert!(!r.has_inaccessible);
     }
 
     /// THE leak regression: an owner collection the viewer cannot read must not

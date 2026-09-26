@@ -367,6 +367,7 @@ async fn grpc_draft_update_is_version_only() {
             locale: None,
             draft: Some(true),
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -419,6 +420,7 @@ async fn grpc_find_by_id_draft_returns_latest_version() {
             locale: None,
             draft: Some(true),
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -475,6 +477,7 @@ async fn grpc_find_by_id_no_draft_returns_main_table() {
             locale: None,
             draft: Some(true),
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -532,6 +535,7 @@ async fn grpc_list_versions() {
                 locale: None,
                 draft: None,
                 unpublish: None,
+                expected_revision: None,
             }))
             .await
             .unwrap();
@@ -588,6 +592,7 @@ async fn grpc_list_versions_with_limit() {
                 locale: None,
                 draft: None,
                 unpublish: None,
+                expected_revision: None,
             }))
             .await
             .unwrap();
@@ -706,6 +711,7 @@ async fn grpc_restore_version() {
             locale: None,
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -966,6 +972,7 @@ async fn grpc_max_versions_prunes_old() {
                 locale: None,
                 draft: None,
                 unpublish: None,
+                expected_revision: None,
             }))
             .await
             .unwrap();
@@ -1058,6 +1065,7 @@ async fn grpc_full_draft_publish_workflow() {
             locale: None,
             draft: Some(true),
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -1075,6 +1083,7 @@ async fn grpc_full_draft_publish_workflow() {
             locale: None,
             draft: Some(false),
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -1168,6 +1177,7 @@ async fn grpc_update_unpublish() {
             locale: None,
             draft: None,
             unpublish: Some(true),
+            expected_revision: None,
         }))
         .await
         .unwrap()
@@ -1597,6 +1607,7 @@ async fn grpc_restore_works_without_drafts() {
             locale: None,
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();

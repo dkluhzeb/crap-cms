@@ -1,36 +1,21 @@
 //! Shared form-preparation helper used by both `validate_create`
 //! and `validate_update` handlers.
 
-use axum::Extension;
-
 use crate::{
-    admin::{
-        AdminState,
-        handlers::{
-            forms::FormData,
-            validate::{ValidateRequest, values_to_string_map},
-        },
+    admin::handlers::{
+        forms::FormData,
+        validate::{ValidateRequest, values_to_string_map},
     },
-    core::{CollectionDefinition, DocumentFields, FieldType, auth::AuthUser},
+    core::{CollectionDefinition, DocumentFields, FieldDefinition, FieldType},
 };
 
-/// Prepare form data for validation: strip denied fields, remove password,
-/// inject upload placeholders, and merge form + join data into the typed
-/// write payload.
+/// Prepare form data for validation: remove password, inject upload
+/// placeholders, and parse the form against `form_fields` — the fields the
+/// form rendered — into the typed write payload, exactly as its save is
+/// parsed.
 pub(super) fn prepare_form_for_validation(
-    _state: &AdminState,
     def: &CollectionDefinition,
-    _auth_user: Option<&Extension<AuthUser>>,
-    payload: &ValidateRequest,
-    _operation: &str,
-) -> DocumentFields {
-    prepare_form_for_validation_inner(def, payload)
-}
-
-/// State-free body of [`prepare_form_for_validation`] (the state/auth/
-/// operation params are currently unused there) — unit-testable.
-fn prepare_form_for_validation_inner(
-    def: &CollectionDefinition,
+    form_fields: &[FieldDefinition],
     payload: &ValidateRequest,
 ) -> DocumentFields {
     let mut form_data = values_to_string_map(&payload.data);
@@ -64,13 +49,15 @@ fn prepare_form_for_validation_inner(
         }
     }
 
-    FormData::from_raw(form_data, &def.fields).into()
+    FormData::from_raw(form_data, form_fields).into()
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Value;
+
     use super::*;
-    use crate::core::{FieldDefinition, upload::CollectionUpload};
+    use crate::core::upload::CollectionUpload;
 
     fn media_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("media");
@@ -101,13 +88,13 @@ mod tests {
         let payload = ValidateRequest {
             data: DocumentFields::from_iter([(
                 "caption".to_string(),
-                serde_json::Value::String("hi".to_string()),
+                Value::String("hi".to_string()),
             )]),
             draft: false,
             locale: None,
         };
 
-        let prepared = prepare_form_for_validation_inner(&def, &payload);
+        let prepared = prepare_form_for_validation(&def, &def.fields, &payload);
 
         assert_eq!(
             prepared.get("filename").and_then(|v| v.as_str()),

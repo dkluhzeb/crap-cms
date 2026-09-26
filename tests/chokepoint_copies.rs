@@ -269,6 +269,11 @@ const WRITE_ADMISSION: Chokepoint = Chokepoint {
             "src/service/hooks/write.rs",
             "Nests the stored row field-access rules judge as `ctx.document`; not write input",
         ),
+        (
+            "src/service/hooks/write/snapshot_keep.rs",
+            "Nests a publish/restore snapshot and the stored row per locale so read rules \
+             judge them; the snapshot is stored content, not caller input",
+        ),
     ],
 };
 

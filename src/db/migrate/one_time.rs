@@ -12,6 +12,7 @@
 //! | [`super::canonical_text`] | email and text values to their canonical form | 0.1.0 |
 //! | [`super::nested_values`] | values inside JSON-stored rows to their typed form | 0.1.0 |
 //! | [`super::nullable_columns`] | `NOT NULL` dropped from required user-field columns | 0.1.0 |
+//! | [`super::inline_unique`] | inline `UNIQUE` constraints dropped from unique fields | 0.1.0 |
 //!
 //! Every module listed carries the marker line
 //! `**One-time conversion — removable after 0.1.0**`, and a test keeps the table

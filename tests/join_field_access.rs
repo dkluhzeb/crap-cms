@@ -53,15 +53,59 @@ fn definitions() -> (CollectionDefinition, CollectionDefinition) {
     (writers, pieces)
 }
 
+/// `writers` joins `pieces` on `writer`, listing at most two; `pieces.writer`
+/// is readable only on a piece whose `public` flag is set — a rule that needs
+/// each child to decide.
+fn limited_definitions() -> (CollectionDefinition, CollectionDefinition) {
+    let mut join = JoinConfig::new("pieces", "writer");
+    join.limit = Some(2);
+
+    let mut writers = CollectionDefinition::new("writers");
+    writers.fields = vec![
+        FieldDefinition::builder("name", FieldType::Text).build(),
+        FieldDefinition::builder("pieces", FieldType::Join)
+            .join(join)
+            .build(),
+    ];
+
+    let mut pieces = CollectionDefinition::new("pieces");
+    pieces.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text).build(),
+        FieldDefinition::builder("public", FieldType::Checkbox).build(),
+        FieldDefinition::builder("writer", FieldType::Relationship)
+            .relationship(RelationshipConfig::new("writers", false))
+            .access(FieldAccess {
+                read: Some(HookRef::new("access.field_read_if_public")),
+                ..Default::default()
+            })
+            .build(),
+    ];
+
+    (writers, pieces)
+}
+
 fn setup() -> Harness {
-    // The example config dir supplies the `access.admin_only` hook module.
+    setup_with(
+        definitions(),
+        &[
+            "INSERT INTO writers (id, name) VALUES ('w1', 'Ada')",
+            "INSERT INTO pieces (id, title, writer) VALUES ('p1', 'One', 'w1')",
+            "INSERT INTO pieces (id, title, writer) VALUES ('p2', 'Two', 'w1')",
+        ],
+    )
+}
+
+fn setup_with(
+    (writers, pieces): (CollectionDefinition, CollectionDefinition),
+    seed: &[&str],
+) -> Harness {
+    // The example config dir supplies the `access.*` hook modules.
     let config_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example");
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
 
     let pool = pool::create_pool(tmp.path(), &config).expect("pool");
-    let (writers, pieces) = definitions();
     let shared = Registry::shared();
     {
         let mut reg = shared.write().unwrap();
@@ -72,11 +116,7 @@ fn setup() -> Harness {
     migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
 
     let conn = pool.get().unwrap();
-    for sql in [
-        "INSERT INTO writers (id, name) VALUES ('w1', 'Ada')",
-        "INSERT INTO pieces (id, title, writer) VALUES ('p1', 'One', 'w1')",
-        "INSERT INTO pieces (id, title, writer) VALUES ('p2', 'Two', 'w1')",
-    ] {
+    for sql in seed {
         conn.execute(sql, &[]).expect("seed");
     }
     drop(conn);
@@ -175,4 +215,36 @@ fn a_join_lists_children_whose_on_field_the_reader_can_read() {
 
     assert_eq!(by_id_join(&h, Some(&admin)), both);
     assert_eq!(list_join(&h, Some(&admin)), both);
+}
+
+/// Regression: the join's `limit` was applied in SQL before the children
+/// whose `on` value the reader may not read were dropped, so with the five
+/// newest pieces private the join listed nothing although three public pieces
+/// exist. The limit now counts listed children, on the single-document and
+/// the batched populate alike: the two newest public pieces.
+#[test]
+fn a_join_limit_counts_only_children_whose_on_value_is_readable() {
+    let mut seed = vec!["INSERT INTO writers (id, name) VALUES ('w1', 'Ada')".to_string()];
+    for (id, public, day) in [
+        ("p1", 0, 10),
+        ("p2", 0, 9),
+        ("p3", 0, 8),
+        ("p4", 0, 7),
+        ("p5", 0, 6),
+        ("p6", 1, 3),
+        ("p7", 1, 2),
+        ("p8", 1, 1),
+    ] {
+        seed.push(format!(
+            "INSERT INTO pieces (id, title, public, writer, created_at, updated_at) \
+             VALUES ('{id}', '{id}', {public}, 'w1', '2024-01-{day:02}', '2024-01-{day:02}')"
+        ));
+    }
+    let seed: Vec<&str> = seed.iter().map(String::as_str).collect();
+
+    let h = setup_with(limited_definitions(), &seed);
+    let newest_public = vec!["p6".to_string(), "p7".to_string()];
+
+    assert_eq!(by_id_join(&h, None), newest_public);
+    assert_eq!(list_join(&h, None), newest_public);
 }

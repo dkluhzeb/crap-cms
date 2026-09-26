@@ -17,14 +17,14 @@ use crate::{
         handlers::{
             forms::FormData,
             shared::{
-                HxNav, get_user_doc, htmx_redirect, parse_request_locale, paths, redirect_response,
-                strip_locale_locked_form_fields, toast_only_error,
+                HxNav, collection_form_fields, get_user_doc, htmx_redirect, parse_request_locale,
+                paths, redirect_response, strip_locale_locked_form_fields, toast_only_error,
             },
         },
     },
     core::{
         AuthUser, CollectionDefinition, Document, ReqContext, SharedStorage,
-        spawn_blocking_in_label_locale, upload::UploadedFile,
+        spawn_request_blocking, upload::UploadedFile,
     },
     db::{BoxedConnection, LocaleContext},
     service::{
@@ -75,6 +75,8 @@ struct UpdateInput {
     locale_ctx: Option<LocaleContext>,
     draft: bool,
     action: String,
+    /// The revision the edit form was loaded at (`_revision`).
+    expected_revision: Option<i64>,
 }
 
 /// Owned bundle for the spawn-blocking update body. Process-stable dependencies
@@ -118,7 +120,10 @@ fn run_write(
     // both a new file and "unpublish" must not replace the document's file
     // behind a write that does not record it.
     if args.input.action == "unpublish" {
-        let doc = Unpublish::run(ctx, UnpublishArgs::new(args.id))?;
+        let unpublish = UnpublishArgs::builder(args.id)
+            .expected_revision(args.input.expected_revision)
+            .build();
+        let doc = Unpublish::run(ctx, unpublish)?;
 
         return Ok((doc, ReqContext::new()));
     }
@@ -137,6 +142,7 @@ fn run_write(
                 upload_max_file_size: args.max_file_size,
                 image_max_attempts: args.image_max_attempts,
                 form_echoes_locked_fields: true,
+                expected_revision: args.input.expected_revision,
             },
         )?;
 
@@ -153,6 +159,7 @@ fn run_write(
         .password(args.input.password)
         .locale_ctx(args.input.locale_ctx)
         .draft(args.input.draft)
+        .expected_revision(args.input.expected_revision)
         .build();
 
     Update::run(ctx, op_args)
@@ -310,7 +317,7 @@ async fn spawn_update(
         input,
     };
 
-    spawn_blocking_in_label_locale(move || update_document_blocking(args)).await
+    spawn_request_blocking(move || update_document_blocking(args)).await
 }
 
 /// Process a form update for a collection item (called from `update_action.rs`).
@@ -329,7 +336,11 @@ pub(in crate::admin::handlers::collections) async fn do_update(req: UpdateReques
         return redirect_response(paths::COLLECTIONS_ROOT).into_response();
     };
 
-    let mut form = FormData::from_raw(form_data, &def.fields);
+    // Parsed against the fields the edit form rendered for this viewer: an
+    // input it never rendered is absent from the write, not an unchecked box.
+    let locale = form_data.get("_locale").map(String::as_str);
+    let form_fields = collection_form_fields(state, &def, id, auth_user, locale).await;
+    let mut form = FormData::from_raw(form_data, &form_fields);
 
     let action = form.take_action();
     let draft = action == "save_draft";
@@ -339,6 +350,14 @@ pub(in crate::admin::handlers::collections) async fn do_update(req: UpdateReques
     let submitted_locale = form.take_locale();
     let locale_ctx = match parse_request_locale(submitted_locale.as_deref(), &state.config.locale) {
         Ok(ctx) => ctx,
+        Err(msg) => return toast_only_error(&msg),
+    };
+
+    // The revision the form was loaded at: the save is refused when someone
+    // else saved the document since. Kept for the error re-render too, so a
+    // corrected save is still checked against it.
+    let expected_revision = match form.take_revision() {
+        Ok(revision) => revision,
         Err(msg) => return toast_only_error(&msg),
     };
 
@@ -361,6 +380,7 @@ pub(in crate::admin::handlers::collections) async fn do_update(req: UpdateReques
     };
 
     let form_for_error = form.clone();
+    let submitted_action = action.clone();
 
     // A file only reaches the write when the collection accepts one; on any
     // other collection it is ignored exactly as before.
@@ -380,6 +400,7 @@ pub(in crate::admin::handlers::collections) async fn do_update(req: UpdateReques
             locale_ctx,
             draft,
             action,
+            expected_revision,
         },
     )
     .await;
@@ -394,7 +415,12 @@ pub(in crate::admin::handlers::collections) async fn do_update(req: UpdateReques
                 err: e,
                 doc_id: Some(id),
                 auth_user,
-                meta: SubmittedMeta::new(submitted_locale.as_deref(), submitted_lock),
+                meta: SubmittedMeta::builder()
+                    .locale(submitted_locale.as_deref())
+                    .locked(submitted_lock)
+                    .revision(expected_revision)
+                    .action(Some(submitted_action.as_str()))
+                    .build(),
                 hx,
             })
             .await

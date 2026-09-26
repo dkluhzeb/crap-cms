@@ -61,6 +61,13 @@ return function(_context)
 end
 ";
 
+/// Data-aware: a level whose stored `locked` is true is unreadable.
+const ACCESS_UNLESS_LOCKED: &str = r"
+return function(context)
+    return not (context.data and context.data.locked)
+end
+";
+
 /// A row filter: only posts titled "Mine".
 const ACCESS_TITLED_MINE: &str = r#"
 return function(_context)
@@ -75,6 +82,7 @@ fn access_files() -> Vec<(&'static str, &'static str)> {
         ("authenticated", ACCESS_AUTHENTICATED),
         ("never", ACCESS_NEVER),
         ("titled_mine", ACCESS_TITLED_MINE),
+        ("unless_locked", ACCESS_UNLESS_LOCKED),
     ]
 }
 
@@ -380,6 +388,7 @@ fn seed_doc(app: &TestApp, slug: &str, data: Value) -> String {
     let tx = conn.transaction().unwrap();
     let fields: DocumentFields = serde_json::from_value(data).unwrap();
     let doc = query::create(&tx, slug, &def, &fields, None).unwrap();
+    query::save_join_table_data(&tx, slug, &def.fields, &doc.id, &fields, None).unwrap();
     tx.commit().unwrap();
     doc.id.to_string()
 }
@@ -475,4 +484,265 @@ async fn delete_confirm_judges_a_row_filter_against_the_item() {
 
     assert_eq!(confirm(mine).await, StatusCode::OK);
     assert_eq!(confirm(theirs).await, StatusCode::FORBIDDEN);
+}
+
+// ── saving_the_edit_form_keeps_what_the_editor_cannot_read ──────────────
+//
+// Regression: field `access.read` and `access.update` are independent, and
+// the edit form of a user who may update but not read a field rendered an
+// EMPTY input for a nested one and submitted an unchecked box / empty list
+// for the rest — saving without touching anything flipped a checkbox to
+// false, cleared a has-many list and blanked a group sub-field. The form now
+// renders no input for an unreadable field at any depth, and the write keeps
+// every value its writer cannot read.
+
+fn read_admin_only(builder: FieldDefinitionBuilder) -> FieldDefinition {
+    builder
+        .access(FieldAccess {
+            read: Some(HookRef::new("access.admin_only")),
+            ..Default::default()
+        })
+        .build()
+}
+
+fn make_notes_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("notes");
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text).build(),
+        read_admin_only(FieldDefinition::builder("verified", FieldType::Checkbox)),
+        read_admin_only(
+            FieldDefinition::builder("tags", FieldType::Select)
+                .has_many(true)
+                .options(vec![
+                    SelectOption::new(LocalizedString::Plain("A".into()), "a"),
+                    SelectOption::new(LocalizedString::Plain("B".into()), "b"),
+                ]),
+        ),
+        FieldDefinition::builder("internal", FieldType::Group)
+            .fields(vec![
+                FieldDefinition::builder("label", FieldType::Text).build(),
+                read_admin_only(FieldDefinition::builder("note", FieldType::Text)),
+            ])
+            .build(),
+    ];
+    def.access = Access {
+        read: Some(HookRef::new("access.authenticated")),
+        update: Some(HookRef::new("access.authenticated")),
+        ..Default::default()
+    };
+    def
+}
+
+#[tokio::test]
+async fn saving_the_edit_form_keeps_what_the_editor_cannot_read() {
+    let app = setup_app_with_access_files(
+        vec![make_users_def_with_role(), make_notes_def()],
+        vec![],
+        &access_files(),
+    );
+    let editor_id = create_test_user_with_role(&app, "notes@test.com", "pw", "editor");
+    let cookie = make_auth_cookie(&app, &editor_id, "notes@test.com");
+
+    let id = seed_doc(
+        &app,
+        "notes",
+        json!({
+            "title": "Old",
+            "verified": true,
+            "tags": ["a"],
+            "internal": { "label": "l", "note": "secret" },
+        }),
+    );
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get(format!("/admin/collections/notes/{id}"))
+                .header("Cookie", auth_and_csrf(&cookie))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    let doc = html::parse(&body);
+
+    for name in ["verified", "tags", "internal__note"] {
+        assert!(
+            html::select_all(&doc, &format!("[name=\"{name}\"]")).is_empty(),
+            "no input renders for the unreadable `{name}`"
+        );
+    }
+    assert!(!body.contains("secret"), "the unreadable value leaked");
+
+    // What the form submits: only the inputs it rendered.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post(format!("/admin/collections/notes/{id}"))
+                .header("Cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("title=New&internal__label=m"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success() || resp.status().is_redirection(),
+        "the save lands: {}",
+        resp.status()
+    );
+
+    let def = app.registry.get_collection("notes").unwrap().clone();
+    let conn = app.pool.get().unwrap();
+    let stored = query::find_by_id(&conn, "notes", &def, &id, None)
+        .unwrap()
+        .expect("the note");
+
+    assert_eq!(stored.fields.get("title"), Some(&json!("New")));
+    assert_eq!(stored.fields.get("verified"), Some(&json!(true)));
+    assert_eq!(stored.fields.get("tags"), Some(&json!(["a"])));
+
+    let internal = stored.fields.get("internal").expect("the group");
+    assert_eq!(internal["label"], "m");
+    assert_eq!(internal["note"], "secret");
+}
+
+// ── a_row_field_is_editable_where_its_row_lets_the_editor_read_it ───────
+//
+// Regression: a data-aware read rule on an array sub-field denies it in some
+// rows only, but the edit form judged it once for the whole document, so
+// every row rendered alike — the field dropped from every row (editable
+// nowhere) or an input in every row, empty where the value was hidden. The
+// rule is judged row by row, as the read strip judges it: a row the editor
+// may read renders and saves the field, a row it may not read renders no
+// input and keeps its stored value, and the new-row template offers it (a new
+// row is judged against an empty one).
+
+fn make_tasks_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("tasks");
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text).build(),
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("locked", FieldType::Checkbox).build(),
+                FieldDefinition::builder("done", FieldType::Checkbox)
+                    .access(FieldAccess {
+                        read: Some(HookRef::new("access.unless_locked")),
+                        ..Default::default()
+                    })
+                    .build(),
+            ])
+            .build(),
+    ];
+    def.access = Access {
+        read: Some(HookRef::new("access.authenticated")),
+        update: Some(HookRef::new("access.authenticated")),
+        ..Default::default()
+    };
+    def
+}
+
+#[tokio::test]
+async fn a_row_field_is_editable_where_its_row_lets_the_editor_read_it() {
+    let app = setup_app_with_access_files(
+        vec![make_users_def_with_role(), make_tasks_def()],
+        vec![],
+        &access_files(),
+    );
+    let editor_id = create_test_user_with_role(&app, "tasks@test.com", "pw", "editor");
+    let cookie = make_auth_cookie(&app, &editor_id, "tasks@test.com");
+
+    let id = seed_doc(
+        &app,
+        "tasks",
+        json!({
+            "title": "T",
+            "items": [
+                { "locked": true, "done": true },
+                { "locked": false, "done": false },
+            ],
+        }),
+    );
+
+    let def = app.registry.get_collection("tasks").unwrap().clone();
+    let stored_items = |app: &TestApp| {
+        let conn = app.pool.get().unwrap();
+        query::find_by_id(&conn, "tasks", &def, &id, None)
+            .unwrap()
+            .expect("the task")
+            .fields
+            .get("items")
+            .cloned()
+            .expect("the rows")
+    };
+    let rows = stored_items(&app);
+    let (first, second) = (
+        rows[0]["id"].as_str().unwrap().to_string(),
+        rows[1]["id"].as_str().unwrap().to_string(),
+    );
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get(format!("/admin/collections/tasks/{id}"))
+                .header("Cookie", auth_and_csrf(&cookie))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    let page = html::parse(&body);
+    assert!(
+        html::select_all(&page, "[name=\"items[0][done]\"]").is_empty(),
+        "the locked row renders no input for a value its editor cannot read"
+    );
+    assert!(
+        !html::select_all(&page, "[name=\"items[1][done]\"]").is_empty(),
+        "the unlocked row renders the field its editor may read"
+    );
+    assert!(
+        body.contains("items[__INDEX__][done]"),
+        "a new row offers the field: an empty row is not locked"
+    );
+
+    // What the form submits: each row's id, its rendered `locked` box, and
+    // the unlocked row's `done` box — now checked.
+    let form = format!(
+        "title=T&items%5B0%5D%5Bid%5D={first}&items%5B0%5D%5Blocked%5D=on\
+         &items%5B1%5D%5Bid%5D={second}&items%5B1%5D%5Bdone%5D=on"
+    );
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post(format!("/admin/collections/tasks/{id}"))
+                .header("Cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success() || resp.status().is_redirection(),
+        "the save lands: {}",
+        resp.status()
+    );
+
+    let rows = stored_items(&app);
+    assert_eq!(rows[0]["done"], json!(true), "the unreadable row keeps it");
+    assert_eq!(
+        rows[1]["done"],
+        json!(true),
+        "the readable row saves the edit: {rows}"
+    );
 }

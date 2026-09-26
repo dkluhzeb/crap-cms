@@ -3,6 +3,8 @@
 
 mod array;
 mod blocks;
+mod junction_shape;
+mod locale_rows;
 mod orchestrator;
 mod parent_index;
 mod relationship;

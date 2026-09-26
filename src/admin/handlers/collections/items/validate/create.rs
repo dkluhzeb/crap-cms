@@ -38,7 +38,7 @@ pub async fn validate_create(
     // Collection-level access is enforced in the shared operation body —
     // same rule, same user as the real write.
 
-    let data = prepare_form_for_validation(&state, &def, auth_user.as_ref(), &payload, "create");
+    let data = prepare_form_for_validation(&def, &def.fields, &payload);
 
     let locale_ctx = match parse_request_locale(payload.locale.as_deref(), &state.config.locale) {
         Ok(ctx) => ctx,

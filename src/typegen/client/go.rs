@@ -278,8 +278,10 @@ fn emit_field(w: &mut CodeWriter, field: &Field, seen: &mut HashSet<String>) {
 /// de-collision.
 fn go_member(field: &Field) -> String {
     let base = match field.name.as_ref() {
-        // `_status` would PascalCase onto a `status` field's name.
+        // `_status` would PascalCase onto a `status` field's name, `_revision`
+        // onto a `revision` field's.
         "_status" => "DraftStatus".to_string(),
+        "_revision" => "DocumentRevision".to_string(),
         // Go spells the initialism in capitals, as a document's `ID` does.
         "id" => "ID".to_string(),
         name => to_pascal_case(name),
@@ -323,6 +325,7 @@ fn go_ty(ty: &FieldTy, optional: bool) -> (String, bool) {
         // A literal set stays a plain string: Go has no string-literal type.
         FieldTy::Str | FieldTy::Literal(_) => ptr_or_bare("string"),
         FieldTy::Num => ptr_or_bare("float64"),
+        FieldTy::Int => ptr_or_bare("int64"),
         FieldTy::Bool => ptr_or_bare("bool"),
         FieldTy::Json => ("interface{}".to_string(), true),
         FieldTy::Map => ("map[string]interface{}".to_string(), true),

@@ -10,7 +10,7 @@ use crate::{
     config::LocaleConfig,
     core::{
         Builder, CollectionDefinition, DocumentFields, FieldChildren, FieldDefinition, FieldType,
-        Registry, canonicalize_text_values, field_children, nest_group_fields,
+        REVISION_COLUMN, Registry, canonicalize_text_values, field_children, nest_group_fields,
     },
     db::{
         DbConnection, DbValue,
@@ -89,6 +89,22 @@ impl ImportRow<'_> {
     fn push(&mut self, col: String, value: DbValue) {
         self.parent_cols.push(col);
         self.parent_vals.push(value);
+    }
+
+    /// Carry the exported revision of a document the import creates. No form
+    /// can be open on a row that did not exist, so a new row takes the
+    /// revision it was exported at and a round trip reproduces it; an
+    /// overwritten row keeps its own and moves one forward instead.
+    pub(super) fn carry_revision(&mut self, doc_obj: &Map<String, Value>) {
+        let Some(revision) = doc_obj
+            .get(REVISION_COLUMN)
+            .and_then(Value::as_i64)
+            .filter(|revision| *revision >= 0)
+        else {
+            return;
+        };
+
+        self.push(REVISION_COLUMN.to_string(), DbValue::Integer(revision));
     }
 
     /// Push one field's column, or one column per locale when `localized`,

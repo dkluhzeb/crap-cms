@@ -22,6 +22,7 @@ use crate::{
         collection::{Auth, Surface},
         login_email_key,
         rate_limit::AttemptBudget,
+        spawn_request_blocking,
     },
     service::{
         AppInfra, ServiceError,
@@ -48,7 +49,7 @@ struct VerifyParams {
 async fn verify_credentials(
     params: VerifyParams,
 ) -> Result<Result<LoginOutcome, ServiceError>, task::JoinError> {
-    task::spawn_blocking(move || {
+    spawn_request_blocking(move || {
         verify_login(
             &params.infra,
             &LoginFlowRequest {

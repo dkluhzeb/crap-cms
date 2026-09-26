@@ -1,9 +1,11 @@
 //! Constraint changes on an existing collection table that ADD COLUMN cannot
 //! express, and the `SQLite` table rebuild that carries them out.
 //!
-//! Two exist: the `soft_delete` transition drops the inline `UNIQUE`
-//! constraints the partial unique indexes replace, and the one-time relax
-//! drops the `NOT NULL` older releases put on required user-field columns.
+//! Three exist: the `soft_delete` transition drops the inline `UNIQUE`
+//! constraints the partial unique indexes replace, the one-time pass drops the
+//! inline `UNIQUE` older releases put on unique fields (the managed unique
+//! indexes replace it), and the one-time relax drops the `NOT NULL` older
+//! releases put on required user-field columns.
 //! Postgres does both in place. `SQLite` can do neither, so the table is
 //! rebuilt from the current definition — which declares neither constraint —
 //! built under a temporary name, filled, then swapped in, in the one order
@@ -21,6 +23,7 @@ use crate::{
         DbConnection, DbValue,
         migrate::{
             helpers::{get_table_column_types, get_table_columns},
+            inline_unique::{inline_unique_to_drop, mark_dropped},
             nullable_columns::{columns_to_relax, drop_not_null, mark_relaxed},
         },
         query::helpers::quote_ident,
@@ -38,6 +41,9 @@ use super::{
 pub(in crate::db::migrate) struct PendingConstraints {
     /// The `soft_delete` transition: inline `UNIQUE` constraints to drop.
     drop_unique: bool,
+    /// Whether the table still carries an inline `UNIQUE` an older release
+    /// created — `None` once the one-time pass ran for this collection.
+    legacy_unique: Option<bool>,
     /// User-field columns still `NOT NULL` — `None` once the one-time relax ran
     /// for this collection.
     relax_not_null: Option<Vec<String>>,
@@ -58,13 +64,19 @@ impl PendingConstraints {
     ) -> Result<Self> {
         Ok(Self {
             drop_unique: soft_delete_transition_pending(def, existing, locale_config),
+            legacy_unique: inline_unique_to_drop(conn, slug)?,
             relax_not_null: columns_to_relax(conn, slug)?,
         })
     }
 
+    /// Whether the table's inline `UNIQUE` constraints are dropped.
+    fn drops_unique(&self) -> bool {
+        self.drop_unique || self.legacy_unique == Some(true)
+    }
+
     /// Whether carrying the changes out on `SQLite` rebuilds the table.
     pub(in crate::db::migrate) fn needs_rebuild(&self) -> bool {
-        self.drop_unique || self.relax_not_null.as_ref().is_some_and(|c| !c.is_empty())
+        self.drops_unique() || self.relax_not_null.as_ref().is_some_and(|c| !c.is_empty())
     }
 
     /// Carry the changes out on `slug`, then stamp the relax gate.
@@ -75,8 +87,8 @@ impl PendingConstraints {
         def: &CollectionDefinition,
         locale_config: &LocaleConfig,
     ) -> Result<()> {
-        if self.drop_unique {
-            info!("Removing inline UNIQUE constraints from '{slug}' (soft_delete transition)");
+        if self.drops_unique() {
+            info!("Removing inline UNIQUE constraints from '{slug}'");
         }
 
         if let Some(columns) = self.relax_not_null.as_ref().filter(|c| !c.is_empty()) {
@@ -92,6 +104,10 @@ impl PendingConstraints {
             rebuild_table(conn, slug, def, locale_config)?;
         }
 
+        if self.legacy_unique.is_some() {
+            mark_dropped(conn, slug)?;
+        }
+
         if self.relax_not_null.is_some() {
             mark_relaxed(conn, slug)?;
         }
@@ -102,7 +118,7 @@ impl PendingConstraints {
     /// Postgres: drop the constraints in place, leaving the table — and every
     /// foreign key pointing at it — alone.
     fn apply_in_place(&self, conn: &dyn DbConnection, slug: &str) -> Result<()> {
-        if self.drop_unique {
+        if self.drops_unique() {
             drop_unique_constraints(conn, slug)?;
         }
 
@@ -151,8 +167,8 @@ fn rebuild_table_name(slug: &str) -> String {
 /// `PRAGMA foreign_key_check` before committing.
 ///
 /// `create_collection_table` creates no indexes, so the temporary table carries
-/// none to collide with the managed `idx_{slug}_…` names; `sync_indexes` builds
-/// them on the renamed table afterwards. Every other index and trigger on the
+/// none to collide with the managed `idx_{slug}_…` names; the schema sync
+/// creates them on the renamed table afterwards. Every other index and trigger on the
 /// table — one a Lua migration or an operator created — goes with the dropped
 /// table, so it is recreated from its stored definition once the replacement
 /// is in place. The views and triggers elsewhere that depend on the table
@@ -242,7 +258,7 @@ fn refuse_cascading_rebuild(conn: &dyn DbConnection, slug: &str) -> Result<()> {
 
 /// The `CREATE` statements of the indexes and triggers on `slug` that the
 /// schema sync does not manage: everything but the `idx_{slug}_…` indexes
-/// `sync_indexes` rebuilds and the automatic indexes of inline constraints,
+/// the schema sync creates and the automatic indexes of inline constraints,
 /// which have no statement.
 fn unmanaged_schema_objects(conn: &dyn DbConnection, slug: &str) -> Result<Vec<String>> {
     let managed = index_prefix(slug);
@@ -323,7 +339,7 @@ mod tests {
     use crate::{
         core::{FieldDefinition, FieldType, Registry, VersionsConfig},
         db::{
-            DbValue,
+            DbPool, DbValue,
             migrate::{
                 collection::{sync_collection_table, test_helpers::*},
                 sync_all,
@@ -680,5 +696,76 @@ mod tests {
 
         sync_collection_table(&conn, "posts", &posts(true), &no_locale()).unwrap();
         assert_eq!(columns_to_relax(&conn, "posts").unwrap(), None);
+    }
+
+    /// A table an older release created for a collection whose `slug` was
+    /// unique: the field carries an inline `UNIQUE`.
+    fn legacy_unique_registry(unique: bool) -> Registry {
+        let mut registry = Registry::new();
+        registry.register_collection(simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(unique)
+                    .build(),
+            ],
+        ));
+
+        registry
+    }
+
+    fn legacy_unique_table(pool: &DbPool) {
+        pool.get()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE posts (id TEXT PRIMARY KEY, slug TEXT UNIQUE, \
+                 _ref_count INTEGER NOT NULL DEFAULT 0, created_at TEXT, updated_at TEXT); \
+                 INSERT INTO posts (id, slug) VALUES ('p1', 'hello');",
+            )
+            .unwrap();
+    }
+
+    /// Regression: the inline `UNIQUE` an older release put on a unique field
+    /// survived the upgrade, so removing `unique` from the field still failed
+    /// every duplicate write at the database. The sync drops it once and keeps
+    /// the rows.
+    #[test]
+    fn an_older_tables_inline_unique_is_dropped() {
+        let (_dir, pool) = in_memory_pool();
+        legacy_unique_table(&pool);
+
+        sync_all(&pool, &legacy_unique_registry(false), &no_locale()).expect("sync");
+
+        let conn = pool.get().unwrap();
+        conn.execute("INSERT INTO posts (id, slug) VALUES ('p2', 'hello')", &[])
+            .expect("a field without `unique` accepts a duplicate");
+        assert!(
+            conn.query_one("SELECT id FROM posts WHERE id = 'p1'", &[])
+                .unwrap()
+                .is_some(),
+            "the old row is kept"
+        );
+    }
+
+    /// A field still `unique` is enforced by its managed index once the inline
+    /// constraint is gone.
+    #[test]
+    fn a_unique_field_keeps_its_uniqueness_through_the_drop() {
+        let (_dir, pool) = in_memory_pool();
+        legacy_unique_table(&pool);
+
+        sync_all(&pool, &legacy_unique_registry(true), &no_locale()).expect("sync");
+
+        let conn = pool.get().unwrap();
+        conn.execute("INSERT INTO posts (id, slug) VALUES ('p2', 'hello')", &[])
+            .expect_err("the managed unique index rejects the duplicate");
+
+        let indexes = conn
+            .query_all(
+                "SELECT name FROM pragma_index_list('posts') WHERE origin = 'u'",
+                &[],
+            )
+            .unwrap();
+        assert!(indexes.is_empty(), "no inline UNIQUE is left");
     }
 }

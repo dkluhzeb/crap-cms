@@ -4,7 +4,9 @@
 //! holding anything but an object has nothing to be stored as. It used to be
 //! dropped without a word: `{ seo = crap.null }` read as "clear the group" to
 //! the caller and changed nothing. Refused instead, naming the group, on every
-//! write surface (they all admit their input through here).
+//! write surface (they all admit their input through here) — unless the
+//! field-level write strip removes the group, which then drops it silently like
+//! any other field its writer may not write.
 
 use serde_json::Value;
 
@@ -50,14 +52,14 @@ fn shape_error(field: &FieldDefinition, data_key: &str, value: &Value) -> Option
     Some(error.with_param("field", field.name.clone()))
 }
 
-/// Check the group values in `values` (a document's top level, or a group's
-/// object) against `fields`, descending into nested groups. `prefix` is the
-/// column prefix of the enclosing group (empty at the top level).
+/// Collect the group values in `values` (a document's top level, or a group's
+/// object) that are not objects, descending into nested groups. `path` is the
+/// key path of the enclosing group (empty at the top level).
 fn collect<'a>(
     values: impl IntoIterator<Item = (&'a String, &'a Value)>,
     fields: &[FieldDefinition],
-    prefix: &str,
-    errors: &mut Vec<FieldError>,
+    path: &[String],
+    found: &mut Vec<(Vec<String>, FieldError)>,
 ) {
     for (key, value) in values {
         let Some(field) = find_field(key, fields).filter(|f| f.field_type == FieldType::Group)
@@ -65,42 +67,84 @@ fn collect<'a>(
             continue;
         };
 
-        let data_key = prefixed_name(prefix, key);
+        let mut key_path = path.to_vec();
+        key_path.push(key.clone());
+
+        let data_key = key_path
+            .iter()
+            .fold(String::new(), |prefix, key| prefixed_name(&prefix, key));
 
         if let Some(error) = shape_error(field, &data_key, value) {
-            errors.push(error);
+            found.push((key_path, error));
             continue;
         }
 
         if let Some(object) = value.as_object() {
-            collect(object, &field.fields, &data_key, errors);
+            collect(object, &field.fields, &key_path, found);
         }
     }
 }
 
-/// Refuse a write whose `data` (canonical, groups nested) sets a group — at
-/// the top level or nested in another group — to `null` or to anything else
-/// that is not an object of its sub-fields.
+/// Whether `path` still leads to a value in `data`.
+fn holds_path(data: &DocumentFields, path: &[String]) -> bool {
+    let Some((first, rest)) = path.split_first() else {
+        return false;
+    };
+
+    let mut current = data.get(first);
+
+    for key in rest {
+        current = current.and_then(Value::as_object).and_then(|o| o.get(key));
+    }
+
+    current.is_some()
+}
+
+/// The groups a write's request (canonical, groups nested) sets — at the top
+/// level or nested in another group — to `null` or to anything else that is
+/// not an object of its sub-fields.
+///
+/// The refusal is held until the field-level write strip has run
+/// ([`Self::refuse_unstripped`]): a group the strip removes is one its writer
+/// may not write (or, on update, read), and it is dropped without a word like
+/// every other such field, never refused.
 ///
 /// Groups inside array and blocks rows are checked by row validation, where a
 /// `null` group is stored as the row's value.
-///
-/// # Errors
-///
-/// Returns a validation error naming each offending group.
-pub(crate) fn reject_non_object_groups(
-    data: &DocumentFields,
-    fields: &[FieldDefinition],
-) -> Result<(), ServiceError> {
-    let mut errors = Vec::new();
+#[derive(Debug, Default)]
+pub struct NonObjectGroups {
+    found: Vec<(Vec<String>, FieldError)>,
+}
 
-    collect(data, fields, "", &mut errors);
+impl NonObjectGroups {
+    /// The non-object groups of `data`.
+    pub(crate) fn of(data: &DocumentFields, fields: &[FieldDefinition]) -> Self {
+        let mut found = Vec::new();
 
-    if errors.is_empty() {
-        return Ok(());
+        collect(data, fields, &[], &mut found);
+
+        Self { found }
     }
 
-    Err(ServiceError::Validation(ValidationError::new(errors)))
+    /// Refuse the non-object groups the write strip left in `stripped`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error naming each such group.
+    pub(crate) fn refuse_unstripped(&self, stripped: &DocumentFields) -> Result<(), ServiceError> {
+        let errors: Vec<FieldError> = self
+            .found
+            .iter()
+            .filter(|(path, _)| holds_path(stripped, path))
+            .map(|(_, error)| error.clone())
+            .collect();
+
+        if errors.is_empty() {
+            return Ok(());
+        }
+
+        Err(ServiceError::Validation(ValidationError::new(errors)))
+    }
 }
 
 #[cfg(test)]
@@ -138,6 +182,14 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
+    }
+
+    /// Refuse the non-object groups of `data`, nothing stripped.
+    fn reject_non_object_groups(
+        data: &DocumentFields,
+        fields: &[FieldDefinition],
+    ) -> Result<(), ServiceError> {
+        NonObjectGroups::of(data, fields).refuse_unstripped(data)
     }
 
     fn error_fields(result: Result<(), ServiceError>) -> Vec<String> {
@@ -200,5 +252,28 @@ mod tests {
         }));
 
         assert!(reject_non_object_groups(&ok, &schema()).is_ok());
+    }
+
+    /// A group the write strip removed is dropped, not refused; one it left
+    /// is refused — at any depth.
+    #[test]
+    fn only_a_group_the_strip_left_is_refused() {
+        let request = data(&json!({ "seo": { "social": null }, "meta": null }));
+        let groups = || NonObjectGroups::of(&request, &schema());
+
+        let meta_stripped = data(&json!({ "seo": { "social": null } }));
+        assert_eq!(
+            error_fields(groups().refuse_unstripped(&meta_stripped)),
+            vec!["seo__social"]
+        );
+
+        let social_stripped = data(&json!({ "seo": {}, "meta": null }));
+        assert_eq!(
+            error_fields(groups().refuse_unstripped(&social_stripped)),
+            vec!["meta"]
+        );
+
+        let seo_and_meta_stripped = data(&json!({ "title": "T" }));
+        assert!(groups().refuse_unstripped(&seo_and_meta_stripped).is_ok());
     }
 }

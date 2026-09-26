@@ -76,6 +76,9 @@ feature must not make every later save of a document written with it fail. This 
 at every depth; inside array and blocks rows the value counts as held when any row of
 the same field holds it, so reordering rows keeps it. A value the document does not
 already hold is refused, so content the field no longer allows is never newly written.
+As for a removed select option, a value counts as held only where the writer may read
+it — its field's `access.read` / `hidden`, and the draft view for the pending draft (see
+[Removing an Option](select.md#removing-an-option)).
 A version restore brings back a snapshot's values, so one the live document no longer
 holds is judged like any other new value.
 

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::core::{DocumentFields, DocumentId, FieldDenial};
+use crate::core::{DocumentFields, DocumentId, FieldDenial, REVISION_COLUMN};
 use crate::typegen::lua::LuaAnnotation;
 
 /// A single content document with an ID, user-defined fields, and optional timestamps.
@@ -17,7 +17,10 @@ use crate::typegen::lua::LuaAnnotation;
 /// `--[[@as crap.doc.X]]` or index via `doc["field"]` if they need to
 /// reach a field outside the base shape.
 #[derive(Debug, Clone, Serialize, Deserialize, LuaAnnotation)]
-#[lua(class = "crap.Document")]
+#[lua(
+    class = "crap.Document",
+    extra_field = "_revision? integer  The document's revision, moved forward by every write. Send it back as the `expected_revision` update option to have the update refused when someone else wrote the document in between."
+)]
 pub struct Document {
     /// Unique document ID (nanoid).
     #[lua(ty = "string")]
@@ -63,6 +66,14 @@ impl Document {
     #[must_use]
     pub fn get_str(&self, key: &str) -> Option<&str> {
         self.fields.get_str(key)
+    }
+
+    /// The document's revision (the `_revision` system key a read carries):
+    /// what a write sends back as its `expected_revision`. `None` for a
+    /// document that was not read from its row.
+    #[must_use]
+    pub fn revision(&self) -> Option<i64> {
+        self.fields.get(REVISION_COLUMN).and_then(Value::as_i64)
     }
 
     /// Strip denied fields, handling flat keys, `__`-separated group subfields

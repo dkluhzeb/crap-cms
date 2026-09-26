@@ -210,6 +210,7 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`document_title`** (string)
 - **`ref_count`** (integer)
 - **`upload`** ([UploadFormContext](#uploadformcontext) \| null) _(optional)_ — Upload preview block — present only on upload collections.
+- **`revision`** (Option&lt;integer&gt;) _(optional)_ — The document revision the form was loaded at — submitted back as the save's precondition (`_revision`), so a save over someone else's newer change is refused instead of silently overwriting it.
 
 ## Collection create form
 
@@ -260,6 +261,8 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`has_drafts`** (boolean)
 - **`unsaved`** (boolean) — Always `true`: the form re-renders a submission that was not saved, so the unsaved-changes guard starts out armed.
 - **`upload_hidden_fields`** (Option&lt;Vec&lt;any&gt;&gt;) _(optional)_ — Hidden upload inputs preserved from the submitted form — the focal point the edit page renders inside its file-preview block, which this slim context does not carry. Without them a failed save resets the focal point the user just moved.
+- **`revision`** (Option&lt;integer&gt;) _(optional)_ — The revision the re-rendered form submits back (`_revision`): the one it was loaded at — or, after a revision conflict, the document's current one, so saving again overwrites on purpose.
+- **`revision_conflict`** ([RevisionConflictNotice](#revisionconflictnotice) \| null) _(optional)_ — Present when the save was refused because the document was saved by someone else after the form was loaded.
 
 ## Collection delete confirmation
 
@@ -356,6 +359,7 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`restore_url_prefix`** (string)
 - **`versions_url`** (string)
 - **`doc_status`** (string)
+- **`revision`** (Option&lt;integer&gt;) _(optional)_ — The global's revision the form was loaded at — submitted back as the save's precondition (`_revision`), so a save over someone else's newer change is refused instead of silently overwriting it.
 
 ## Global form-error re-render
 
@@ -378,6 +382,8 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
 - **`sidebar_fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
 - **`unsaved`** (boolean) — Always `true`: the form re-renders a submission that was not saved, so the unsaved-changes guard starts out armed.
+- **`revision`** (Option&lt;integer&gt;) _(optional)_ — The revision the re-rendered form submits back (`_revision`): the one it was loaded at — or, after a revision conflict, the global's current one, so saving again overwrites on purpose.
+- **`revision_conflict`** ([RevisionConflictNotice](#revisionconflictnotice) \| null) _(optional)_ — Present when the save was refused because the global was saved by someone else after the form was loaded.
 
 ## Global versions list
 

@@ -2,7 +2,7 @@
 
 use anyhow::{Result, anyhow, bail};
 
-use super::field_types::{CONTAINER_TYPES, VALID_FIELD_TYPES};
+use super::field_types::{CONTAINER_TYPES, VALID_FIELD_TYPES, holds_value};
 use super::stubs::{BlockStub, FieldStub, TabStub};
 
 /// Escape a string for safe embedding in a Lua double-quoted string literal.
@@ -164,6 +164,8 @@ fn parse_field_token(token: &str) -> Result<FieldStub> {
     validate_field_type(&field_type)?;
 
     let (required, localized) = parse_modifiers(&segments[2..], &name)?;
+    deny_modifiers_without_value(&field_type, &name, required || localized)?;
+
     let (fields, blocks, tabs) = parse_subfield_content(&field_type, subfield_content)?;
 
     Ok(FieldStub::builder(name, field_type)
@@ -231,6 +233,19 @@ fn parse_modifiers(segments: &[&str], name: &str) -> Result<(bool, bool)> {
     }
 
     Ok((required, localized))
+}
+
+/// Refuse `required` / `localized` on a field that holds no value — the
+/// generated definition would fail to load.
+fn deny_modifiers_without_value(field_type: &str, name: &str, flagged: bool) -> Result<()> {
+    if !flagged || holds_value(field_type) {
+        return Ok(());
+    }
+
+    bail!(
+        "Field '{name}': a {field_type} field holds no value of its own, so 'required' and \
+         'localized' do not apply to it"
+    )
 }
 
 /// Parse subfield content based on the field type.
@@ -424,6 +439,26 @@ mod tests {
         assert_eq!(fields[1].name, "body");
         assert_eq!(fields[1].field_type, "textarea");
         assert_eq!(fields[2].name, "published");
+    }
+
+    #[test]
+    fn required_or_localized_on_a_valueless_field_is_refused() {
+        for token in [
+            "authored:join:required",
+            "authored:join:localized",
+            "layout:row(a:text):required",
+            "panel:collapsible(a:text):localized",
+        ] {
+            let Err(err) = parse_fields_shorthand(token) else {
+                panic!("{token} was accepted");
+            };
+            let err = err.to_string();
+
+            assert!(err.contains("holds no value"), "{token}: {err}");
+        }
+
+        parse_fields_shorthand("authored:join,layout:row(a:text:required)")
+            .expect("unflagged join and wrapper, flagged child");
     }
 
     #[test]

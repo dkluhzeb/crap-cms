@@ -6,10 +6,14 @@ use tracing::info;
 use crate::config::LocaleConfig;
 use crate::core::{FieldDefinition, field::flatten_array_sub_fields};
 use crate::db::DbConnection;
-use crate::db::migrate::helpers::add_column_if_missing;
-use crate::db::migrate::helpers::column_specs::{ensure_locale_column, locale_column_definition};
-use crate::db::migrate::helpers::introspection::{get_table_columns, table_exists};
+use crate::db::migrate::helpers::column_specs::{
+    ensure_locale_column, field_ddl_type, locale_column_definition,
+};
+use crate::db::migrate::helpers::introspection::{
+    get_table_column_types, get_table_columns, table_exists,
+};
 use crate::db::migrate::helpers::join_tables::parent_index::sync_row_parent_index;
+use crate::db::migrate::helpers::{add_column_if_missing, reconcile_scalar_list_column};
 use crate::db::query::helpers::{join_table, quote_ident};
 
 /// Sync an array join table (create or alter).
@@ -70,7 +74,7 @@ fn create_array_table(
         columns.push(format!(
             "{} {}",
             quote_ident(&sub_field.name),
-            conn.column_type_for(&sub_field.field_type)
+            field_ddl_type(conn, sub_field)
         ));
 
         for companion in sub_field.companion_columns(&sub_field.name) {
@@ -87,19 +91,26 @@ fn create_array_table(
     Ok(())
 }
 
-/// Add missing sub-field columns to an existing array table.
+/// Add missing sub-field columns to an existing array table, and bring a
+/// scalar has-many sub-field's column an older release typed numeric to the
+/// `TEXT` its JSON list needs.
 fn alter_array_table(
     conn: &dyn DbConnection,
     table_name: &str,
     flat_subs: &[&FieldDefinition],
 ) -> Result<()> {
     let existing = get_table_columns(conn, table_name)?;
+    let column_types = get_table_column_types(conn, table_name)?;
 
     for sub_field in flat_subs {
+        if existing.contains(&sub_field.name) && sub_field.is_has_many_scalar() {
+            reconcile_scalar_list_column(conn, table_name, &sub_field.name, &column_types)?;
+        }
+
         let col_def = format!(
             "{} {}",
             quote_ident(&sub_field.name),
-            conn.column_type_for(&sub_field.field_type)
+            field_ddl_type(conn, sub_field)
         );
         add_column_if_missing(conn, table_name, &sub_field.name, &col_def, &existing)?;
 
@@ -118,6 +129,9 @@ mod tests {
     use crate::core::{FieldAdmin, FieldTab, FieldType};
     use crate::db::migrate::collection::{create_collection_table, test_helpers::*};
     use crate::db::migrate::helpers::join_tables::sync_join_tables;
+    use crate::db::query::{find_array_rows, set_array_rows};
+    use serde_json::{Value, json};
+    use std::collections::HashMap;
 
     #[test]
     fn array_field_creates_join_table() {
@@ -532,6 +546,115 @@ mod tests {
         assert!(
             cols.contains("_locale"),
             "Array inside localized Group should inherit _locale column"
+        );
+    }
+
+    /// An `items` array whose row holds a number, a text and a select list.
+    fn scalar_list_array() -> FieldDefinition {
+        let list =
+            |name: &str, ft: FieldType| FieldDefinition::builder(name, ft).has_many(true).build();
+
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                list("scores", FieldType::Number),
+                list("tags", FieldType::Text),
+                list("kinds", FieldType::Select),
+            ])
+            .build()
+    }
+
+    fn row(values: Value) -> HashMap<String, Value> {
+        let Value::Object(map) = values else {
+            panic!("a row is an object");
+        };
+
+        map.into_iter().collect()
+    }
+
+    /// Regression: a has-many number inside an array row got the numeric
+    /// column type of a single number, while the row writer stores the list
+    /// as JSON text — every write of such a row failed on Postgres. Every
+    /// scalar has-many sub-field column is `TEXT`, and a row's lists survive a
+    /// create, an update and a read.
+    #[test]
+    fn scalar_list_sub_fields_are_text_columns_and_round_trip() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let items = scalar_list_array();
+        let def = simple_collection("posts", vec![items.clone()]);
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
+        conn.execute("INSERT INTO posts (id) VALUES ('p1')", &[])
+            .unwrap();
+
+        let types = get_table_column_types(&conn, "posts_items").unwrap();
+        for col in ["scores", "tags", "kinds"] {
+            assert!(
+                types[col].eq_ignore_ascii_case("TEXT"),
+                "{col}: {}",
+                types[col]
+            );
+        }
+
+        let created = row(json!({ "scores": [1, 2.5], "tags": ["a", "b"], "kinds": ["x"] }));
+        set_array_rows(
+            &conn,
+            "posts",
+            "items",
+            "p1",
+            &[created],
+            &items.fields,
+            None,
+        )
+        .unwrap();
+
+        let found = find_array_rows(&conn, "posts", "items", "p1", &items.fields, None).unwrap();
+        assert_eq!(found[0]["scores"], json!([1, 2.5]));
+        assert_eq!(found[0]["tags"], json!(["a", "b"]));
+        assert_eq!(found[0]["kinds"], json!(["x"]));
+
+        let id = found[0]["id"].clone();
+        let updated = row(json!({ "id": id, "scores": [3], "tags": [], "kinds": ["y", "z"] }));
+        set_array_rows(
+            &conn,
+            "posts",
+            "items",
+            "p1",
+            &[updated],
+            &items.fields,
+            None,
+        )
+        .unwrap();
+
+        let found = find_array_rows(&conn, "posts", "items", "p1", &items.fields, None).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0]["scores"], json!([3]));
+        assert_eq!(found[0]["tags"], json!([]));
+        assert_eq!(found[0]["kinds"], json!(["y", "z"]));
+    }
+
+    /// A column added to an existing array table for a scalar has-many
+    /// sub-field is `TEXT` too.
+    #[test]
+    fn existing_array_adds_scalar_list_columns_as_text() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", &[])
+            .unwrap();
+        conn.execute(
+            "CREATE TABLE posts_items (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER)",
+            &[],
+        )
+        .unwrap();
+
+        let def = simple_collection("posts", vec![scalar_list_array()]);
+        sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
+
+        let types = get_table_column_types(&conn, "posts_items").unwrap();
+        assert!(
+            types["scores"].eq_ignore_ascii_case("TEXT"),
+            "{}",
+            types["scores"]
         );
     }
 }

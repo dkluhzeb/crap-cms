@@ -89,7 +89,13 @@ pub trait LuaFieldBlock {
 /// the common fields plus one `--- @class crap.XField : crap.BaseField`
 /// per discriminator variant, where each subclass carries only the
 /// fields whose `#[lua(applies_to = "...")]` includes that variant's
-/// slug.
+/// slug. With a container `layout_base`, the common fields marked
+/// `#[lua(layout)]` go on that class instead (the base extends it), and the
+/// variants named in `layout_views` extend it rather than the base — the
+/// layout wrappers, which accept no value key. A container `virtual_base` adds
+/// the tier between them: the fields marked `#[lua(virtual_field)]` go on it,
+/// and the variants in `virtual_views` (a join, which stores no value) extend
+/// it.
 pub trait LuaFieldTypeViews {
     /// Append the `BaseField` block + every per-variant subclass block
     /// to `out`. One call emits the entire field-type-view section.

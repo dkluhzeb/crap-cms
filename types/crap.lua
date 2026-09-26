@@ -179,26 +179,32 @@ crap = {}
 --- @field singular? crap.LocalizedString Custom singular label for row items (e.g., "Slide" → "Add Slide" button, untitled rows "Slide 1").
 --- @field plural? crap.LocalizedString Custom plural label: the field header when `admin.label` is not set.
 
+--- The keys every field accepts — and all a layout wrapper (row / collapsible / tabs) accepts besides its `fields` / `tabs`: a wrapper holds no value, so every value key (`access`, `hidden`, `required`, …) is a load error on it.
+--- @class crap.LayoutField
+--- @field name string Column name (required).
+--- @field admin? crap.FieldAdmin Admin UI display options.
+
+--- The keys a field with no stored value (a join) accepts besides its own config: its reads can be hidden, access-checked and shaped, but nothing validates, defaults, indexes, localizes or writes it, so every other value key (`required`, `unique`, `default_value`, …) is a load error on it.
+--- @class crap.VirtualField : crap.LayoutField
+--- @field hooks? crap.FieldHooks Per-field lifecycle hooks. A join accepts only `after_read`: no write ever carries it.
+--- @field access? crap.FieldAccess Field-level access control (read/create/update). A join accepts only `read`: no write ever carries it.
+--- @field hidden? boolean Strip from all read responses (gRPC/Lua/MCP/admin/REST) and skip in the admin form. For admin-form-only hiding (value still returned in API), use `admin.hidden` instead. Default: false.
+
 --- Complete definition of a single field within a collection.
 --- Use the per-type factory classes (`crap.fields.text(...)`,
 --- `crap.fields.select(...)`, etc.) for precise per-type
 --- autocompletion; this catch-all class lists every option the system
 --- understands.
---- @class crap.BaseField
---- @field name string Column name (required).
+--- @class crap.BaseField : crap.VirtualField
 --- @field required? boolean Validation: must have a value (default: false).
 --- @field required_when? string | crap.HookRef Conditional requirement: a Lua predicate ref (`"module.fn"`). When set, the field is required whenever the predicate returns truthy for the document being validated — in addition to a static `required = true`. The predicate receives the validate context (`ctx.data` = the full document), so it can require this field based on other fields' values.
 --- @field unique? boolean Unique constraint (default: false).
 --- @field index? boolean Create a B-tree index on this column (default: false). Skipped when unique=true.
 --- @field validate? string | crap.HookRef Lua function ref called as `crap.ValidateFunction`.
 --- @field default_value? any Default value on create.
---- @field admin? crap.FieldAdmin Admin UI display options.
---- @field hooks? crap.FieldHooks Per-field lifecycle hooks.
---- @field access? crap.FieldAccess Field-level access control (read/create/update).
 --- @field mcp? crap.McpFieldConfig MCP tool schema options.
 --- @field localized? boolean Per-locale values (default: false).
 --- @field required_locales? "all" | string[] Which locales a `required` localized field must be filled in (the completeness rule). `"all"` = every configured locale; a list names specific locales. Unset → the collection default, else the default locale only. Only meaningful when both `required` and `localized`.
---- @field hidden? boolean Strip from all read responses (gRPC/Lua/MCP/admin/REST) and skip in the admin form. For admin-form-only hiding (value still returned in API), use `admin.hidden` instead. Default: false.
 
 --- @class crap.TextField : crap.BaseField
 --- @field min_length? integer Minimum string length in characters, validated server-side.
@@ -256,18 +262,18 @@ crap = {}
 --- @field min_rows? integer Minimum rows. Validated on create/update.
 --- @field max_rows? integer Maximum rows. Admin disables "Add" at max.
 
---- @class crap.RowField : crap.BaseField
+--- @class crap.RowField : crap.LayoutField
 --- @field fields? crap.FieldDefinition[] Sub-field definitions (required). For row/collapsible: promoted to parent level (no prefix).
 
---- @class crap.CollapsibleField : crap.BaseField
+--- @class crap.CollapsibleField : crap.LayoutField
 --- @field fields? crap.FieldDefinition[] Sub-field definitions (required). For row/collapsible: promoted to parent level (no prefix).
 
---- @class crap.TabsField : crap.BaseField
+--- @class crap.TabsField : crap.LayoutField
 --- @field tabs? crap.FieldTab[] Tab definitions (required). Each tab has a label and fields.
 
 --- @class crap.CodeField : crap.BaseField
 
---- @class crap.JoinField : crap.BaseField
+--- @class crap.JoinField : crap.VirtualField
 --- @field collection string Target collection slug (required).
 --- @field on string Field on target collection that references this document (required).
 --- @field limit? integer Most documents the join lists per document (default 10, or `[pagination] max_limit` when lower; at least 1, at most `[pagination] max_limit`).
@@ -287,8 +293,8 @@ crap = {}
 --- @field default_value? any Default value on create.
 --- @field options? crap.SelectOption[] Option list (required).
 --- @field admin? crap.FieldAdmin Admin UI display options.
---- @field hooks? crap.FieldHooks Per-field lifecycle hooks.
---- @field access? crap.FieldAccess Field-level access control (read/create/update).
+--- @field hooks? crap.FieldHooks Per-field lifecycle hooks. A join accepts only `after_read`: no write ever carries it.
+--- @field access? crap.FieldAccess Field-level access control (read/create/update). A join accepts only `read`: no write ever carries it.
 --- @field mcp? crap.McpFieldConfig MCP tool schema options.
 --- @field relationship? crap.RelationshipConfig Target collection and cardinality.
 --- @field fields? crap.FieldDefinition[] Sub-field definitions (required). For row/collapsible: promoted to parent level (no prefix).
@@ -766,6 +772,7 @@ function crap.fields.join(config) end
 --- @field id string Unique document ID (nanoid).
 --- @field created_at? string ISO 8601 timestamp (if `timestamps` enabled on the collection).
 --- @field updated_at? string ISO 8601 timestamp (if `timestamps` enabled on the collection).
+--- @field _revision? integer  The document's revision, moved forward by every write. Send it back as the `expected_revision` update option to have the update refused when someone else wrote the document in between.
 
 --- @alias crap.FilterScalar boolean | integer | number | string
 
@@ -1054,6 +1061,7 @@ function crap.collections.create(collection, data, opts) end
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass hooks.
 --- @field unpublish? boolean When `true`, sets `_status` to `"draft"` (unpublishes). Data is not modified. Requires `versions` with drafts on the collection — errors otherwise.
 --- @field events? boolean Emit a live-update event for the updated document (default: `true`). Set `false` for a quiet write.
+--- @field expected_revision? integer The document revision this write is based on — the `_revision` of the read it edits. Set, the write fails with a revision conflict when anyone has written the document since; nil writes unconditionally.
 
 --- Update an existing document.
 --- Inside hooks, runs within the parent operation's transaction.
@@ -1084,6 +1092,7 @@ function crap.collections.delete(collection, id, opts) end
 --- @field override_access? boolean Skip access control checks (default: `false`).
 --- @field hooks? boolean Run lifecycle hooks (default: `true`).
 --- @field events? boolean Emit a live-update event for this change (default: `true`). Parity with `crap.collections.update{ unpublish = true, events = ... }`.
+--- @field expected_revision? integer The document revision this write is based on — the `_revision` of the read it edits. Set, the write fails with a revision conflict when anyone has written the document since; nil writes unconditionally.
 
 --- Unpublish a document — sets `_status` to `"draft"` without modifying
 --- the underlying field data. Only available on collections with
@@ -1345,12 +1354,14 @@ function crap.globals.config.list() end
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set false to bypass hooks (e.g., for seeding/migrations).
 --- @field draft? boolean When `true` and the global has `versions.drafts`, performs a version-only save (main row unchanged, only a draft version snapshot is created). Matches `crap.collections.update`'s `draft`.
 --- @field events? boolean Emit a live-update event for the updated global (default: `true`). Set `false` for a quiet write.
+--- @field expected_revision? integer The global's revision this write is based on — the `_revision` of the read it edits. Set, the write fails with a revision conflict when anyone has written the global since; nil writes unconditionally.
 
 --- Optional options for `crap.globals.unpublish`.
 --- @class crap.GlobalUnpublishOptions
 --- @field override_access? boolean Skip access control checks (default: `false`).
 --- @field hooks? boolean Run lifecycle hooks (default: `true`).
 --- @field events? boolean Emit a live-update event for this change (default: `true`). Parity with `crap.collections.unpublish` and `crap.globals.update`.
+--- @field expected_revision? integer The global's revision this write is based on — the `_revision` of the read it edits. Set, the write fails with a revision conflict when anyone has written the global since; nil writes unconditionally.
 
 --- Optional options for `crap.globals.validate`. Globals are a singleton
 --- row, so there is no `id` to exclude — validation always runs in update

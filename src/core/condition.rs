@@ -25,6 +25,8 @@
 //! `false` is a documented no-op (legacy behavior — kept for
 //! grep-equivalence with the JS evaluator).
 
+use std::cmp::Ordering;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -88,18 +90,53 @@ impl ConditionRow {
             return true;
         }
 
-        let field_val = data.get(&self.field).unwrap_or(&Value::Null);
+        let field_val = field_value(data, &self.field);
 
         match &self.op {
-            ConditionOp::Equals(v) => field_val == v,
-            ConditionOp::NotEquals(v) => field_val != v,
-            ConditionOp::In(list) => list.contains(field_val),
-            ConditionOp::NotIn(list) => !list.contains(field_val),
+            ConditionOp::Equals(v) => same_value(field_val, v),
+            ConditionOp::NotEquals(v) => !same_value(field_val, v),
+            ConditionOp::In(list) => list.iter().any(|v| same_value(field_val, v)),
+            ConditionOp::NotIn(list) => !list.iter().any(|v| same_value(field_val, v)),
             ConditionOp::IsTruthy(true) => value_truthy(field_val),
             ConditionOp::IsFalsy(true) => !value_truthy(field_val),
             ConditionOp::IsTruthy(false) | ConditionOp::IsFalsy(false) => true,
         }
     }
+}
+
+/// Structural equality of two JSON values with every number compared by its
+/// value — `5` and `5.0` are one number, as they are to the browser
+/// evaluator's `sameValue`. A whole number is stored as an integer, while a
+/// condition written as `equals = 5.0` arrives as a float.
+fn same_value(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => {
+            x.as_f64().partial_cmp(&y.as_f64()) == Some(Ordering::Equal)
+        }
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same_value(x, y))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(key, v)| y.get(key).is_some_and(|w| same_value(v, w)))
+        }
+        _ => a == b,
+    }
+}
+
+/// The value a condition row's `field` names in the condition data: a
+/// top-level field by its name, a field inside a group by its dotted
+/// (`seo.title`) or form-name (`seo__title`) path. A missing value is `null`.
+///
+/// The browser evaluator (`static/components/conditions.js`, `fieldValue`)
+/// resolves a path the same way.
+fn field_value<'a>(data: &'a Value, field: &str) -> &'a Value {
+    field
+        .split('.')
+        .flat_map(|segment| segment.split("__"))
+        .try_fold(data, |level, key| level.get(key))
+        .unwrap_or(&Value::Null)
 }
 
 #[cfg(test)]
@@ -131,11 +168,44 @@ mod tests {
         serde_json::to_value(&expr).expect("re-encode")
     }
 
+    /// Regression: a condition on a group sub-field looked up the literal key
+    /// `seo__title`, which the nested condition data never has, so the field
+    /// hid on every server render while the browser (keyed by input name)
+    /// showed it.
+    #[test]
+    fn a_group_sub_field_resolves_by_dotted_and_form_path() {
+        let data = json!({ "seo": { "title": "Hi" } });
+
+        for field in ["seo.title", "seo__title"] {
+            let expr = parse(json!({ "field": field, "equals": "Hi" }));
+            assert!(expr.evaluate(&data), "{field}");
+        }
+
+        let missing = parse(json!({ "field": "seo.missing", "is_falsy": true }));
+        assert!(missing.evaluate(&data));
+    }
+
     #[test]
     fn equals_evaluates() {
         let expr = parse(json!({ "field": "status", "equals": "published" }));
         assert!(expr.evaluate(&json!({ "status": "published" })));
         assert!(!expr.evaluate(&json!({ "status": "draft" })));
+    }
+
+    /// Regression: a whole number is stored as an integer, and a condition
+    /// written as `equals = 5.0` arrives as a float; the server compared the
+    /// two as different values while the browser saw one number.
+    #[test]
+    fn numbers_compare_by_value_at_every_depth() {
+        let data = json!({ "seats": 5, "sizes": [1, 2] });
+
+        assert!(parse(json!({ "field": "seats", "equals": 5.0 })).evaluate(&data));
+        assert!(!parse(json!({ "field": "seats", "not_equals": 5.0 })).evaluate(&data));
+        assert!(parse(json!({ "field": "seats", "in": [4.0, 5.0] })).evaluate(&data));
+        assert!(!parse(json!({ "field": "seats", "not_in": [5.0] })).evaluate(&data));
+        assert!(parse(json!({ "field": "sizes", "equals": [1.0, 2.0] })).evaluate(&data));
+        assert!(!parse(json!({ "field": "sizes", "equals": [1.0] })).evaluate(&data));
+        assert!(!parse(json!({ "field": "seats", "equals": "5" })).evaluate(&data));
     }
 
     #[test]

@@ -9,9 +9,10 @@
 //! documents the editor can open.
 //!
 //! One deliberate step beyond the editor: an attribute its node or mark does
-//! not declare is refused, where the editor silently drops it on load (and the
-//! admin submits the document as loaded, so a stale attribute never blocks an
-//! admin save).
+//! not declare is refused, where the editor silently drops it on load. A stale
+//! attribute never blocks a save: an untouched admin field submits the value
+//! as stored, which validation accepts as held, and an edit serializes the
+//! document as loaded, without it.
 
 use std::{borrow::Cow, collections::HashMap, fmt};
 

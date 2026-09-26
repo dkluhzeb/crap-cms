@@ -523,6 +523,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 _status TEXT DEFAULT 'published',
                 created_at TEXT,
@@ -672,7 +673,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE posts (
-                id TEXT PRIMARY KEY, title TEXT, author TEXT,
+                id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT, author TEXT,
                 _status TEXT DEFAULT 'published', created_at TEXT, updated_at TEXT
             );
             CREATE TABLE _versions_posts (
@@ -730,6 +731,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 _status TEXT DEFAULT 'published',
                 _deleted_at TEXT,
@@ -808,7 +810,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE posts (
-                id TEXT PRIMARY KEY, title TEXT,
+                id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT,
                 _status TEXT DEFAULT 'published', _deleted_at TEXT,
                 created_at TEXT, updated_at TEXT
             );
@@ -872,7 +874,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE posts (
-                id TEXT PRIMARY KEY, title TEXT,
+                id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT,
                 _status TEXT DEFAULT 'published', _deleted_at TEXT,
                 created_at TEXT, updated_at TEXT
             );

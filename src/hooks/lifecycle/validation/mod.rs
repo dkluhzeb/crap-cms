@@ -13,7 +13,7 @@ mod sub_fields;
 
 pub use checks::is_valid_email_format;
 pub(in crate::hooks::lifecycle::validation) use completeness::check_localized_completeness;
-pub use context::ValidationCtx;
+pub use context::{HeldSource, HeldValueGate, ValidationCtx};
 pub(in crate::hooks::lifecycle::validation) use runner::is_empty_value;
 #[cfg(test)]
 pub(in crate::hooks::lifecycle::validation) use runner::validate_fields_inner;

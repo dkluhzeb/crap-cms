@@ -29,12 +29,15 @@ pub struct DatabaseConfig {
     pub path: String,
     /// Maximum number of connections in the **read** pool. Default: 64.
     ///
-    /// Reads and writes draw from separate pools (see `write_pool_max_size`).
-    /// Under `SQLite` WAL an unlimited number of readers run concurrently, so
-    /// this is the pool that governs read concurrency; size it to the peak
-    /// number of simultaneous read requests you want to serve without
-    /// queueing. (Historically this sized the single shared pool; it now
-    /// sizes the read pool, which is where read concurrency is decided.)
+    /// On `SQLite`, reads and writes draw from separate pools (see
+    /// `write_pool_max_size`). Under WAL an unlimited number of readers run
+    /// concurrently, so this is the pool that governs read concurrency; size
+    /// it to the peak number of simultaneous read requests you want to serve
+    /// without queueing.
+    ///
+    /// On Postgres there is one pool for reads and writes together, and this
+    /// sizes it: count your concurrent reads and writes, and stay under the
+    /// server's `max_connections` across every node.
     pub pool_max_size: u32,
     /// Maximum number of connections in the **write** pool. Default: 4.
     ///
@@ -43,8 +46,10 @@ pub struct DatabaseConfig {
     /// on pool checkout rather than consuming read-pool connections and
     /// starving readers. Raising this does not increase `SQLite` write
     /// throughput (the engine still serializes writers); it only widens how
-    /// many writers wait on a connection vs. on the write lock. On Postgres,
-    /// where writers run concurrently, raise it to your write concurrency.
+    /// many writers wait on a connection vs. on the write lock.
+    ///
+    /// `SQLite` only — ignored on Postgres, whose single pool (sized by
+    /// `pool_max_size`) serves reads and writes together.
     #[serde(default = "default_write_pool_max_size")]
     pub write_pool_max_size: u32,
     /// `SQLite` busy timeout in milliseconds. Default: 30000 (30s).

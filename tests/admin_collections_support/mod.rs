@@ -61,7 +61,7 @@ pub fn make_users_def() -> CollectionDefinition {
 }
 
 pub struct TestApp {
-    pub _tmp: tempfile::TempDir,
+    pub tmp: tempfile::TempDir,
     pub router: axum::Router,
     pub pool: crap_cms::db::DbPool,
     pub registry: Arc<Registry>,
@@ -175,7 +175,7 @@ pub fn setup_app_with_config(
     let router = build_router(state);
 
     TestApp {
-        _tmp: tmp,
+        tmp,
         router,
         pool: db_pool,
         registry,

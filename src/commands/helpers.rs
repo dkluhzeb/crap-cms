@@ -8,7 +8,6 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-#[cfg(unix)]
 use std::{
     thread::sleep,
     time::{Duration, Instant},
@@ -529,11 +528,24 @@ pub fn hold_instance_lock(config_dir: &Path) -> Result<InstanceLock> {
     }
 }
 
+/// How long a destructive command waits for a holder of the instance lock
+/// that is letting go before refusing.
+const EXCLUSIVE_LOCK_WAIT: Duration = Duration::from_secs(1);
+
+/// How often it tries again meanwhile.
+const EXCLUSIVE_LOCK_RETRY: Duration = Duration::from_millis(25);
+
 /// Take the instance lock exclusively for a destructive database command,
 /// refusing while any other crap-cms process — `serve`, `work`, stdio `mcp` or a
 /// CLI command — uses the project: replacing the database under an open pool
 /// leaves that process writing to the old file. Keep the returned lock for the
 /// whole command, so none of them can start meanwhile.
+///
+/// A holder about to let go is waited for, up to [`EXCLUSIVE_LOCK_WAIT`]: a
+/// process forked while the lock file was open (a child a thread just
+/// spawned) holds a copy of the lock until it execs, and a command finishing
+/// holds it until it exits. A process that keeps the project open is still
+/// refused, once the wait is over.
 ///
 /// # Errors
 ///
@@ -541,23 +553,39 @@ pub fn hold_instance_lock(config_dir: &Path) -> Result<InstanceLock> {
 /// file can't be opened or locked.
 pub fn hold_exclusive_instance_lock(config_dir: &Path, command: &str) -> Result<InstanceLock> {
     let file = open_instance_lock(config_dir, true)?;
+    let deadline = Instant::now() + EXCLUSIVE_LOCK_WAIT;
 
-    match file.try_lock() {
-        Ok(()) => Ok(InstanceLock { _file: file }),
-        Err(TryLockError::WouldBlock) => bail!(
-            "`{command}` refused: another crap-cms process (a server, worker, MCP process or CLI \
-             command) is using this project. Stop it first — an open pool would keep writing to \
-             the old database file."
-        ),
-        Err(TryLockError::Error(e)) => Err(e).context("Failed to take the instance lock"),
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(InstanceLock { _file: file }),
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                sleep(EXCLUSIVE_LOCK_RETRY);
+            }
+            Err(TryLockError::WouldBlock) => bail!(
+                "`{command}` refused: another crap-cms process (a server, worker, MCP process or \
+                 CLI command) is using this project. Stop it first — an open pool would keep \
+                 writing to the old database file."
+            ),
+            Err(TryLockError::Error(e)) => {
+                return Err(e).context("Failed to take the instance lock");
+            }
+        }
     }
 }
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt as _;
-    #[cfg(unix)]
     use std::sync::atomic::{AtomicU32, Ordering};
+    #[cfg(unix)]
+    use std::{
+        io::Read as _,
+        os::{
+            fd::AsRawFd as _,
+            unix::{fs::PermissionsExt as _, process::CommandExt as _},
+        },
+        process::Command,
+        thread,
+    };
 
     #[cfg(unix)]
     use crate::config::JOB_DRAIN_GRACE_SECS;
@@ -704,6 +732,45 @@ mod tests {
         drop(restoring);
 
         assert!(hold_instance_lock(tmp.path()).is_ok());
+    }
+
+    /// Regression: a process forked while the lock file is open holds a copy
+    /// of the lock until it execs, so a destructive command started just as
+    /// another thread spawned a child (`tar`, a hook's subprocess) was refused
+    /// although nothing kept the project open. The exclusive lock waits a
+    /// moment for such a holder to let go.
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_copy_a_child_is_about_to_close_does_not_refuse_a_restore() {
+        let tmp = tempfile::tempdir().unwrap();
+        let serving = hold_instance_lock(tmp.path()).unwrap();
+
+        let (mut forked, signal) = io::pipe().unwrap();
+        let signal_fd = signal.as_raw_fd();
+        let spawner = thread::spawn(move || {
+            let mut command = Command::new("true");
+
+            // SAFETY: only async-signal-safe calls between fork and exec.
+            unsafe {
+                command.pre_exec(move || {
+                    libc::write(signal_fd, b"x".as_ptr().cast(), 1);
+                    libc::usleep(300_000);
+                    Ok(())
+                });
+            }
+
+            command.status().unwrap();
+            drop(signal);
+        });
+
+        // The child holds its copy of the lock now, and execs in 300 ms.
+        forked.read_exact(&mut [0u8]).unwrap();
+        drop(serving);
+
+        let restoring = hold_exclusive_instance_lock(tmp.path(), "restore");
+        spawner.join().unwrap();
+
+        assert!(restoring.is_ok(), "{:?}", restoring.err());
     }
 
     #[test]

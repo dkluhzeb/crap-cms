@@ -507,6 +507,7 @@ async fn publishing_an_unpublished_global_reaches_published_only_subscribers() {
             data: Some(make_struct(&[("title", "Back online")])),
             locale: None,
             draft: None,
+            expected_revision: None,
         }))
         .await
         .expect("publish");

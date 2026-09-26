@@ -446,8 +446,8 @@ mod publish_tests {
         db::{AccessResult, DbConnection, DbPool, migrate, pool, query},
         hooks::{AccessCheckInput, HookContext, HookEvent, ValidationCtx},
         service::{
-            FieldReadStrip, ServiceContext, create_document_in_conn, hooks::WriteHooks,
-            update_document_in_conn,
+            FieldReadStrip, ServiceContext, UpdateStored, create_document_in_conn,
+            hooks::WriteHooks, update_document_in_conn,
         },
     };
 
@@ -515,7 +515,7 @@ mod publish_tests {
             &self,
             _fields: &[FieldDefinition],
             data: &mut DocumentFields,
-            _stored: &DocumentFields,
+            _stored: UpdateStored<'_>,
             _collection: &str,
             _user: Option<&Document>,
             _locale: Option<&str>,

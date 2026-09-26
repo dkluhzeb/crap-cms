@@ -12,7 +12,7 @@ use crate::{
             search_index::sync_search_index,
         },
         versions,
-        write::reject_locale_locked_fields,
+        write::{refuse_unreadable_references, reject_locale_locked_fields},
     },
 };
 
@@ -105,10 +105,13 @@ pub fn persist_update(
 
     sync_search_index(ctx, conn, &doc.id, &locale_cfg)?;
 
-    // Ref count last: minimizes row-level lock hold time on shared targets.
+    // Ref counts last: they lock every referenced target row until COMMIT —
+    // through the after-change hooks that still run in this transaction —
+    // so taking them as late as the persist allows keeps that span short.
     // A refused reference is reported on the field holding it.
     if let Some(old_refs) = old_refs {
         query::ref_count::after_update(conn, slug, &doc.id, &def.fields, &locale_cfg, &old_refs)
+            .and_then(|added| refuse_unreadable_references(ctx, &added, opts.locale_ctx))
             .map_err(|e| query::ref_count::anchor_to_fields(e, &def.fields, data))?;
     }
 
@@ -194,10 +197,13 @@ pub(crate) fn persist_bulk_update(
 
     sync_search_index(ctx, conn, id, &locale_cfg)?;
 
-    // Ref count last: minimizes row-level lock hold time on shared targets.
+    // Ref counts last: they lock every referenced target row until COMMIT —
+    // through the after-change hooks that still run in this transaction —
+    // so taking them as late as the persist allows keeps that span short.
     // A refused reference is reported on the field holding it.
     if let Some(old_refs) = old_refs {
         query::ref_count::after_update(conn, ctx.slug, id, &def.fields, &locale_cfg, &old_refs)
+            .and_then(|added| refuse_unreadable_references(ctx, &added, opts.locale_ctx))
             .map_err(|e| query::ref_count::anchor_to_fields(e, &def.fields, data))?;
     }
 

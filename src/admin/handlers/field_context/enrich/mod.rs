@@ -19,7 +19,7 @@ pub use sub_field_opts::SubFieldOpts;
 pub(super) use ctx::EnrichCtx;
 pub(in crate::admin::handlers::field_context) use enrichment::polymorphic_selected_from_value;
 pub(in crate::admin::handlers::field_context) use gated::{
-    gated_count, gated_find, gated_find_by_id,
+    gated_count, gated_find_by_id, gated_join_children,
 };
 
 #[cfg(all(test, feature = "sqlite"))]

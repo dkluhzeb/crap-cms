@@ -5,7 +5,7 @@
 //! no JSON intermediate, no serde deserialization in the hot path.
 
 use crate::core::{
-    CollectionDefinition, FieldDefinition, Registry,
+    CollectionDefinition, FieldDefinition, REVISION_COLUMN, Registry,
     collection::GlobalDefinition,
     flatten_array_sub_fields,
     upload::{read_shape_fields, readable_fields},
@@ -57,7 +57,8 @@ pub(super) fn render(registry: &Registry, proto_mod: &str) -> String {
 }
 
 /// Render the numeric getters. A number field arrives as `IntValue` (integers,
-/// exact) or `DoubleValue` (fractional); both collapse to `f64`.
+/// exact) or `DoubleValue` (fractional); both collapse to `f64`. The integer
+/// getter reads the `_revision` system key, always an `IntValue`.
 fn render_num_helpers(out: &mut String) {
     w!(
         out,
@@ -71,6 +72,18 @@ fn render_num_helpers(out: &mut String) {
         "            Some(Kind::IntValue(n)) => Some(*n as f64),"
     );
     w!(out, "            Some(Kind::DoubleValue(n)) => Some(*n),");
+    w!(out, "            _ => None,");
+    w!(out, "        }})");
+    w!(out, "}}");
+    w!(out, "");
+    w!(
+        out,
+        "fn get_int_opt(doc: &Document, name: &str) -> Option<i64> {{"
+    );
+    w!(out, "    doc.fields.as_ref()");
+    w!(out, "        .and_then(|f| f.fields.get(name))");
+    w!(out, "        .and_then(|v| match &v.kind {{");
+    w!(out, "            Some(Kind::IntValue(n)) => Some(*n),");
     w!(out, "            _ => None,");
     w!(out, "        }})");
     w!(out, "}}");
@@ -419,8 +432,14 @@ fn render_field_extractions(
     }
 }
 
-/// Extraction lines for the stored system keys a read document carries.
+/// Extraction lines for the stored system keys a read document carries: its
+/// revision always, `_status` / `_deleted_at` with the features.
 fn render_system_extractions(out: &mut String, drafts: bool, soft_delete: bool) {
+    w!(
+        out,
+        "            {REVISION_COLUMN}: get_int_opt(doc, \"{REVISION_COLUMN}\"),"
+    );
+
     for (present, key) in [(drafts, "_status"), (soft_delete, "_deleted_at")] {
         if present {
             w!(out, "            {key}: get_str_opt(doc, \"{key}\"),");
@@ -556,6 +575,7 @@ fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str)
             many: true,
         } => opt_list("get_str_list", doc_var, name),
         FieldTy::Num => scalar("get_num", doc_var, name),
+        FieldTy::Int => scalar("get_int", doc_var, name),
         FieldTy::Bool => scalar("get_bool", doc_var, name),
         FieldTy::NumList => opt_list("get_num_list", doc_var, name),
         // Shapeless JSON — a `json` field, a JSON rich text document, an empty
@@ -705,6 +725,7 @@ fn sub_field_extraction(field: &FieldDefinition, parent_pascal: &str) -> String 
         FieldTy::Num => get(
             "Some(Kind::IntValue(n)) => Some(*n as f64), Some(Kind::DoubleValue(n)) => Some(*n)",
         ),
+        FieldTy::Int => get("Some(Kind::IntValue(n)) => Some(*n)"),
         FieldTy::Bool => get("Some(Kind::BoolValue(b)) => Some(*b)"),
         FieldTy::NumList => get(
             "Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind { Some(Kind::IntValue(n)) => Some(*n as f64), Some(Kind::DoubleValue(n)) => Some(*n), _ => None }).collect())",

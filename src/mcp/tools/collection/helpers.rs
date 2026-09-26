@@ -33,6 +33,28 @@ pub(in crate::mcp::tools) fn events_flag(args: &Value) -> bool {
     args.get("events").and_then(Value::as_bool).unwrap_or(true)
 }
 
+/// The reserved top-level key carrying a write's revision precondition.
+pub(in crate::mcp::tools) const EXPECTED_REVISION_KEY: &str = "expected_revision";
+
+/// Read the optional `expected_revision` write-tool argument: the document
+/// revision the caller last read. Absent (or `null`) writes unconditionally.
+/// One source so the collection and global write tools parse it identically.
+///
+/// # Errors
+///
+/// Returns an error when the argument is present but not an integer — a
+/// precondition that cannot be read must not decay into an unconditional
+/// write.
+pub(in crate::mcp::tools) fn expected_revision_arg(args: &Value) -> Result<Option<i64>> {
+    match args.get(EXPECTED_REVISION_KEY) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| anyhow!("'{EXPECTED_REVISION_KEY}' must be an integer")),
+    }
+}
+
 /// Pull the reserved top-level `password` from a write-tool object on an auth
 /// collection (`None` for a non-auth collection, where `password` is ordinary
 /// field data). One source so `create` / `update` / `create_many` extract it
@@ -233,6 +255,28 @@ mod tests {
         },
         db::query,
     };
+
+    /// A present revision precondition is an integer or an error — never
+    /// silently ignored, which would turn a checked write into a blind one.
+    #[test]
+    fn expected_revision_arg_reads_an_integer_or_refuses() {
+        assert_eq!(expected_revision_arg(&json!({})).unwrap(), None);
+        assert_eq!(
+            expected_revision_arg(&json!({ "expected_revision": null })).unwrap(),
+            None
+        );
+        assert_eq!(
+            expected_revision_arg(&json!({ "expected_revision": 4 })).unwrap(),
+            Some(4)
+        );
+
+        for bad in [json!("4"), json!(4.5), json!(true)] {
+            assert!(
+                expected_revision_arg(&json!({ "expected_revision": bad })).is_err(),
+                "{bad}"
+            );
+        }
+    }
 
     /// The shared password extractor preserves the intended
     /// create-vs-update asymmetry. `create`/`create_many` (`empty_as_none=false`)

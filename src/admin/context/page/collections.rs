@@ -5,7 +5,7 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::BasePageContext;
+use super::{BasePageContext, RevisionConflictNotice};
 use crate::admin::context::{
     CollectionContext, CollectionPermissions, DocumentRef, FieldContext, PaginationContext,
 };
@@ -157,6 +157,12 @@ pub struct CollectionEditPage {
     /// Upload preview block — present only on upload collections.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upload: Option<UploadFormContext>,
+
+    /// The document revision the form was loaded at — submitted back as the
+    /// save's precondition (`_revision`), so a save over someone else's newer
+    /// change is refused instead of silently overwriting it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
 }
 
 /// `/admin/collections/{slug}/create` create form context.
@@ -215,6 +221,17 @@ pub struct CollectionFormErrorPage {
     /// point the user just moved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upload_hidden_fields: Option<Vec<Value>>,
+
+    /// The revision the re-rendered form submits back (`_revision`): the one
+    /// it was loaded at — or, after a revision conflict, the document's
+    /// current one, so saving again overwrites on purpose.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+
+    /// Present when the save was refused because the document was saved by
+    /// someone else after the form was loaded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_conflict: Option<RevisionConflictNotice>,
 }
 
 /// `/admin/collections/{slug}/{id}/delete` delete-confirmation page.

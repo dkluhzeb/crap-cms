@@ -21,5 +21,5 @@ pub(crate) use localized_columns::{
 pub(crate) use regroup::{group_locale_fields, regroup_by_locale};
 pub(crate) use write::{
     is_locale_locked_write, is_non_default_single_locale, locale_locked_field_names,
-    locale_write_column,
+    locale_write_column, shared_field_columns,
 };

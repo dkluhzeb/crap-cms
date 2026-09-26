@@ -1,13 +1,22 @@
 //! Join field population — the reverse lookup a join lists, shared by the
-//! single-document and the batch path so both list exactly the same children.
+//! single-document and the batch path and the admin edit form
+//! ([`join_children`](super::join_children)), so every surface lists exactly
+//! the same children.
 //!
 //! A join lists the target documents whose `on` field references the
 //! document the join belongs to: at most the join's `limit` per document, in
 //! the target's default order, only the ones the reader may see (the target's
-//! `read` / `draft` views, applied in SQL so the limit counts visible
-//! children), each shown as the reader's draft view where that applies.
+//! `read` / `draft` views, applied in SQL), each shown as the reader's draft
+//! view where that applies, and only those whose `on` value the reader may
+//! read — a child's presence in the join IS that value.
+//!
+//! Field read access is a per-document verdict, so it cannot be folded into
+//! the SQL. The lookup therefore reads each parent's children in windows —
+//! the first `limit`, then ever larger windows further down the order — and
+//! keeps reading for a parent until it lists `limit` children or its children
+//! run out; the limit counts listed children, never ones dropped later.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Range};
 
 use anyhow::Result;
 use serde_json::Value;
@@ -18,15 +27,18 @@ use crate::{
         field::flatten_array_sub_fields,
     },
     db::{
-        Filter, FilterClause, FilterOp, FindQuery, ViewScope,
-        query::{GroupLimit, GroupedFind, find_grouped, hydrate_documents},
+        Filter, FilterClause, FilterOp, FindQuery, LocaleContext, ViewScope,
+        query::{GroupLimit, GroupedFind, JoinReaders, find_grouped, hydrate_documents},
     },
 };
 
 use super::{
     PopulateCtx,
-    helpers::{TargetCollection, resolve_target_views, visible_targets},
+    helpers::{TargetCollection, TargetViews, resolve_target_views, visible_targets},
 };
+
+/// Children listed per parent id, each list in the target's default order.
+type Listed = HashMap<String, Vec<Document>>;
 
 /// The join fields a document populates itself: top-level ones and those in a
 /// row / collapsible / tabs wrapper (transparent layout), filtered by the
@@ -43,7 +55,10 @@ pub(super) fn document_join_fields<'a>(
 }
 
 /// The children `join` lists for each of `parent_ids`, keyed by parent id —
-/// each list in the target's default order and at most the join's limit long.
+/// each list in the target's default order and at most the join's limit long
+/// (see the module docs). A child is listed under the parent its STORED `on`
+/// value names — the value the lookup matched — even when the reader sees a
+/// pending draft of it that names another.
 ///
 /// # Errors
 ///
@@ -54,61 +69,187 @@ pub(super) fn fetch_join_children(
     join: &JoinConfig,
     target_def: &CollectionDefinition,
     parent_ids: Vec<String>,
-) -> Result<HashMap<String, Vec<Document>>> {
+) -> Result<Listed> {
     if parent_ids.is_empty() {
         return Ok(HashMap::new());
     }
 
     let views = resolve_target_views(ctx, &join.collection, target_def)?;
+    let lookup = JoinLookup {
+        ctx,
+        join,
+        target_def,
+        view_filters: view_filters(ctx, target_def, &views),
+        views: &views,
+    };
 
-    let mut filters = ViewScope::assemble(
+    let limit = i64::from(join.effective_limit());
+    let mut listed = Listed::new();
+    let mut pending = parent_ids;
+    let mut rows = 0..limit;
+
+    while !pending.is_empty() {
+        let window = lookup.read_window(&pending, rows.clone())?;
+
+        pending = window.settle(&mut listed, limit, &rows);
+        rows = next_window(&rows);
+    }
+
+    Ok(listed)
+}
+
+/// The reader's view filters on the target — `read`, and `draft` when drafts
+/// are requested — joined with AND into every window.
+fn view_filters(
+    ctx: &PopulateCtx<'_>,
+    target_def: &CollectionDefinition,
+    views: &TargetViews,
+) -> Vec<FilterClause> {
+    ViewScope::assemble(
         target_def.has_drafts(),
         Some(views.read.clone()),
         (!ctx.published_only).then(|| views.draft.clone()),
     )
-    .into_filters();
-
-    filters.push(FilterClause::Single(Filter {
-        field: join.on.clone(),
-        op: FilterOp::In(parent_ids),
-    }));
-
-    let query = FindQuery::builder().filters(filters).build();
-    let limit = GroupLimit::new(&join.on, i64::from(join.effective_limit()));
-    let find = GroupedFind::builder(&join.collection, target_def, &query, limit)
-        .locale_ctx(ctx.locale_ctx)
-        .build();
-
-    let mut children = find_grouped(ctx.conn, &find)?;
-
-    hydrate_documents(
-        ctx.conn,
-        &join.collection,
-        &target_def.fields,
-        &mut children,
-        None,
-        ctx.locale_ctx,
-    )?;
-
-    let target = TargetCollection::builder(&join.collection, target_def, &views).build();
-    let children = visible_targets(ctx, &target, children)?;
-
-    Ok(bucket_by_parent(children, &join.on))
+    .into_filters()
 }
 
-/// Group join children by the parent their `on` value names, keeping order.
-fn bucket_by_parent(children: Vec<Document>, on: &str) -> HashMap<String, Vec<Document>> {
-    let mut buckets: HashMap<String, Vec<Document>> = HashMap::new();
+/// The window after `rows`: the positions right below it, twice as many, so a
+/// parent whose children the reader mostly may not list takes few reads.
+fn next_window(rows: &Range<i64>) -> Range<i64> {
+    let len = rows.end - rows.start;
 
-    for child in children {
-        let Some(parent) = join_key_from_value(child.fields.get(on)) else {
-            continue;
-        };
+    rows.end..rows.end.saturating_add(len.saturating_mul(2))
+}
 
-        buckets.entry(parent).or_default().push(child);
+/// One join lookup: the join, its target, and the reader's views of it. Built
+/// in one place with every field set.
+struct JoinLookup<'a, 'c> {
+    ctx: &'a PopulateCtx<'c>,
+    join: &'a JoinConfig,
+    target_def: &'a CollectionDefinition,
+    views: &'a TargetViews,
+    view_filters: Vec<FilterClause>,
+}
+
+impl JoinLookup<'_, '_> {
+    /// The children at positions `rows` of each of `parents`' groups, as the
+    /// reader sees them, with how many rows each group gave.
+    fn read_window(&self, parents: &[String], rows: Range<i64>) -> Result<Window> {
+        let mut found = self.find_window(parents, rows)?;
+        let mut stored = stored_parents(&found, &self.join.on);
+        let read = rows_per_parent(&stored);
+
+        hydrate_documents(
+            self.ctx.conn,
+            &self.join.collection,
+            &self.target_def.fields,
+            &mut found,
+            None,
+            self.ctx.locale_ctx,
+        )?;
+
+        let target =
+            TargetCollection::builder(&self.join.collection, self.target_def, self.views).build();
+        let shown = visible_targets(self.ctx, &target, found)?;
+        let readable = self.on_readable(&shown);
+
+        let kept = shown
+            .into_iter()
+            .zip(readable)
+            .filter(|(_, readable)| *readable)
+            .filter_map(|(child, _)| Some((stored.remove(child.id.as_ref())?, child)))
+            .collect();
+
+        Ok(Window { read, kept })
     }
 
-    buckets
+    /// The raw rows at positions `rows` of each of `parents`' groups.
+    fn find_window(&self, parents: &[String], rows: Range<i64>) -> Result<Vec<Document>> {
+        let mut filters = self.view_filters.clone();
+        filters.push(FilterClause::Single(Filter {
+            field: self.join.on.clone(),
+            op: FilterOp::In(parents.to_vec()),
+        }));
+
+        let query = FindQuery::builder().filters(filters).build();
+        let group = GroupLimit::window(&self.join.on, rows);
+        let find = GroupedFind::builder(&self.join.collection, self.target_def, &query, group)
+            .locale_ctx(self.ctx.locale_ctx)
+            .build();
+
+        find_grouped(self.ctx.conn, &find)
+    }
+
+    /// Whether each of `shown` keeps its `on` value through the reader's field
+    /// read strip; every child when no access check is wired.
+    fn on_readable(&self, shown: &[Document]) -> Vec<bool> {
+        let Some(check) = self.ctx.join_access else {
+            return vec![true; shown.len()];
+        };
+
+        let readers = JoinReaders::builder(self.join, self.target_def)
+            .user(self.ctx.user)
+            .locale(self.ctx.locale_ctx.map(LocaleContext::access_locale))
+            .build();
+
+        check.on_readable(&readers, shown)
+    }
+}
+
+/// What one window read: the rows each parent's group gave, and the children
+/// it lists, each with the parent its stored `on` value names, in order.
+struct Window {
+    read: HashMap<String, i64>,
+    kept: Vec<(String, Document)>,
+}
+
+impl Window {
+    /// List the kept children (each parent up to `limit`) and return the
+    /// parents still short whose group may hold more: those the window at
+    /// `rows` filled completely.
+    ///
+    /// A child already listed is skipped: each window is a separate read, and
+    /// a child written above a group's earlier window in between shifts the
+    /// rows down, so a later window can start with a child listed before.
+    fn settle(self, listed: &mut Listed, limit: i64, rows: &Range<i64>) -> Vec<String> {
+        let cap = usize::try_from(limit).unwrap_or(usize::MAX);
+
+        for (parent, child) in self.kept {
+            let children = listed.entry(parent).or_default();
+
+            if children.len() < cap && !children.iter().any(|listed| listed.id == child.id) {
+                children.push(child);
+            }
+        }
+
+        let full = rows.end - rows.start;
+
+        self.read
+            .into_iter()
+            .filter(|(_, count)| *count >= full)
+            .filter(|(parent, _)| listed.get(parent).map_or(0, Vec::len) < cap)
+            .map(|(parent, _)| parent)
+            .collect()
+    }
+}
+
+/// The parent each raw child's stored `on` value names, keyed by child id — the
+/// value the lookup matched, captured before any draft overlay.
+fn stored_parents(raws: &[Document], on: &str) -> HashMap<String, String> {
+    raws.iter()
+        .filter_map(|raw| Some((raw.id.to_string(), join_key_from_value(raw.fields.get(on))?)))
+        .collect()
+}
+
+/// How many rows each parent's group gave a window.
+fn rows_per_parent(stored: &HashMap<String, String>) -> HashMap<String, i64> {
+    let mut counts = HashMap::new();
+
+    for parent in stored.values() {
+        *counts.entry(parent.clone()).or_insert(0) += 1;
+    }
+
+    counts
 }
 
 /// Coerce a doc-field `Value` to the string form used as a join-key bucket
@@ -166,6 +307,34 @@ mod tests {
     fn null_and_missing_are_rejected() {
         assert_eq!(join_key_from_value(Some(&json!(null))), None);
         assert_eq!(join_key_from_value(None), None);
+    }
+
+    fn child(id: &str) -> Document {
+        Document::new(id.to_string())
+    }
+
+    /// Regression: a child written above a group's first window between two
+    /// window reads shifted the rows down, so the next window began with a
+    /// child already listed and the join listed it twice. A child already
+    /// listed is skipped, and the parent stays pending while it is short.
+    #[test]
+    fn a_child_a_later_window_reads_again_is_listed_once() {
+        let mut listed = Listed::new();
+        listed.insert("a1".to_string(), vec![child("p1"), child("p2")]);
+
+        let window = Window {
+            read: HashMap::from([("a1".to_string(), 4)]),
+            kept: vec![
+                ("a1".to_string(), child("p2")),
+                ("a1".to_string(), child("p3")),
+            ],
+        };
+
+        let pending = window.settle(&mut listed, 4, &(2..6));
+
+        let ids: Vec<&str> = listed["a1"].iter().map(|c| c.id.as_ref()).collect();
+        assert_eq!(ids, vec!["p1", "p2", "p3"]);
+        assert_eq!(pending, vec!["a1".to_string()]);
     }
 
     /// Regression: a join inside a row / collapsible / tabs wrapper was never

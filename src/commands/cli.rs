@@ -94,6 +94,10 @@ pub enum Command {
         no_cron: bool,
     },
 
+    /// Check crap.toml and the definitions without opening the database,
+    /// reporting every problem at once (run before an upgrade)
+    Check,
+
     /// Show project status (collections, globals, migrations)
     Status {
         /// Run best-practice health checks on configuration and project state

@@ -3,7 +3,6 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Redirect, Response},
 };
-use tokio::task::spawn_blocking;
 use tracing::warn;
 
 use super::{append_cookies, clear_session_cookies, session_same_site};
@@ -12,19 +11,26 @@ use crate::admin::{
     handlers::shared::paths,
     server::{evaluate_admin_request, session_cookie_token},
 };
-use crate::core::event::SharedInvalidationTransport;
+use crate::core::{event::SharedInvalidationTransport, spawn_request_blocking};
 use crate::db::DbPool;
-use crate::service::{self, ServiceContext, auth::Resolution};
+use crate::service::{self, ServiceContext, admit_commit, auth::Resolution};
 
 /// Bump the user's `_session_version` so the already-issued JWT dies
 /// server-side (see the handler doc for why). Failures are logged, never
 /// surfaced — the user still gets logged out client-side either way.
+///
+/// The bump is a single autocommit write, so it is its own commit point: a
+/// logout whose request was already answered as timed out skips it.
 fn bump_session_version_blocking(
     pool: &DbPool,
     transport: SharedInvalidationTransport,
     collection: &str,
     sub: &str,
 ) {
+    if admit_commit().is_err() {
+        return;
+    }
+
     let conn = match pool.write() {
         Ok(conn) => conn,
         Err(e) => {
@@ -108,7 +114,7 @@ fn revoke_session_blocking(state: &AdminState, headers: &HeaderMap) {
 /// never re-reads `_session_version` (mirrors lock / password-reset).
 pub async fn logout_action(State(state): State<AdminState>, headers: HeaderMap) -> Response {
     let revoke_state = state.clone();
-    let _ = spawn_blocking(move || {
+    let _ = spawn_request_blocking(move || {
         revoke_session_blocking(&revoke_state, &headers);
     })
     .await;

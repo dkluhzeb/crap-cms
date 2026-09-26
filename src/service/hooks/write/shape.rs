@@ -167,6 +167,25 @@ fn insert_at(level: &mut Map<String, Value>, path: &str, value: Value) {
     }
 }
 
+/// Replace the value at a `__`-joined path wherever the level holds it: under
+/// the flat key itself, or inside its nested group objects. A path the level
+/// does not hold is left absent. Returns whether a value was replaced.
+pub(super) fn replace_at(level: &mut Map<String, Value>, path: &str, value: Value) -> bool {
+    if let Some(slot) = level.get_mut(path) {
+        *slot = value;
+        return true;
+    }
+
+    let Some((head, rest)) = path.split_once("__") else {
+        return false;
+    };
+
+    match level.get_mut(head) {
+        Some(Value::Object(nested)) => replace_at(nested, rest, value),
+        _ => false,
+    }
+}
+
 /// Put every checkbox absent from `level` into it with its stored value, so
 /// the strip judges its rule; returns the paths added.
 ///
@@ -330,6 +349,27 @@ mod tests {
             Value::Object(map) => map,
             _ => unreachable!("fixture is an object"),
         }
+    }
+
+    /// A value is replaced where the level holds it — flat or nested — and a
+    /// path it does not hold stays absent.
+    #[test]
+    fn a_value_is_replaced_where_the_level_holds_it() {
+        let mut level = object(json!({
+            "items": [1],
+            "seo": { "links": [1] },
+            "seo__old": [1],
+        }));
+
+        assert!(replace_at(&mut level, "items", json!([2])));
+        assert!(replace_at(&mut level, "seo__links", json!([2])));
+        assert!(replace_at(&mut level, "seo__old", json!([2])));
+        assert!(!replace_at(&mut level, "missing", json!([2])));
+
+        assert_eq!(
+            Value::Object(level),
+            json!({ "items": [2], "seo": { "links": [2] }, "seo__old": [2] })
+        );
     }
 
     /// A stripped localized field must lose its decorated columns too, or a

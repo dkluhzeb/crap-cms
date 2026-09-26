@@ -18,7 +18,7 @@ freeze is unconditional.
 ## On-disk / storage (changing any = a data migration)
 
 - **System column namespace.** All `_`-prefixed columns (`_status`,
-  `_deleted_at`, `_ref_count`, `_order`, `_locale`, `_block_type`, the auth
+  `_deleted_at`, `_ref_count`, `_revision`, `_order`, `_locale`, `_block_type`, the auth
   columns `_password_hash`/`_reset_token`/… , version columns
   `_parent`/`_version`/`_latest`/`snapshot`) and the non-prefixed `id` /
   `parent_id` / `created_at` / `updated_at`.
@@ -150,15 +150,22 @@ freeze is unconditional.
   database. The gate **value** is the intended re-run lever; never rename the
   key. The keys in use, every one scoped to a single target so no conversion
   can be skipped for a collection added later:
-  `ref_count_backfilled:{slug}`, `checkbox_columns_smallint:{slug}`, and —
+  `ref_count_backfilled:{slug}`, `checkbox_columns_smallint:{slug}`,
+  `nullable_columns:{slug}`, `inline_unique:{slug}`, and —
   keyed by *table*, so a collection and a global of the same slug cannot share
   a gate — `legacy_timestamps:{table}`, `nested_values:{table}`,
-  `canonical_text:{table}` (`posts`, `_global_site`, …). Two keys are records,
+  `canonical_text:{table}` (`posts`, `_global_site`, …). Four keys are records,
   not gates: `locale_config` holds the locale fingerprint (default locale +
   sorted codes) so startup can warn when the default locale changed against
   existing data, and `locale_shape:{table}` holds `{version}:{sorted localized
   columns}` so a flip of a field's `localized` flag moves its values exactly
-  once per flip, in either direction.
+  once per flip, in either direction. `join_locale:{table}` holds
+  `{version}:per_locale` or `{version}:shared` for each array, blocks and
+  has-many join table, so a field that stops being localized has its other
+  locales' rows dropped exactly once, on the switch. `fts_shape:{slug}` records the shape a
+  collection's search index was last built from; the start rebuilds the index
+  when the shape differs or the key is absent (a conversion that rewrote the
+  collection's text deletes it).
 - **The user-settings blob shape.** `_crap_user_settings` holds one JSON object
   per user: `ui_locale` at the top level, per-collection list preferences under
   `collections.{slug}` (`{"columns": [...]}`). Entries written before the
@@ -501,7 +508,8 @@ changing a representation is a breaking change to every consumer.
 - **`data/crap.lock` is the instance lock.** `serve`, `work`, stdio `mcp` and
   every other CLI command that opens the database take it shared before opening
   it and hold it until they exit; `restore` and `migrate fresh` take it
-  exclusively for the whole command. The
+  exclusively for the whole command, waiting up to a second for a holder that
+  is letting go before refusing. The
   data directory must be on a filesystem with file locks: a process that can't
   take the lock doesn't start. The shared lock opens an existing lock file read-only, so a
   read-only data directory works once the file exists; `restore` and
@@ -772,9 +780,12 @@ changing a representation is a breaking change to every consumer.
   event: `hydrate_reported` (read the join-table rows back, for the flat
   re-read a write query returns — skipped where the document already carries
   them, so the join tables are never read twice), `shape_reported` (fold an
-  upload's per-size values into `sizes`), and `strip_reported` (shape, then
-  strip read-denied and hidden fields, judged in the write's locale, falling
-  back to the default locale). A surface must never report a raw write result:
+  upload's per-size values into `sizes`), and `strip_reported` (judge the
+  caller's content view of the reported document — `trash` when trashed,
+  `draft` for draft content, `read` otherwise, a row constraint matched
+  against the document — and report only `id`, `_status` and `_revision` when
+  it is closed; else shape, then strip read-denied and hidden fields, judged in
+  the write's locale, falling back to the default locale). A surface must never report a raw write result:
   a write's response and a read of the same document have to agree, field for
   field, or a client's types split in two. A live event is never built
   from that report: it carries the stored row, shaped by `shape_reported`
@@ -812,6 +823,9 @@ changing a representation is a breaking change to every consumer.
   says — it is what an unpublished document serves.
 - **A password change clears any pending reset token**, in the same statement
   that writes the hash.
+- **A password reset is one service operation** (`reset_password_with_token`)
+  every surface calls: one transaction, committed only on success (under the
+  request's commit gate), so a refused reset writes nothing anywhere.
 
 ## Read-surface invariants
 
@@ -979,8 +993,10 @@ changing a representation is a breaking change to every consumer.
   boolean, populated document object, or list with non-string items is a
   validation error on write; a polymorphic target must be `collection/id`.
   A reference to an id that does not exist is a caller error (400 naming
-  the target), not an internal fault. A NEW reference to a trashed document
-  is refused exactly like a missing one — a validation error
+  the target), not an internal fault. A NEW reference to a trashed document,
+  or to a live one its writer may not read (target `read` ∪ `draft` view,
+  row constraints included; access-overriding writes and version restores
+  exempt), is refused exactly like a missing one — a validation error
   (`validation.reference_unavailable`) on the field key holding it, or
   `cannot reference {collection}/{id}: no such document` when no field of the
   write holds it; a reference a write keeps unchanged is not judged again,
@@ -1108,12 +1124,65 @@ changing a representation is a breaking change to every consumer.
   middleware passes — so a hook branching on `ctx.operation` behaves identically
   in the UI filter and the real gate.
 
+- **A layout wrapper carries no value keys.** `row` / `collapsible` / `tabs`
+  accept only `name`, `type`, `admin` and their `fields` / `tabs`; `access`,
+  `hidden`, `hooks`, `required`, `required_when`, `unique`, `index`,
+  `localized`, `required_locales`, `validate`, `default_value` and `mcp` are a
+  load error on them. Every access and hidden walker treats a wrapper as
+  transparent; giving a wrapper-level rule meaning later would be additive.
+- **A join carries only read-side keys.** A `join` accepts `name`, `type`,
+  `admin`, `hidden`, `access.read`, the `after_read` hook and its `collection`
+  / `on` / `limit`; every other field key, `access.create` / `access.update`
+  and the write-side hooks are a load error by presence. Giving one of them a
+  meaning on a join later would be additive.
+- **A write's refusal of its input comes after the access gate.** A null /
+  non-object group, a locale-locked field and a non-default-locale create are
+  refused only once the collection's `create` / `update` rule admitted the
+  caller (the write, its `validate` dry-run and the upload pre-check alike).
+- **A held value counts only where its writer may read it.** A value a check
+  would now refuse is accepted when the edited document holds it — from the
+  stored row as the writer may read it (field `access.read`, `hidden`) and
+  from the pending draft only with the writer's draft view.
 - **Field `access.update` rules judge the stored document.** `ctx.document` is
   the stored row on update (the incoming document on create); `ctx.data` is
   always the incoming level. The value under judgment is never the evidence.
   A draft save judges the *published* row — a pending draft's values never
   grant field write rights before publish — and a version restore judges the
   live row, not the snapshot.
+- **A write never changes a field its writer cannot read.** On every update
+  (save, draft save, publish, bulk update, global update, version restore, the
+  validate dry-run) each field `access.read` rule is judged against what the
+  write replaces (`ctx.data` = that level, per array/blocks row; `ctx.document`
+  = the whole document): the stored document, or for a draft save the pending
+  draft its form showed (the stored document when none is pending). A value it
+  hides is kept as it is at every depth — left out of the column write,
+  matched to its stored row by `id` inside a top-level array/blocks row, put
+  back inside a JSON value, and a nested list holding a hidden value is kept
+  whole. A row the write adds (or a block row whose type changed) is judged
+  against an empty row. A write-back of a snapshot — a publish making its
+  pending draft live, a version restore — is judged per locale against the
+  document as stored in that locale (a shared field once, at the write's
+  locale), and a hidden value keeps its stored value: a restore is partial for
+  a restorer who may not read every field. Read-denied implies write-denied
+  for updates; loosening this would let a blind writer blank values it never
+  saw.
+- **The edit form judges row values row by row.** A field inside
+  array/blocks rows renders in the rows its viewer may read and in no others,
+  judged per row exactly as the read strip judges it; the new-row template
+  offers what an empty row allows — the same judgement the write applies to a
+  new row.
+- **Display conditions see one data shape.** Every evaluation — the edit and
+  create renders, an error re-render, the live endpoint, the browser's
+  condition-table evaluator — sees the form's values decoded as the write
+  stores them (checkbox bool, number number, empty `null`, group nested,
+  `has_many` a list); the create form sees the field defaults. A condition
+  table's `field` resolves a group sub-field by `seo.title` or `seo__title`.
+  The evaluate-conditions endpoint keys fields by form name (`seo__title`)
+  and parses the snapshot against the fields the edit form rendered for its
+  viewer (`document_id`, `locale` in the request), so a field the viewer may
+  not read is `null` there as on the render.
+  A failing condition hides its field (fail closed); `admin.condition` on a
+  field inside an array/blocks row is a load error.
 - **`ctx.user` is the stored user document, whatever the auth method.** A
   bearer token, a session cookie, a custom strategy and a claims reload all
   read the user through one reader (the default-locale stored row: every
@@ -1139,17 +1208,20 @@ changing a representation is a breaking change to every consumer.
   nothing to leave alone. No surface applies the policy before its access
   check, so a rejection can never be read as a policy oracle by a caller who
   isn't allowed to write.
-- **Email is matched case-insensitively everywhere it is an identity.** Account
-  lookup (`find_by_email` = `LOWER(email) = LOWER(?)`), the per-account login and
-  forgot-password rate-limit keys, and uniqueness on an `Email`-typed field all
-  compare case-insensitively — one address is one account with one lockout bucket
-  regardless of casing. Non-`Email` unique fields (slugs, codes) stay
-  case-sensitive. Two guarantees keep this closed: an auth collection's `email`
-  field **must** be `type = "email"` and `unique = true` (load error otherwise,
-  so the type-scoped case-insensitive check always applies to the identity
-  field), and every auth collection carries a `UNIQUE INDEX ON (LOWER(email))`
-  backstop (partial — active rows only — under soft delete) so even a race past
-  validation can't create case-variant duplicate accounts.
+- **Email is matched case-insensitively everywhere it is an identity.** Every
+  write stores an `Email` value in canonical form (trimmed, lowercased,
+  NFC-composed); account lookup (`find_by_email` = `email = <canonical input>`),
+  the per-account login and forgot-password rate-limit keys, and uniqueness on
+  an `Email`-typed field all compare that form — one address is one account
+  with one lockout bucket regardless of casing. Never compare with SQL
+  `LOWER()`: its folding follows the database's collation (ASCII only on
+  SQLite) and need not agree with the canonical form. Non-`Email` unique fields
+  (slugs, codes) stay case-sensitive. Two guarantees keep this closed: an auth
+  collection's `email` field **must** be `type = "email"` and `unique = true`
+  (load error otherwise, so the canonical form always applies to the identity
+  field), and that field's managed unique index over the canonical column
+  (partial — active rows only — under soft delete) is the backstop, so even a
+  race past validation can't create case-variant duplicate accounts.
 - **The `token_use` claim** partitions signed tokens into `session` (accepted by
   every authenticated surface — admin cookie/bearer, gRPC, upload serve) and
   `mfa_pending` (accepted only by the MFA-completion endpoint). Session
@@ -1532,6 +1604,37 @@ alpha.10 on:
   `_system_image_convert` runs are not readable through the job tools
   (their payloads carry delivery tokens); `_system_bulk` is the sole
   exception, under the queuer-scoped rule above.
+
+## Optimistic locking (`_revision` / `expected_revision`)
+
+- **Storage.** Every collection and global table carries
+  `_revision INTEGER NOT NULL DEFAULT 0`. It is row state, never content: it
+  is not recorded in version snapshots, not writable through any surface, and
+  not a filter or sort column.
+- **What moves it.** Exactly one step forward per write that changes the
+  document — update (published or draft save), unpublish, version restore,
+  each document of a bulk update, and each document `crap-cms import`
+  writes — inside the write's transaction, so a rolled-back write leaves it
+  unchanged. Reference-count changes, account bookkeeping, trash/untrash and
+  a background image conversion filling in a derived URL do not move it.
+- **Read shape.** Every document read (collection and global, draft views and
+  write responses included) carries it as the integer `_revision` key beside
+  the fields; a `select` projection keeps it; the Lua `crap.Document` class
+  and the generated client read types declare it (an optional integer; Go
+  member `DocumentRevision`).
+- **Precondition.** The option is named `expected_revision` on gRPC
+  (`UpdateRequest` tag 8, `UpdateGlobalRequest` tag 6, `optional int64`), MCP
+  (`update_*`, `unpublish_*`, `global_update_*`) and Lua (`update` /
+  `unpublish` on collections and globals); `_revision` on the multipart
+  surfaces (admin edit forms, `PATCH /api/upload/{slug}/{id}`). Absent means
+  an unconditional write. The check runs after the access gate, under the row
+  lock, as one compare-and-advance statement.
+- **Refusal.** A stale revision is `ServiceError::Conflict` carrying the
+  expected and current revisions: gRPC `ABORTED`, upload API `409`, MCP/Lua
+  errors whose message contains `Revision conflict`, and the admin conflict
+  re-render (unsaved values kept, current revision in the form, reload /
+  overwrite notice) — except an admin unpublish, which posts no field values
+  and is refused with a `409` toast asking for a reload instead.
 
 ## Explicitly NOT frozen (carve-outs recorded before the alpha.10 tag)
 

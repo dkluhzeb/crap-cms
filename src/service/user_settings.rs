@@ -16,12 +16,13 @@
 use serde_json::{Map, Value, from_str, json};
 use tracing::warn;
 
+use anyhow::Context as _;
+
 use crate::{
     core::default_label_locale,
-    db::{DbConnection, query},
+    db::{DbConnection, DbPool, query},
+    service::{ServiceError, commit_admitted},
 };
-
-use super::ServiceError;
 
 /// Where per-collection list preferences live.
 const COLLECTIONS_KEY: &str = "collections";
@@ -156,6 +157,37 @@ pub fn recipient_ui_locale(conn: &dyn DbConnection, user_id: &str) -> String {
         .unwrap_or_else(|| default_label_locale().to_string())
 }
 
+/// Change a user's settings: read the stored blob under a row lock, apply
+/// `edit`, write it back — in one write transaction. The one read-modify-write
+/// of the blob, so two concurrent saves of different settings (a column
+/// preference and the UI locale, say) both land instead of the later one
+/// writing back the blob it read before the other committed.
+///
+/// # Errors
+///
+/// Returns the backend error when no write connection is available or the
+/// read, write or commit fails.
+pub fn update_user_settings(
+    pool: &DbPool,
+    user_id: &str,
+    edit: impl FnOnce(&mut UserSettings),
+) -> Result<(), ServiceError> {
+    let mut conn = pool.write().context("Failed to get DB connection")?;
+    let tx = conn
+        .transaction_immediate()
+        .context("Failed to start settings transaction")?;
+
+    let stored = query::get_user_settings_locked(&tx, user_id)?;
+    let mut settings = UserSettings::parse(Some(stored.as_str()));
+
+    edit(&mut settings);
+
+    set_user_settings(&tx, user_id, &settings.to_json())?;
+
+    // A request already answered as timed out must not change anything.
+    commit_admitted(tx)
+}
+
 /// Save a user's settings JSON string (upsert).
 pub fn set_user_settings(
     conn: &dyn DbConnection,
@@ -169,7 +201,13 @@ pub fn set_user_settings(
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "sqlite")]
-    use crate::db::InMemoryConn;
+    use tempfile::TempDir;
+
+    #[cfg(feature = "sqlite")]
+    use crate::{
+        config::CrapConfig,
+        db::{InMemoryConn, pool::create_pool},
+    };
 
     use super::*;
 
@@ -210,6 +248,29 @@ mod tests {
             recipient_ui_locale(&unreadable, "u1"),
             default_label_locale()
         );
+    }
+
+    /// Each save changes only its own setting: the column preference and the
+    /// UI locale saved one after the other both survive.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn update_user_settings_keeps_the_other_settings() {
+        let dir = TempDir::new().unwrap();
+        let pool = create_pool(dir.path(), &CrapConfig::default()).unwrap();
+        pool.write()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE _crap_user_settings (user_id TEXT PRIMARY KEY, \
+                 settings TEXT NOT NULL DEFAULT '{}')",
+            )
+            .unwrap();
+
+        update_user_settings(&pool, "u1", |s| s.set_columns("posts", &cols(&["title"]))).unwrap();
+        update_user_settings(&pool, "u1", |s| s.set_ui_locale("de")).unwrap();
+
+        let settings = load_user_settings(&pool.get().unwrap(), "u1").unwrap();
+        assert_eq!(settings.columns("posts"), Some(cols(&["title"])));
+        assert_eq!(settings.ui_locale(), Some("de"));
     }
 
     fn cols(names: &[&str]) -> Vec<String> {

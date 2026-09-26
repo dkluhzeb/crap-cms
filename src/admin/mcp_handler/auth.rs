@@ -46,10 +46,12 @@ fn key_matches(request: &Request<Body>, expected_key: &McpApiKey) -> bool {
 
 /// Check the API key under the client's failed-attempt budget.
 ///
-/// A client whose failures reached the budget is refused (`429`) before its
-/// key is even compared, until the window passes. A failure counts against
-/// the client's rate-limit bucket (an IPv6 client per /64); a success clears
-/// it. Failures are logged at `warn` with the client address and whether an
+/// Every attempt is counted against the client's rate-limit bucket (an IPv6
+/// client per /64) in the same atomic step that checks the budget, so a burst
+/// of concurrent requests cannot all pass an under-limit check before any of
+/// them is recorded. A client over the budget is refused (`429`) before its
+/// key is even compared, until the window passes; a matching key clears the
+/// bucket. Failures are logged at `warn` with the client address and whether an
 /// `Authorization` header was sent — a brute-force signal that never logs the
 /// attempted key. The limiter fails closed, like every login limiter.
 fn guard_api_key(
@@ -60,7 +62,7 @@ fn guard_api_key(
 ) -> Result<(), Box<Response>> {
     let bucket = client.rate_limit_key();
 
-    if limiter.is_blocked(&bucket) {
+    if limiter.check_and_block(&bucket) {
         warn!(peer = %client, "MCP HTTP auth refused: too many failed attempts");
 
         return Err(Box::new(rpc_error(
@@ -74,8 +76,6 @@ fn guard_api_key(
 
         return Ok(());
     }
-
-    limiter.record_failure(&bucket);
 
     warn!(
         peer = %client,
@@ -117,7 +117,11 @@ pub(super) fn check_mcp_auth(
 
 #[cfg(test)]
 mod tests {
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::{
+        net::{IpAddr, Ipv4Addr},
+        sync::{Arc, Barrier},
+        thread,
+    };
 
     use super::*;
 
@@ -219,5 +223,44 @@ mod tests {
             guard_api_key(&limiter, &right, &key, &client(1)).is_ok(),
             "the earlier failures were cleared"
         );
+    }
+
+    /// Regression: the budget was checked and the failure recorded in two
+    /// steps, so concurrent wrong-key requests could all pass the check before
+    /// any of them was counted. Now the check and the count are one step: of a
+    /// simultaneous burst, at most the budget gets its key compared.
+    #[test]
+    fn a_concurrent_burst_compares_at_most_the_budget() {
+        const BUDGET: u32 = 3;
+        const BURST: usize = 16;
+
+        let limiter = Arc::new(LoginRateLimiter::new(BUDGET, 60));
+        let barrier = Arc::new(Barrier::new(BURST));
+
+        let workers: Vec<_> = (0..BURST)
+            .map(|_| {
+                let limiter = Arc::clone(&limiter);
+                let barrier = Arc::clone(&barrier);
+
+                thread::spawn(move || {
+                    let key = McpApiKey::from(KEY);
+                    let wrong = request_with_auth(Some("Bearer wrong"));
+
+                    barrier.wait();
+
+                    guard_api_key(&limiter, &wrong, &key, &client(1))
+                        .unwrap_err()
+                        .status()
+                })
+            })
+            .collect();
+
+        let compared = workers
+            .into_iter()
+            .map(|w| w.join().unwrap())
+            .filter(|status| *status != StatusCode::TOO_MANY_REQUESTS)
+            .count();
+
+        assert_eq!(compared, BUDGET as usize);
     }
 }

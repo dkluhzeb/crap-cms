@@ -1,17 +1,18 @@
 //! Junction tables for has-many relationship and upload fields.
 
-use anyhow::{Context as _, Result};
-use tracing::info;
+use anyhow::Result;
 
 use crate::config::LocaleConfig;
 use crate::core::FieldDefinition;
 use crate::db::DbConnection;
-use crate::db::migrate::helpers::column_specs::{ensure_locale_column, locale_column_definition};
-use crate::db::migrate::helpers::introspection::{get_table_columns, table_exists};
+use crate::db::migrate::helpers::introspection::table_exists;
 use crate::db::migrate::relationship_target::track_target;
 use crate::db::query::helpers::join_table;
 
-/// Sync a has-many relationship junction table.
+use super::junction_shape::{JunctionShape, create_junction_table, reconcile_junction_shape};
+
+/// Sync a has-many relationship junction table: create it, or bring the
+/// stored one to the shape the field wants (see [`reconcile_junction_shape`]).
 pub(super) fn sync_relationship_table(
     conn: &dyn DbConnection,
     collection_slug: &str,
@@ -26,33 +27,15 @@ pub(super) fn sync_relationship_table(
     };
 
     let table_name = join_table(collection_slug, full_name);
+    let shape = JunctionShape::new(
+        rc.is_polymorphic(),
+        has_locale_col.then_some(locale_config.default_locale.as_str()),
+    );
 
     if table_exists(conn, &table_name)? {
-        if has_locale_col {
-            ensure_locale_column(conn, &table_name, &locale_config.default_locale)?;
-        }
-
-        if rc.is_polymorphic() {
-            let cols = get_table_columns(conn, &table_name)?;
-
-            if !cols.contains("related_collection") {
-                rebuild_junction_table_for_polymorphic(
-                    conn,
-                    &table_name,
-                    collection_slug,
-                    has_locale_col.then_some(locale_config.default_locale.as_str()),
-                )?;
-            }
-        }
+        reconcile_junction_shape(conn, &table_name, collection_slug, &shape)?;
     } else {
-        create_junction_table(
-            conn,
-            &table_name,
-            collection_slug,
-            rc.is_polymorphic(),
-            has_locale_col,
-            locale_config,
-        )?;
+        create_junction_table(conn, &table_name, collection_slug, &shape)?;
     }
 
     // The rows hold bare ids; which collection they belong to is the
@@ -61,122 +44,13 @@ pub(super) fn sync_relationship_table(
     track_target(conn, &table_name, rc)
 }
 
-/// Create a new junction table for has-many relationships.
-fn create_junction_table(
-    conn: &dyn DbConnection,
-    table_name: &str,
-    collection_slug: &str,
-    is_polymorphic: bool,
-    has_locale_col: bool,
-    locale_config: &LocaleConfig,
-) -> Result<()> {
-    let poly_col = if is_polymorphic {
-        "related_collection TEXT NOT NULL DEFAULT '', "
-    } else {
-        ""
-    };
-    let poly_pk = if is_polymorphic {
-        ", related_collection"
-    } else {
-        ""
-    };
-
-    let sql = if has_locale_col {
-        format!(
-            "CREATE TABLE \"{}\" (\
-                parent_id TEXT NOT NULL REFERENCES \"{}\"(id) ON DELETE CASCADE, \
-                related_id TEXT NOT NULL, \
-                {}\
-                _order INTEGER NOT NULL DEFAULT 0, \
-                {}, \
-                PRIMARY KEY (parent_id, related_id{}, _locale)\
-            )",
-            table_name,
-            collection_slug,
-            poly_col,
-            locale_column_definition(&locale_config.default_locale),
-            poly_pk
-        )
-    } else {
-        format!(
-            "CREATE TABLE \"{table_name}\" (\
-                parent_id TEXT NOT NULL REFERENCES \"{collection_slug}\"(id) ON DELETE CASCADE, \
-                related_id TEXT NOT NULL, \
-                {poly_col}\
-                _order INTEGER NOT NULL DEFAULT 0, \
-                PRIMARY KEY (parent_id, related_id{poly_pk})\
-            )"
-        )
-    };
-
-    info!("Creating junction table: {}", table_name);
-    conn.execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to create junction table {table_name}"))?;
-
-    Ok(())
-}
-
-/// Rebuild a junction table to add `related_collection` column with correct
-/// PRIMARY KEY. `default_locale` is set when the table keeps rows per locale.
-fn rebuild_junction_table_for_polymorphic(
-    conn: &dyn DbConnection,
-    table_name: &str,
-    collection_slug: &str,
-    default_locale: Option<&str>,
-) -> Result<()> {
-    let temp = format!("_{table_name}_migrate");
-
-    conn.execute_batch_ddl(&format!(
-        "ALTER TABLE \"{table_name}\" RENAME TO \"{temp}\""
-    ))?;
-
-    let locale_col = default_locale.map_or_else(String::new, |locale| {
-        format!(", {}", locale_column_definition(locale))
-    });
-    let locale_pk = if default_locale.is_some() {
-        ", _locale"
-    } else {
-        ""
-    };
-
-    conn.execute_batch_ddl(&format!(
-        "CREATE TABLE \"{table_name}\" (\
-            parent_id TEXT NOT NULL REFERENCES \"{collection_slug}\"(id) ON DELETE CASCADE, \
-            related_id TEXT NOT NULL, \
-            related_collection TEXT NOT NULL DEFAULT '', \
-            _order INTEGER NOT NULL DEFAULT 0{locale_col}, \
-            PRIMARY KEY (parent_id, related_id, related_collection{locale_pk})\
-        )"
-    ))?;
-
-    if default_locale.is_some() {
-        conn.execute_batch(&format!(
-            "INSERT INTO \"{table_name}\" (parent_id, related_id, related_collection, _order, _locale) \
-             SELECT parent_id, related_id, '' AS related_collection, _order, _locale FROM \"{temp}\""
-        ))?;
-    } else {
-        conn.execute_batch(&format!(
-            "INSERT INTO \"{table_name}\" (parent_id, related_id, related_collection, _order) \
-             SELECT parent_id, related_id, '' AS related_collection, _order FROM \"{temp}\""
-        ))?;
-    }
-
-    conn.execute_batch_ddl(&format!("DROP TABLE \"{temp}\""))?;
-
-    info!(
-        "Rebuilt junction table {} for polymorphic upgrade (updated PRIMARY KEY)",
-        table_name
-    );
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::{FieldType, RelationshipConfig};
     use crate::db::DbValue;
     use crate::db::migrate::collection::{create_collection_table, test_helpers::*};
+    use crate::db::migrate::helpers::introspection::get_table_columns;
     use crate::db::migrate::helpers::join_tables::sync_join_tables;
 
     #[test]
@@ -475,7 +349,7 @@ mod tests {
 
     #[test]
     fn polymorphic_junction_rebuild_preserves_fk() {
-        // Regression: rebuild_junction_table_for_polymorphic dropped the
+        // Regression: the polymorphic junction rebuild dropped the
         // REFERENCES ... ON DELETE CASCADE constraint on parent_id.
         let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
@@ -508,7 +382,13 @@ mod tests {
         .unwrap();
 
         // Rebuild for polymorphic upgrade
-        rebuild_junction_table_for_polymorphic(&conn, "posts_tags", "posts", None).unwrap();
+        reconcile_junction_shape(
+            &conn,
+            "posts_tags",
+            "posts",
+            &JunctionShape::new(true, None),
+        )
+        .unwrap();
 
         // Verify columns
         let cols = get_table_columns(&conn, "posts_tags").unwrap();

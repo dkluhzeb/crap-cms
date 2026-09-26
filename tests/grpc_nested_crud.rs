@@ -675,6 +675,7 @@ async fn grpc_update_replaces_array_rows() {
             locale: None,
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -731,6 +732,7 @@ async fn grpc_update_by_row_id_preserves_omitted_subfield() {
             locale: None,
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -792,6 +794,7 @@ async fn grpc_update_replaces_blocks() {
             locale: None,
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -839,6 +842,7 @@ async fn grpc_update_group_subfield() {
             locale: None,
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();
@@ -1011,6 +1015,7 @@ async fn grpc_localized_array_crud() {
             locale: Some("de".to_string()),
             draft: None,
             unpublish: None,
+            expected_revision: None,
         }))
         .await
         .unwrap();

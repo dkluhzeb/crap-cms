@@ -27,8 +27,10 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use crap_cms::config::CrapConfig;
+use crap_cms::core::HookRef;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
+use crap_cms::db::query;
 use crap_cms_e2e::helpers::*;
 
 // ── show_when_visible_true_returns_visible ───────────────────────────────
@@ -103,6 +105,86 @@ async fn show_when_visible_false_returns_hidden() {
     );
 }
 
+// ── an_unreadable_checkbox_reads_as_absent_in_the_live_evaluation ────────
+//
+// Regression: the edit form renders no input for a field its viewer may not
+// read, so the render and the browser see such a checkbox as absent (`nil`).
+// The live endpoint parsed the browser's snapshot against every declared
+// field and read the missing checkbox as unchecked (`false`), so a condition
+// on it decided one way on the render and the other way live.
+
+#[tokio::test]
+async fn an_unreadable_checkbox_reads_as_absent_in_the_live_evaluation() {
+    let app = setup_with_condition_hook();
+    let user_id = create_test_user(&app, "condread@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "condread@test.com");
+    let id = seed_brief(&app);
+
+    let evaluate = |document_id: Option<&str>| {
+        json!({
+            "form_data": { "title": "Brief", "note": "" },
+            "conditions": { "note": "hooks.conditions.show_when_flag_absent" },
+            "document_id": document_id,
+        })
+        .to_string()
+    };
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/admin/collections/briefs/evaluate-conditions")
+                .header("Cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header("content-type", "application/json")
+                .body(Body::from(evaluate(Some(id.as_str()))))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed: Value = serde_json::from_str(&body_string(resp.into_body()).await).unwrap();
+    assert_eq!(
+        parsed["note"],
+        json!(true),
+        "the edit form rendered no `flagged` input, so it reads as absent: {parsed}"
+    );
+
+    // A create form renders the checkbox, so a missing one is unchecked.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/admin/collections/briefs/evaluate-conditions")
+                .header("Cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header("content-type", "application/json")
+                .body(Body::from(evaluate(None)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let parsed: Value = serde_json::from_str(&body_string(resp.into_body()).await).unwrap();
+    assert_eq!(parsed["note"], json!(false), "{parsed}");
+}
+
+/// A brief whose `flagged` box is stored checked.
+fn seed_brief(app: &TestApp) -> String {
+    let def = app.registry.get_collection("briefs").unwrap().clone();
+    let conn = app.pool.get().unwrap();
+    let data = [
+        ("title".to_string(), json!("Brief")),
+        ("flagged".to_string(), json!(true)),
+    ]
+    .into_iter()
+    .collect();
+
+    query::create(&conn, "briefs", &def, &data, None)
+        .unwrap()
+        .id
+        .to_string()
+}
+
 // ── nested condition inside a group evaluates like a top-level one ───────
 
 #[tokio::test]
@@ -114,11 +196,14 @@ async fn nested_group_condition_is_evaluated() {
     // The nested field `venue` carries the same condition; evaluate-conditions
     // resolves its OWN configured ref server-side (collect_condition_refs
     // recurses into the group), and apply_display_conditions applies it on the
-    // initial render the same way.
+    // initial render the same way. The browser sends the field by the form
+    // name its wrapper carries (`details__venue`) — the bare `venue` used to
+    // be the key, so the real client's request never found the condition and
+    // the field always showed.
     for (online, expected) in [(true, true), (false, false)] {
         let body = json!({
             "form_data": { "online": online },
-            "conditions": { "venue": "hooks.conditions.show_when_online" }
+            "conditions": { "details__venue": "hooks.conditions.show_when_online" }
         })
         .to_string();
 
@@ -138,7 +223,7 @@ async fn nested_group_condition_is_evaluated() {
         assert_eq!(resp.status(), StatusCode::OK);
         let parsed: Value = serde_json::from_str(&body_string(resp.into_body()).await).unwrap();
         assert_eq!(
-            parsed["venue"],
+            parsed["details__venue"],
             json!(expected),
             "nested venue condition must evaluate (online={online})"
         );
@@ -306,6 +391,28 @@ end
 ",
     )
     .expect("write hook file");
+    fs::write(
+        hooks_dir.join("show_when_flag_absent.lua"),
+        r"
+return function(ctx)
+    return ctx.flagged == nil
+end
+",
+    )
+    .expect("write hook file");
+
+    // access/never.lua — a field read rule no viewer passes.
+    let access_dir = tmp.path().join("access");
+    fs::create_dir_all(&access_dir).expect("mkdir access");
+    fs::write(
+        access_dir.join("never.lua"),
+        r"
+return function(_context)
+    return false
+end
+",
+    )
+    .expect("write access file");
 
     let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
@@ -314,7 +421,12 @@ end
     config.admin.dev_mode = true;
 
     setup_app_at(
-        vec![make_events_def(), make_workshops_def(), make_users_def()],
+        vec![
+            make_events_def(),
+            make_workshops_def(),
+            make_briefs_def(),
+            make_users_def(),
+        ],
         vec![],
         config,
         tmp,
@@ -354,6 +466,29 @@ fn make_events_def() -> CollectionDefinition {
                     )
                     .build(),
             ])
+            .build(),
+    ];
+    def
+}
+
+/// A `flagged` checkbox no viewer may read, and a `note` shown only while
+/// `flagged` is absent from the condition data.
+fn make_briefs_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("briefs");
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text).build(),
+        FieldDefinition::builder("flagged", FieldType::Checkbox)
+            .access(FieldAccess {
+                read: Some(HookRef::new("access.never")),
+                ..Default::default()
+            })
+            .build(),
+        FieldDefinition::builder("note", FieldType::Text)
+            .admin(
+                FieldAdmin::builder()
+                    .condition("hooks.conditions.show_when_flag_absent")
+                    .build(),
+            )
             .build(),
     ];
     def

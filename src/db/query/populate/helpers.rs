@@ -412,10 +412,10 @@ mod tests {
         let conn = pool.get().unwrap();
 
         conn.execute_batch(
-            "CREATE TABLE tags (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
+            "CREATE TABLE tags (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, name TEXT, created_at TEXT, updated_at TEXT);
              INSERT INTO tags VALUES
-               ('t1', 'a', '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z'),
-               ('t2', 'b', '2026-01-03T00:00:00.000Z', NULL);",
+               ('t1', 0, 'a', '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z'),
+               ('t2', 0, 'b', '2026-01-03T00:00:00.000Z', NULL);",
         )
         .unwrap();
 

@@ -44,7 +44,8 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, Function, Lua, Result as LuaResult, Value};
 
 use crate::{
-    db::{DbConnection, DbPool, InPlaceTransaction},
+    core::{admit_request_commit, request_deadline},
+    db::{DbConnection, DbPool, InPlaceTransaction, StatementDeadlineScope},
     hooks::{
         lifecycle::{PoolContext, TxContext, check_execution_deadline},
         lua_api::crud::{TxSlot, ensure_writable, get_tx_conn, open_lazy_tx_to_write, run_step},
@@ -94,6 +95,9 @@ fn scoped_pool(lua: &Lua, label: &str) -> LuaResult<DbPool> {
 /// again right before `COMMIT`: an operation still in flight when the
 /// deadline passes — one blocked on the database lock, say — is rolled back
 /// instead of committing after the job was already reported as timed out.
+/// A custom route's request deadline is enforced the same way: `work`'s
+/// statements are bounded by it, and its commit gate (see
+/// `core::commit_gate`) must admit the `COMMIT`.
 ///
 /// # Errors
 ///
@@ -123,18 +127,26 @@ pub(crate) fn run_scoped_tx<R>(
     lua.set_app_data(TxContext::new(tx.conn()));
     let call_result = {
         let _slot = TxSlot(lua);
+        let _bound = StatementDeadlineScope::bound_to(request_deadline());
 
         work(tx.conn())
     };
 
-    // The last point at which a job past its deadline can still be stopped
-    // without committing late.
-    let call_result = call_result.and_then(|value| check_execution_deadline(lua).map(|()| value));
+    // The last point at which a job past its deadline — or a request already
+    // answered as timed out — can still be stopped without committing late.
+    let call_result = call_result
+        .and_then(|value| check_execution_deadline(lua).map(|()| value))
+        .and_then(|value| admit_commit(label).map(|()| value));
     let commit = call_result.is_ok();
 
     scope.settle(tx, call_result, commit, |e| {
         RuntimeError(format!("{label}: commit: {e:#}"))
     })
+}
+
+/// Admit the scope's commit on the request's commit gate, if it serves one.
+fn admit_commit(label: &str) -> LuaResult<()> {
+    admit_request_commit().map_err(|e| RuntimeError(format!("{label}: {e}")))
 }
 
 /// Wrap a Lua closure in a single IMMEDIATE transaction.

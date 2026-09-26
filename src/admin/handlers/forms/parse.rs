@@ -8,7 +8,7 @@ use std::{
 
 use axum::{
     extract::{Form, FromRequest, Multipart, Request, multipart::Field},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode, header::CONTENT_TYPE},
 };
 use serde_json::json;
 
@@ -145,13 +145,29 @@ pub(crate) async fn parse_multipart_form(
     Ok((collapse_duplicates(pairs), file))
 }
 
-/// Parse form data — multipart for upload collections, regular form otherwise.
+/// Whether a request body is multipart form data.
+fn is_multipart(headers: &HeaderMap) -> bool {
+    headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .trim_start()
+                .to_ascii_lowercase()
+                .starts_with("multipart/form-data")
+        })
+}
+
+/// Parse form data — multipart for an upload collection's form (the one that
+/// can carry a file), a regular form otherwise. An upload collection's action
+/// that posts no fields (the edit form's Unpublish) arrives URL-encoded and is
+/// read as such.
 pub(crate) async fn parse_form(
     request: Request,
     state: &AdminState,
     def: &CollectionDefinition,
 ) -> Result<ParsedForm, FormParseError> {
-    if def.is_upload_collection() {
+    if def.is_upload_collection() && is_multipart(request.headers()) {
         return parse_multipart_form(request, state).await;
     }
 
@@ -167,6 +183,20 @@ pub(crate) async fn parse_form(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_multipart_body_is_told_by_its_content_type() {
+        let with = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(CONTENT_TYPE, value.parse().unwrap());
+            headers
+        };
+
+        assert!(is_multipart(&with("multipart/form-data; boundary=x")));
+        assert!(is_multipart(&with("Multipart/Form-Data; boundary=x")));
+        assert!(!is_multipart(&with("application/x-www-form-urlencoded")));
+        assert!(!is_multipart(&HeaderMap::new()));
+    }
 
     #[test]
     fn form_parse_error_reports_an_oversized_body() {

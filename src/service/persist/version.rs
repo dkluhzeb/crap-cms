@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::{
     core::{Document, DocumentFields, field::FieldDefinition, reject_nul_characters},
-    db::{LocaleContext, ops, query},
+    db::{LocaleContext, ops, query, query::REVISION_COLUMN},
     service::{ServiceContext, versions},
 };
 
@@ -55,7 +55,7 @@ pub fn persist_draft_version(
 }
 
 /// The document a draft save reports: the stored snapshot (the draft content),
-/// stamped `_status = "draft"`.
+/// stamped `_status = "draft"` and the row's `_revision`.
 ///
 /// Shared with the globals draft path so both report the same shape.
 ///
@@ -89,6 +89,14 @@ pub fn draft_document(args: &DraftDocumentArgs<'_>) -> Result<Document> {
     // see drafts — even on a published document.
     doc.fields
         .insert("_status".to_string(), Value::String("draft".to_string()));
+
+    // The revision is the row's, never the snapshot's: the draft save moved it
+    // forward, and a caller chaining its next write on this response must send
+    // the value it has now.
+    if let Some(revision) = existing.fields.get(REVISION_COLUMN) {
+        doc.fields
+            .insert(REVISION_COLUMN.to_string(), revision.clone());
+    }
 
     Ok(doc)
 }

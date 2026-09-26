@@ -24,6 +24,13 @@ crap.fields.select({
 
 Omitted properties default to allowed (no restriction).
 
+Field access belongs on a field that holds a value — a scalar, relationship,
+group, array or blocks field. A layout wrapper (`row`, `collapsible`, `tabs`)
+holds no value and its children are read and written as if the wrapper were
+not there, so `access` (and `hidden`) on a wrapper is a **load error**: put the
+rule on each child field, or wrap the children in a [group](../fields/group.md)
+and put the rule on the group.
+
 ## How It Works
 
 ### Write Access (create/update)
@@ -33,6 +40,20 @@ Before a write operation, denied fields are **stripped from the input data**. Th
 - On create: denied fields get their default value (or NULL)
 - On update: denied fields keep their current value
 - On **version restore**: denied fields are stripped from the snapshot too, so a restore keeps the live value of any field the caller may not write (it can't be used as a side channel to overwrite a write-locked field)
+
+### A write never changes a field its writer cannot read
+
+`read` and `update` are separate rules, so a user may be allowed to update a field they may not read. Such a user would be writing blind — an edit form cannot show them the value, so whatever it submits for the field (an empty input, an unchecked box, an empty list) would replace a value they never saw. So on **update** (a save, a draft save, a publish, a bulk update, a global update, a version restore, and the validate dry-run alike), every field the writer may **not read** is also kept as it is, exactly like a write-denied field:
+
+- The `read` rule is judged against what the write replaces — `ctx.data` is that level (the row, for a field inside an array/blocks row), `ctx.document` the whole document — in the write's locale. For a save that is the stored document; for a **draft save** it is the pending draft (the content the draft edit form shows), or the stored document when no draft is pending. A field with no stored value is judged too, so it cannot be filled in blind either.
+- It applies at every depth: a group sub-field, a field inside an array/blocks row (matched to its stored row by the row's `id`), and inside a group within a row. A row the write adds — or a block row whose type changed — has nothing stored and is judged against an **empty row**, so the writer cannot fill into a new row what it could not read on an empty one. A list nested inside a row has no row identity, so one holding a value the writer cannot read is kept as stored as a whole.
+- A checkbox the writer cannot read keeps its stored state (an omitted checkbox would otherwise be stored as unchecked).
+- A **publish** makes the pending draft live in every locale, and a **version restore** writes every locale of its snapshot: each locale's values are judged against the document as stored in that locale (`ctx.locale` set to it), a shared field once at the write's own locale, and a value the rule hides keeps its stored value there — neither cleared nor overwritten. A restore is partial for a restorer who may not read every field.
+- To let a role change a field, let it read the field too.
+
+The admin edit form renders no input for a field its viewer may not read, at any depth. A field inside array/blocks rows is judged **row by row**, as the read strip judges it (`ctx.data` = the row): a data-aware rule that hides it in some rows renders it — and saves it — in the rows the viewer may read, renders no input in the others (whose values the save leaves untouched), and the form's new-row template offers it only where an empty row allows it. A form re-rendered after a failed save judges each row by its `id` the same way.
+
+Create is unaffected: a new document has no stored value to protect.
 
 > **This is silent.** Stripping happens before validation and before any hook sees the data — the client gets no error or warning that fields were dropped, and the returned document reflects the stored state. If a client reports "I set field X but it didn't save", check whether field-level access is denying their role for that field.
 
@@ -60,7 +81,7 @@ Field-access functions receive the **document data**, not just the user — the 
 | `ctx.user` | The requesting user (or `nil` when anonymous). |
 | `ctx.collection` | The collection (or global) slug the field belongs to — lets a field-access function shared across collections branch on which one it is running for. |
 | `ctx.operation` | `"read"`, `"create"`, or `"update"`. |
-| `ctx.locale` | The content locale being accessed when localization is enabled, else `nil`. It is threaded on the standard collection/global read and write paths; unpublish, undelete and the user document returned by Login and Me use the default locale; live events leave it `nil`. When a pending draft is published or a version restored, the snapshot's shared fields are judged once at that write's locale and each **localized** field once per configured locale, with `ctx.locale` set to the locale under judgment — a rule that denies one locale keeps only that locale's column at its stored value. Treat it as an optional hint — don't make a security decision depend on it being present. |
+| `ctx.locale` | The content locale being accessed when localization is enabled, else `nil`. It is threaded on the standard collection/global read and write paths; unpublish, undelete and the user document returned by Login and Me use the default locale; live events leave it `nil`. When a pending draft is published or a version restored, the snapshot's shared fields are judged once at that write's locale and each **localized** field once per configured locale, with `ctx.locale` set to the locale under judgment — a rule that denies one locale keeps only that locale's column at its stored value. A read with `locale = "all"` judges a localized field at the document level — top-level or inside a row / collapsible / tabs wrapper — once per locale and returns only the locales its rule allows; a localized field inside a group, array or blocks field is judged once, at the default locale. Treat it as an optional hint — don't make a security decision depend on it being present. |
 
 A field the rule denies is left exactly as stored — for a checkbox too, which the row write would otherwise read as "absent = unchecked".
 

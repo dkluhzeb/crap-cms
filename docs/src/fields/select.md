@@ -61,7 +61,14 @@ unchanged passes validation (on its own, or as one element of a `has_many`
 list). This holds at every depth — a top-level field, a group, an array or
 blocks row, and anything nested inside a row — and for a select attr of a custom
 rich text node. The document's pending draft counts as held too, for a
-collection with drafts. A value the document does not already hold is refused
+collection with drafts. A value counts as held only where the writer may read
+it: in a field its `access.read` rule (or `hidden`) keeps from the writer the
+stored value holds nothing, and the pending draft holds nothing for a writer
+without the collection's draft view (`access.draft`, else `access.update`) —
+otherwise a write would confirm a guess at a value its writer cannot see. A
+write with access overridden (`override_access`, a system write) leans on every
+stored value, `hidden` fields included. A
+value the document does not already hold is refused
 (`validation.invalid_option` / `validation.invalid_option_value`), so a removed
 option can never be newly chosen, and a create has nothing held.
 

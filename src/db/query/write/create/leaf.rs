@@ -74,6 +74,7 @@ mod tests {
     fn defaults_ddl() -> &'static str {
         "CREATE TABLE posts (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             title TEXT,
             rank REAL,
             kind TEXT,
@@ -137,6 +138,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT DEFAULT 'stale',
                 status TEXT,
                 created_at TEXT,
@@ -180,6 +182,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 status TEXT,
                 published INTEGER,
@@ -209,6 +212,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 status TEXT,
                 featured INTEGER,
@@ -240,6 +244,7 @@ mod tests {
         let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 settings__featured INTEGER DEFAULT 0,
                 created_at TEXT,
                 updated_at TEXT

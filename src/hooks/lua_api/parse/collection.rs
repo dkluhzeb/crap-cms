@@ -141,10 +141,11 @@ fn parse_admin_config(config: &Table) -> Result<AdminConfig> {
 
 /// Ensure the auth identity field is sound: if auth is enabled and no email
 /// field exists, inject one at index 0; if the user declared their own, it
-/// must be `type = "email"` and `unique = true`. A `text`-typed email would
-/// dodge the case-insensitive unique check (scoped to the Email field type),
-/// and a non-unique one allows duplicate accounts — both collide as one
-/// account at login, which compares addresses in their lowercased stored form.
+/// must be `type = "email"`, `unique = true` and not `localized`. A
+/// `text`-typed email is stored as typed rather than in the canonical email
+/// form the login lookup and the unique check compare, and a non-unique one
+/// allows duplicate accounts — both collide as one account at login. A
+/// localized one is stored per locale while the login looks the one address up.
 fn ensure_auth_email_field(auth: Option<&Auth>, fields: &mut Vec<FieldDefinition>) -> Result<()> {
     let Some(a) = auth else { return Ok(()) };
     if !a.enabled {
@@ -155,12 +156,18 @@ fn ensure_auth_email_field(auth: Option<&Auth>, fields: &mut Vec<FieldDefinition
         if f.field_type != FieldType::Email {
             bail!(
                 "Auth collection field 'email' must have type 'email' (got '{}') — the \
-                 case-insensitive uniqueness and login lookup depend on it",
+                 canonical-form uniqueness and login lookup depend on it",
                 f.field_type.as_str()
             );
         }
         if !f.unique {
             bail!("Auth collection field 'email' must be unique = true — it is the login identity");
+        }
+        if f.localized {
+            bail!(
+                "Auth collection field 'email' must not be localized — it is the one address \
+                 an account logs in with"
+            );
         }
         return Ok(());
     }
@@ -343,9 +350,9 @@ mod tests {
     }
 
     /// Regression: a user-declared `email` field of type `text` on an auth
-    /// collection dodged the case-insensitive unique check (scoped to the
-    /// Email field *type*), so `Victim@x.com` and `victim@x.com` could both
-    /// register and then collide as one account at login.
+    /// collection is stored as typed, not in the canonical email form the
+    /// unique check and the login compare, so `Victim@x.com` and
+    /// `victim@x.com` could both register and then collide as one account.
     #[test]
     fn auth_collection_rejects_non_email_typed_email_field() {
         let lua = Lua::new();
@@ -373,6 +380,23 @@ mod tests {
             err.contains("must be unique"),
             "expected unique rejection, got: {err}"
         );
+    }
+
+    /// Regression: a localized `email` is stored in one column per locale,
+    /// while the login looks the address up in the one `email` column — every
+    /// login failed with a database error. It is refused at load.
+    #[test]
+    fn auth_collection_rejects_localized_email_field() {
+        let lua = Lua::new();
+        let config = auth_config_with_email_field(&lua, "email", true);
+        let fields: Table = config.get("fields").unwrap();
+        let email: Table = fields.get(1).unwrap();
+        email.set("localized", true).unwrap();
+
+        let err = parse_collection_definition(&lua, "users", &config)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("must not be localized"), "{err}");
     }
 
     /// A correctly declared email field parses fine (no false positive).

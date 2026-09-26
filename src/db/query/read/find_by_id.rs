@@ -7,10 +7,9 @@ use crate::{
     db::{
         DbConnection, DbValue, LocaleContext,
         query::{
-            get_column_names, get_locale_select_columns_full,
-            helpers::{SOFT_DELETE_ACTIVE, placeholder_list, quote_ident},
+            helpers::{SOFT_DELETE_ACTIVE, placeholder_list},
             hydrate_document, hydrate_documents,
-            read::decode_row,
+            read::{decode_row, select::document_select_named},
         },
     },
 };
@@ -138,21 +137,7 @@ pub(crate) fn select_columns(
     def: &CollectionDefinition,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Vec<String>> {
-    let (exprs, _) = match locale_ctx {
-        Some(ctx) if ctx.config.is_enabled() => get_locale_select_columns_full(
-            &def.fields,
-            def.timestamps,
-            def.soft_delete,
-            def.has_drafts(),
-            ctx,
-        )?,
-        _ => {
-            let names = get_column_names(def);
-            let quoted = names.iter().map(|n| quote_ident(n)).collect();
-            (quoted, names)
-        }
-    };
-    Ok(exprs)
+    Ok(document_select_named(def, locale_ctx)?.0)
 }
 
 /// Find a single document by ID without hydration (raw column data only).
@@ -233,6 +218,7 @@ mod tests {
             .execute_batch(
                 "CREATE TABLE posts (
                     id TEXT PRIMARY KEY,
+                    _revision INTEGER NOT NULL DEFAULT 0,
                     title TEXT,
                     status TEXT,
                     created_at TEXT,
@@ -331,6 +317,7 @@ mod tests {
             .execute_batch(
                 "CREATE TABLE articles (
                     id TEXT PRIMARY KEY,
+                    _revision INTEGER NOT NULL DEFAULT 0,
                     title TEXT,
                     status TEXT,
                     _deleted_at TEXT,

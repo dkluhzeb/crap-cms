@@ -414,8 +414,9 @@ fn surfaces_do_not_bypass_the_service_layer() {
 /// Access-changing write ops: editing/restoring/deleting one of these can change
 /// a user's access, so the handler must let the service tear down that user's
 /// live-update streams. `create` is excluded (a new document has no pre-existing
-/// stream to invalidate). Also includes the auth state-change ops that revoke a
-/// privilege and call `publish_user_invalidation` directly (`consume_reset_token`).
+/// stream to invalidate). The password reset is not listed: its service op
+/// (`reset_password_with_token`) takes the whole `AppInfra` and publishes the
+/// invalidation itself, so a handler has no transport to forget.
 /// `lock_user`/`mark_unverified` are passed as fn-pointers (via
 /// `account_action_blocking`) so they don't textually match a `(` form here —
 /// they're guarded structurally by `auth_revoking_handlers_request_invalidation`
@@ -429,7 +430,6 @@ const INVALIDATION_WRITE_OPS: &[&str] = &[
     "restore_collection_version(",
     "delete_document(",
     "delete_many(",
-    "consume_reset_token(",
     // Operation-core bodies — post-migration, codecs invoke these instead of
     // the service fns; without them this guard matched nothing and was
     // vacuous. (`op::run`/`run_blocking` dispatchers attach infra themselves,
@@ -625,7 +625,7 @@ fn auth_invalidation_is_derived_from_the_action() {
 const REVOCATION_CHOKEPOINTS: &[&str] = &[
     "bump_session_version(",
     "perform_account_action(",
-    "consume_reset_token(",
+    "reset_password_with_token(",
 ];
 
 /// Source markers that identify a handler which ends a session, locks or
@@ -636,7 +636,7 @@ const REVOKING_MARKERS: &[&str] = &[
     "AccountAction::",
     "perform_account_action(",
     "LockUpdate::",
-    "consume_reset_token(",
+    "reset_password_with_token(",
     // The bare account primitives: a handler calling one of these directly
     // has skipped the authorizing chokepoint.
     "lock_user(",

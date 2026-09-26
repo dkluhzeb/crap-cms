@@ -66,6 +66,8 @@ mod orchestrate;
 mod persist;
 mod publish;
 pub(crate) mod read;
+mod reported_view;
+mod request_commit;
 mod types;
 pub mod upload;
 pub(crate) mod user_settings;
@@ -73,12 +75,12 @@ pub(crate) mod versions;
 pub(crate) mod write;
 
 pub(crate) use access::{
-    ReadAccessCtx, requested_views, resolve_trash_scope, resolve_view_scope,
+    ReadAccessCtx, check_view_by, requested_views, resolve_trash_scope, resolve_view_scope,
     resolve_visibility_filter,
 };
 pub use app_infra::{AppInfra, AppInfraBuilder, StandaloneInfra};
 pub use context::{Def, ServiceContext};
-pub use error::ServiceError;
+pub use error::{RevisionConflict, ServiceError};
 pub(crate) use types::{AfterChangeInput, EventRow, Gated, RowBefore};
 pub use types::{
     CountDocumentsInput, DeferredEffect, DeferredQueue, EffectOutcome, EmailContext, EventQueue,
@@ -116,7 +118,10 @@ pub(crate) use helpers::{
 };
 pub use hooks::{
     FieldReadStrip, LuaReadHooks, LuaWriteHooks, ReadHooks, ReadStripArgs, RunnerReadHooks,
-    RunnerWriteHooks, SnapshotLocales, WriteHooks,
+    RunnerWriteHooks, SnapshotLocales, SnapshotReadKeep, StoredByLocale, UpdateStored, WriteHooks,
+};
+pub(crate) use hooks::{
+    RowSchema, TemplateRows, is_template_row, mark_absent, update_strip_needs_stored,
 };
 pub(crate) use orchestrate::run_pool_write;
 pub(crate) use persist::persist_bulk_update;
@@ -128,7 +133,11 @@ pub use read::{
     unreadable_query_paths, validate_access_constraint_locales, validate_access_constraints,
     validate_user_filters,
 };
-pub(crate) use read::{join_child_readable, reject_unreadable_filter_fields, unpublished_global};
+pub(crate) use read::{
+    join_child_readable, join_children_readable, reject_unreadable_filter_fields,
+    unpublished_global,
+};
+pub(crate) use request_commit::{admit_commit, commit_admitted};
 pub(crate) use versions::{
     find_stored_version, read_version_snapshot, require_unpublish_capability,
     unpublish_with_snapshot,
@@ -139,14 +148,15 @@ pub use versions::{
 #[cfg(test)]
 pub(crate) use write::update_document_in_conn;
 pub(crate) use write::{
-    DeleteEvent, PendingDraft, TrashedDoc, TrashedPurge, admit_create_input,
+    Admission, DeleteEvent, TrashedDoc, TrashedPurge, admit_create_input,
     admit_global_update_input, admit_update_input, check_create_access, check_update_access,
-    create_document_gated, delete_document_in_conn, owned_file_keys, purge_document,
-    read_delete_event, reject_create_filter, stored_fields_for_update_rules, update_document_gated,
-    update_many_single_in_conn, warn_orphaned_files,
+    create_document_gated, delete_document_in_conn, draft_save_base, owned_file_keys,
+    purge_document, read_delete_event, reject_create_filter, stored_fields_for_update_rules,
+    update_document_gated, update_many_single_in_conn, warn_orphaned_files,
 };
 pub use write::{
-    PurgeEvents, ValidateContext, create_document_in_conn, validate_document, validate_outcome,
+    NonObjectGroups, PurgeEvents, ValidateContext, create_document_in_conn, validate_document,
+    validate_outcome,
 };
 
 #[cfg(all(test, feature = "sqlite"))]
@@ -170,6 +180,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 _status TEXT DEFAULT 'published',
                 created_at TEXT,
@@ -258,6 +269,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE media (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 filename TEXT NOT NULL,
                 mime_type TEXT,
                 filesize REAL,

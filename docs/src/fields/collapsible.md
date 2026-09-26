@@ -27,6 +27,8 @@ crap.fields.collapsible({
 })
 ```
 
+A collapsible field accepts only `name`, `admin` and `fields`. Keys that describe a stored value — `access`, `hidden`, `hooks`, `required`, `localized`, `validate`, … — are a load error on a layout wrapper; set them on the child fields or use a [Group](group.md). See [Accepted keys](overview.md#accepted-keys).
+
 ## API Representation
 
 In API responses, collapsible sub-fields appear as flat top-level fields (not nested):

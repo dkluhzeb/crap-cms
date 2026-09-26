@@ -9,6 +9,13 @@ pub struct OutgoingRef {
     pub(super) target_id: String,
 }
 
+impl OutgoingRef {
+    /// The referenced document: its collection and id.
+    pub(super) fn target(&self) -> (&str, &str) {
+        (&self.target_collection, &self.target_id)
+    }
+}
+
 /// Parse a reference value string and push an `OutgoingRef` if valid.
 ///
 /// For polymorphic refs, expects `"collection/id"` format.

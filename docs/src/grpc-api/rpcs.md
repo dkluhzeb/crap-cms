@@ -267,6 +267,7 @@ message UpdateRequest {
   optional bool draft = 5;              // true = version-only save (main table unchanged)
   optional bool unpublish = 6;          // true = set status to draft
   optional bool events = 7;             // default: true. false = quiet write (no live-update event)
+  optional int64 expected_revision = 8; // precondition: the `_revision` you read (ABORTED when stale)
 }
 
 message UpdateResponse {
@@ -281,6 +282,12 @@ grpcurl -plaintext -d '{
     "data": { "title": "Updated Title", "status": "published" }
 }' localhost:50051 crap.ContentAPI/Update
 ```
+
+With `expected_revision` set to the `_revision` from the document you read,
+the update is refused with `ABORTED` — and nothing is written — when anyone
+wrote the document in between; re-read and retry, or resend with the current
+revision to overwrite. See
+[Concurrent Editing](../collections/concurrent-editing.md).
 
 ## Delete
 
@@ -463,6 +470,7 @@ message UpdateGlobalRequest {
   optional string locale = 3;           // locale code for localized fields
   optional bool events = 4;             // default: true. false = quiet write (no live-update event)
   optional bool draft = 5;              // default: false. true = save as unpublished draft (drafts-enabled globals)
+  optional int64 expected_revision = 6; // precondition: the `_revision` you read (ABORTED when stale)
 }
 
 message UpdateGlobalResponse {
@@ -606,9 +614,9 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/ResetPassword
 ```
 
-Tokens are single-use and expire after `reset_token_expiry` seconds (default: 3600 = 1 hour, configurable in `[auth]`).
+Tokens are single-use and expire after `reset_token_expiry` seconds (default: 3600 = 1 hour, configurable in `[auth]`). The reset is one transaction, committed only when it succeeds: a refused attempt (unknown or expired token, locked account) changes nothing — the same operation serves the admin reset page.
 
-**Errors:** `RESOURCE_EXHAUSTED` when the caller's IP is over the reset-token rate limit (`max_ip_login_attempts` attempts within `forgot_password_window_seconds`). Every attempt with a valid-policy password counts.
+**Errors:** `INVALID_ARGUMENT` when the new password violates `[auth.password_policy]`; `UNAUTHENTICATED` for an unknown or expired token (the message says which); `RESOURCE_EXHAUSTED` when the caller's IP is over the reset-token rate limit (`max_ip_login_attempts` attempts within `forgot_password_window_seconds`). Every attempt with a valid-policy password counts.
 
 ## VerifyEmail
 

@@ -210,7 +210,8 @@ pub fn service_error_to_response(err: &ServiceError) -> Response {
         ServiceError::UniqueViolation(_)
         | ServiceError::ForeignKeyViolation(_)
         | ServiceError::Referenced { .. }
-        | ServiceError::LimitExceeded(_) => (StatusCode::CONFLICT, err.to_string()),
+        | ServiceError::LimitExceeded(_)
+        | ServiceError::Conflict(_) => (StatusCode::CONFLICT, err.to_string()),
         ServiceError::AccountLocked
         | ServiceError::EmailNotVerified
         | ServiceError::InvalidCredentials

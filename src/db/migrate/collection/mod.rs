@@ -10,9 +10,10 @@ mod sync;
 mod system_columns;
 
 pub(super) use create::append_default_value_for;
-pub(super) use indexes::{compound_index_columns, managed_index_names};
+pub(super) use indexes::{compound_index_columns, create_indexes, managed_index_names};
 pub(super) use rebuild::PendingConstraints;
 pub(super) use sync::sync_collection_table;
+pub(super) use system_columns::REVISION_COLUMN;
 
 #[cfg(test)]
 pub(super) use create::create_collection_table;

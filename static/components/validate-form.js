@@ -11,10 +11,19 @@
  * Side effects on validation failure:
  *  - `<p class="form__error" data-validate-error>` injected next to
  *    the offending field (and the row marker on its array container).
+ *  - The first error is brought into view: its tab is switched to and its
+ *    collapsed groups, collapsibles and rows are expanded; every tab holding
+ *    an error shows its error count.
  *  - Richtext fields receive their per-node errors via
  *    `crap-richtext.markNodeErrors()` so the editor can highlight the
  *    bad atoms in place.
- *  - A red toast summarises that validation failed.
+ *  - A red toast summarises that validation failed — whenever there is an
+ *    error, and naming every error the form has no visible field for (a
+ *    field the form does not render, or one hidden by its display
+ *    condition), so a refused save is never silent.
+ *
+ * On load it also brings the first error the server re-render drew into
+ * view, the same way.
  *
  * @example
  * <crap-validate-form validate-url="/admin/collections/media/validate">
@@ -28,6 +37,7 @@
 
 import { h } from './_internal/h.js';
 import { t } from './_internal/i18n.js';
+import { isConditionHidden, revealField, tabButtonOf } from './_internal/reveal.js';
 import { csrfHeaders } from './_internal/util/csrf.js';
 import { toast } from './_internal/util/toast.js';
 
@@ -86,6 +96,11 @@ class CrapValidateForm extends HTMLElement {
       }
     };
     this.addEventListener('click', this._onSubmitterClick, true);
+
+    // A server re-render may have drawn an error inside an inactive tab or a
+    // collapsed group — bring it into view like a client-side error.
+    const first = this.querySelector('[data-field-name] > .form__error');
+    if (first?.parentElement) revealField(first.parentElement);
   }
 
   disconnectedCallback() {
@@ -276,11 +291,49 @@ class CrapValidateForm extends HTMLElement {
     this._dispatchRichtextErrors(errors, nodeAttrErrors);
     this._mergeNodeAttrFallback(directErrors, nodeAttrErrors);
 
-    let count = 0;
+    /** @type {string[]} */
+    const unshown = [];
+    /** @type {Element[]} */
+    const shown = [];
     for (const [field, message] of Object.entries(directErrors)) {
-      if (this._renderFieldError(field, message)) count++;
+      const wrapper = this._renderFieldError(field, message);
+      if (wrapper && !isConditionHidden(wrapper)) shown.push(wrapper);
+      else unshown.push(`${field}: ${message}`);
     }
-    if (count > 0) toast({ message: t('validation.error_summary'), type: 'error' });
+
+    this._markTabErrors(shown);
+    if (shown[0]) revealField(shown[0]);
+
+    const summary = t('validation.error_summary');
+    const message = unshown.length > 0 ? `${summary} ${unshown.join('; ')}` : summary;
+    toast({ message, type: 'error' });
+  }
+
+  /**
+   * Show each tab's count of the drawn errors on its tab button, at every
+   * nesting level.
+   *
+   * @param {Element[]} wrappers
+   */
+  _markTabErrors(wrappers) {
+    /** @type {Map<HTMLElement, number>} */
+    const counts = new Map();
+    for (const wrapper of wrappers) {
+      for (let panel = wrapper.closest('.form__tabs-panel'); panel; ) {
+        const button = tabButtonOf(panel);
+        if (button) counts.set(button, (counts.get(button) ?? 0) + 1);
+        panel = panel.parentElement?.closest('.form__tabs-panel') ?? null;
+      }
+    }
+
+    for (const [button, count] of counts) {
+      let badge = button.querySelector('.form__tabs-tab-error');
+      if (!badge) {
+        badge = h('span', { class: 'form__tabs-tab-error', 'data-validate-error': true });
+        button.append(badge);
+      }
+      badge.textContent = String(count);
+    }
   }
 
   /**
@@ -350,15 +403,16 @@ class CrapValidateForm extends HTMLElement {
 
   /**
    * Render one inline `<p class="form__error">` next to a field, mark
-   * the parent array row if any, and return whether the field wrapper
-   * was found.
+   * the parent array row if any, and return the field's wrapper — `null`
+   * when the form renders no field by that name.
    *
    * @param {string} field
    * @param {string} message
+   * @returns {Element|null}
    */
   _renderFieldError(field, message) {
-    const wrapper = this.querySelector(`[data-field-name="${field}"]`);
-    if (!wrapper) return false;
+    const wrapper = this.querySelector(`[data-field-name="${CSS.escape(field)}"]`);
+    if (!wrapper) return null;
 
     // Replace any server-rendered error already there.
     wrapper.querySelector(':scope > .form__error')?.remove();
@@ -372,7 +426,7 @@ class CrapValidateForm extends HTMLElement {
     );
 
     this._markArrayRowErrors(wrapper);
-    return true;
+    return wrapper;
   }
 
   /**

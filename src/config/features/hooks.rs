@@ -2,10 +2,9 @@
 
 use std::{path::Path, thread};
 
-use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::config::parsing::serde_filesize;
+use crate::config::{ErrorReport, parsing::serde_filesize};
 
 /// Hook configuration -- `on_init` script references and recursion limits.
 #[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
@@ -81,28 +80,29 @@ impl Default for HooksConfig {
 
 impl HooksConfig {
     /// Structural checks on `io_roots` that need no filesystem access (the
-    /// entries are resolved — and must exist — when the Lua VMs are built).
-    ///
-    /// # Errors
-    ///
-    /// An empty entry, one containing a NUL byte, or `/` (every file on the
-    /// machine).
-    pub(crate) fn validate_io_roots(&self) -> Result<()> {
+    /// entries are resolved — and must exist — when the Lua VMs are built):
+    /// record every entry that is empty, contains a NUL byte, or is `/`
+    /// (every file on the machine).
+    pub(crate) fn collect_io_root_problems(&self, report: &mut ErrorReport) {
         for entry in &self.io_roots {
             if entry.trim().is_empty() {
-                bail!("hooks.io_roots entries must not be empty");
+                report.push_message("hooks.io_roots entries must not be empty");
+                continue;
             }
 
             if entry.contains('\0') {
-                bail!("hooks.io_roots entry {entry:?} contains a NUL byte");
+                report.push_message(format!(
+                    "hooks.io_roots entry {entry:?} contains a NUL byte"
+                ));
+                continue;
             }
 
             if Path::new(entry).parent().is_none() && Path::new(entry).has_root() {
-                bail!("hooks.io_roots entry {entry:?} is a filesystem root");
+                report.push_message(format!(
+                    "hooks.io_roots entry {entry:?} is a filesystem root"
+                ));
             }
         }
-
-        Ok(())
     }
 }
 
@@ -132,7 +132,10 @@ mod tests {
                 io_roots: vec![entry.to_string()],
                 ..HooksConfig::default()
             };
-            hooks.validate_io_roots()
+            let mut report = ErrorReport::new();
+            hooks.collect_io_root_problems(&mut report);
+
+            report.into_result()
         };
 
         assert!(check("").is_err());
@@ -141,5 +144,19 @@ mod tests {
         assert!(check("/").is_err());
         assert!(check("/srv/media").is_ok());
         assert!(check("media").is_ok());
+    }
+
+    /// Every refused entry is reported, not only the first.
+    #[test]
+    fn every_refused_io_root_is_reported() {
+        let hooks = HooksConfig {
+            io_roots: vec![String::new(), "/".to_string()],
+            ..HooksConfig::default()
+        };
+        let mut report = ErrorReport::new();
+        hooks.collect_io_root_problems(&mut report);
+
+        let err = report.into_result().unwrap_err().to_string();
+        assert!(err.starts_with("2 problems:"), "{err}");
     }
 }

@@ -29,7 +29,7 @@ use crate::{
     },
     core::{
         CollectionDefinition, GlobalDefinition, auth::AuthUser, richtext::renderer::html_escape,
-        spawn_blocking_in_label_locale,
+        spawn_request_blocking,
     },
     hooks::lifecycle::{RenderCrud, RenderInfo, RenderParams},
     service::{AppInfra, ServiceError},
@@ -226,7 +226,7 @@ async fn render_blocking(
 
     // The viewer's label locale comes along, so labels a hook or
     // template-data function resolves follow the UI locale like the page's.
-    let rendered = spawn_blocking_in_label_locale(move || render_job(job)).await;
+    let rendered = spawn_request_blocking(move || render_job(job)).await;
 
     match rendered {
         Ok(Ok(html)) => Ok(html),

@@ -71,6 +71,11 @@ pub struct WriteInput<'a> {
     /// queued, inserted inside the write transaction. `None` on every write
     /// that stored no file.
     pub upload_conversions: Option<UploadConversions>,
+    /// The document revision the caller last read (`expected_revision`). Set,
+    /// the update is refused with a conflict when the document has been
+    /// written since; `None` writes unconditionally (last write wins). Only
+    /// updates read it.
+    pub expected_revision: Option<i64>,
 }
 
 impl<'a> WriteInput<'a> {
@@ -88,6 +93,7 @@ pub struct WriteInputBuilder<'a> {
     pub(in crate::service) draft: bool,
     pub(in crate::service) trusted_upload_metadata: bool,
     pub(in crate::service) upload_conversions: Option<UploadConversions>,
+    pub(in crate::service) expected_revision: Option<i64>,
 }
 
 impl<'a> WriteInputBuilder<'a> {
@@ -100,6 +106,7 @@ impl<'a> WriteInputBuilder<'a> {
             draft: false,
             trusted_upload_metadata: false,
             upload_conversions: None,
+            expected_revision: None,
         }
     }
 
@@ -144,6 +151,15 @@ impl<'a> WriteInputBuilder<'a> {
         self
     }
 
+    /// Refuse the update with a conflict unless the document still holds this
+    /// revision. `None` (the default) writes unconditionally.
+    #[must_use]
+    pub fn expected_revision(mut self, revision: Option<i64>) -> Self {
+        self.expected_revision = revision;
+
+        self
+    }
+
     #[must_use]
     pub fn build(self) -> WriteInput<'a> {
         WriteInput {
@@ -153,6 +169,7 @@ impl<'a> WriteInputBuilder<'a> {
             draft: self.draft,
             trusted_upload_metadata: self.trusted_upload_metadata,
             upload_conversions: self.upload_conversions,
+            expected_revision: self.expected_revision,
         }
     }
 }
@@ -186,11 +203,13 @@ mod tests {
         let wi = WriteInput::builder(data)
             .password(Some("pw"))
             .draft(true)
+            .expected_revision(Some(7))
             .build();
 
         assert_eq!(wi.data.get("title"), Some(&json!("hi")));
         assert_eq!(wi.password, Some("pw"));
         assert!(wi.draft);
         assert!(wi.locale_ctx.is_none());
+        assert_eq!(wi.expected_revision, Some(7));
     }
 }

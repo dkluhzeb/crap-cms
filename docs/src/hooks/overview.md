@@ -112,25 +112,45 @@ vm_pool_size = 8       # Lua VMs pre-warmed at startup (default: CPU cores)
 
 The pool is **elastic**: `vm_pool_size` VMs are pre-warmed at startup, and further VMs are built on demand up to `max_vm_pool_size` as concurrency rises (each with the same full initialization: package paths, API registration, CRUD functions, `init.lua` execution). When a request needs to execute a hook, it acquires a VM from the pool and returns it when done. This prevents hook execution from serializing under concurrent load. When every VM is busy for longer than the acquire timeout, the request fails as a *transient* error — HTTP 503 / gRPC `UNAVAILABLE` — like a database-pool timeout, so clients retry it; raise `max_vm_pool_size` if it recurs.
 
-### Before-write hooks hold the document's lock
+### Hooks run while the write holds its row locks
 
-A `before_validate` or `before_change` hook runs inside the write's
-transaction **and inside the document's row lock**, which the write takes
-before it reads anything it builds on (the pending draft, the stored row the
-access rules judge, the files it may drop). A concurrent save of the *same*
-document therefore waits for the hook to finish — other documents, and every
-reader, are unaffected.
+A write takes row locks as it goes and holds every one of them until it
+commits:
 
-Keep slow work out of before-write hooks: an external `crap.http.request`
-holds that row for the duration of the call. On `SQLite` this is not new —
-its writes take a database-wide lock for the whole transaction — but on
-Postgres the wait is now per document rather than absent.
+- **The document's own row**, taken before the write reads anything it
+  builds on (the pending draft, the stored row the access rules judge, the
+  files it may drop). Updates, deletes, trashes, unpublishes and restores all
+  lock first. `before_validate` / `before_change` / `before_delete` hooks run
+  inside it, so a concurrent save of the *same* document waits for them.
+- **Every document it references** (the author, the categories, the media
+  it points at), locked when the write adjusts their reference counts — after
+  the row is written, and **before the `after_change` hooks**, which still
+  run inside the transaction. A concurrent write that references the same
+  document (every post saved into one category, say), and any edit of that
+  document itself, waits until this write commits.
 
-A hook that writes a *second* document takes that document's row lock too.
-Two writes that touch the same pair in the opposite order can deadlock;
-Postgres breaks the cycle by aborting one side, which surfaces as a
-retryable `503` / `UNAVAILABLE`, so a client that retries succeeds. Take
-rows in a consistent order in hooks that write more than one document.
+Readers are never blocked. On `SQLite` none of this is new — a write holds
+the database-wide write lock for its whole transaction — but on Postgres the
+waits are per row, and a slow hook holds those rows for its duration.
+
+Keep slow work out of **every** hook that runs inside the write:
+`before_change` *and* `after_change`. An external `crap.http.request` in
+`after_change` holds every referenced document's row until it returns. Do
+it after the commit instead — register it with `crap.tx.on_commit(fn)`, or
+queue a job — so it runs once the locks are released, and only when the
+write actually committed.
+
+The write locks the referenced documents in one fixed order (collection by
+collection, then by id), so two writes that share references never deadlock
+on them. A hook that writes a *second* document takes that document's row
+lock too, and two writes that each lock the other's document (A's hook
+updates B while B's hook updates A, or A references B while B, saved at the
+same moment, references A) can still deadlock. Postgres breaks the cycle by
+aborting one side, which surfaces as a retryable `503` / `UNAVAILABLE`; the
+aborted write was rolled back entirely, so a client that retries is safe.
+The server does not retry it itself: that would run the write's hooks — and
+any outbound call they make — a second time. Take rows in a consistent order
+in hooks that write more than one document.
 
 ## Resource Limits
 

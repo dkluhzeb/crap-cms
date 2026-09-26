@@ -117,6 +117,7 @@ fn populate_circular_ref_stops() {
     conn.execute_batch(
         "CREATE TABLE posts (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             title TEXT,
             author TEXT,
             created_at TEXT,
@@ -124,6 +125,7 @@ fn populate_circular_ref_stops() {
         );
         CREATE TABLE authors (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             name TEXT,
             favorite_post TEXT,
             created_at TEXT,
@@ -432,6 +434,7 @@ fn populate_upload_inside_blocks() {
     conn.execute_batch(
         "CREATE TABLE media (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             filename TEXT,
             url TEXT,
             created_at TEXT,
@@ -441,6 +444,7 @@ fn populate_upload_inside_blocks() {
             VALUES ('m1', 'hero.jpg', '/uploads/hero.jpg', '2024-01-01', '2024-01-01');
         CREATE TABLE pages (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             title TEXT,
             content TEXT,
             created_at TEXT,

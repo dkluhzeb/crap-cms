@@ -22,7 +22,7 @@ use crate::{
         DbConnection,
         query::{self, MfaCode, TotpState},
     },
-    service::{AppInfra, ServiceContext, ServiceError, auth::verify_mfa_code},
+    service::{AppInfra, ServiceContext, ServiceError, admit_commit, auth::verify_mfa_code},
 };
 
 /// The enrollment material shown while a user's TOTP is unconfirmed.
@@ -113,6 +113,9 @@ fn install_secret(
         .map_err(|e| ServiceError::classify(e, infra.pool.kind()))?;
 
     let replaced = state.sealed_secret.as_deref();
+
+    // The install is a single autocommit write: its own commit point.
+    admit_commit()?;
 
     if query::set_totp_secret(&conn, slug, &user_id, &sealed, replaced)? {
         // Operator-visible audit signal: a hijacked enrollment (leaked
@@ -218,7 +221,10 @@ fn verify_totp_attempt(
     };
 
     // Race-safe: the record is conditional (monotonic step guard) — only
-    // the winner of a concurrent double-submit is verified.
+    // the winner of a concurrent double-submit is verified. A single
+    // autocommit write: its own commit point.
+    admit_commit()?;
+
     let won = query::record_totp_success(conn, slug, user_id, step)?;
 
     if won && !state.confirmed {
@@ -264,6 +270,9 @@ pub fn verify_second_factor(
     }
 
     let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
+
+    // Consuming the code is a single autocommit write: its own commit point.
+    admit_commit()?;
 
     verify_mfa_code(&ctx, attempt)
 }

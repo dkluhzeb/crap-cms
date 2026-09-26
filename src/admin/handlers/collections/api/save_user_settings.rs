@@ -1,20 +1,19 @@
 use std::collections::HashMap;
 
-use anyhow::{Context as _, Error};
+use anyhow::Error;
 use axum::{
     Extension, Form,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
 };
-use tokio::task;
 
 use crate::{
     admin::{
         AdminState,
         handlers::shared::{is_column_eligible, is_meta_column},
     },
-    core::{CollectionDefinition, auth::AuthUser},
+    core::{CollectionDefinition, auth::AuthUser, spawn_request_blocking},
     db::DbPool,
     service::user_settings,
 };
@@ -48,27 +47,17 @@ fn parse_valid_columns(form: &HashMap<String, String>, def: &CollectionDefinitio
         .collect()
 }
 
-/// Load the user's settings JSON, merge column preferences for one collection, and save.
+/// Store the column preferences for one collection, leaving the user's other
+/// settings as they are (see [`user_settings::update_user_settings`]).
 fn save_column_preferences(
     pool: &DbPool,
     user_id: &str,
     collection_slug: &str,
     columns: &[String],
 ) -> Result<(), Error> {
-    // IMMEDIATE tx so the read-modify-write of the whole-blob settings JSON
-    // can't lose a concurrent update from a sibling handler: the IMMEDIATE
-    // lock serializes the read against other writers. It is taken from the
-    // write pool, so it does not hold a read connection for its duration.
-    let mut conn = pool.write().context("Failed to get DB connection")?;
-    let tx = conn
-        .transaction_immediate()
-        .context("Failed to start settings transaction")?;
-
-    let mut settings = user_settings::load_user_settings(&tx, user_id)?;
-    settings.set_columns(collection_slug, columns);
-
-    user_settings::set_user_settings(&tx, user_id, &settings.to_json())?;
-    tx.commit().context("Failed to commit settings")?;
+    user_settings::update_user_settings(pool, user_id, |settings| {
+        settings.set_columns(collection_slug, columns);
+    })?;
 
     Ok(())
 }
@@ -97,7 +86,7 @@ pub async fn save_user_settings(
     let pool = state.infra.pool.clone();
     let user_id = auth_user.claims.sub.clone();
 
-    let result = task::spawn_blocking(move || {
+    let result = spawn_request_blocking(move || {
         save_column_preferences(&pool, &user_id, &collection_slug, &valid_columns)
     })
     .await;

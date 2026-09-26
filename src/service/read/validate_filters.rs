@@ -31,7 +31,9 @@ use std::collections::HashSet;
 
 use crate::{
     config::query_limits,
-    core::{CollectionDefinition, FieldDefinition, prefixed_name, walk_leaf_fields},
+    core::{
+        CollectionDefinition, FieldDefinition, REVISION_COLUMN, prefixed_name, walk_leaf_fields,
+    },
     db::{Filter, FilterClause, FilterOp, query::filter::check_filter_limits},
     service::ServiceError,
 };
@@ -625,14 +627,14 @@ pub fn validate_user_select(
     for name in select {
         let known = matches!(
             name.as_str(),
-            "id" | "created_at" | "updated_at" | "_status"
+            "id" | "created_at" | "updated_at" | "_status" | REVISION_COLUMN
         ) || def.fields.iter().any(|f| f.name == *name);
 
         if !known {
             return Err(ServiceError::HookError(format!(
                 "Unknown select field '{name}' — select takes top-level field names \
                  (a group name selects all its sub-fields) plus id, created_at, \
-                 updated_at and _status."
+                 updated_at, _status and _revision."
             )));
         }
     }
@@ -654,7 +656,16 @@ mod select_tests {
             FieldDefinition::builder("seo", FieldType::Group).build(),
         ];
 
-        let ok = ["title", "seo", "id", "created_at", "updated_at", "_status"].map(String::from);
+        let ok = [
+            "title",
+            "seo",
+            "id",
+            "created_at",
+            "updated_at",
+            "_status",
+            "_revision",
+        ]
+        .map(String::from);
         assert!(validate_user_select(Some(&ok), &def).is_ok());
         assert!(validate_user_select(None, &def).is_ok());
 

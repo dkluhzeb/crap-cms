@@ -210,7 +210,7 @@ crap.globals.define("site", {
         .event_transport(Some(transport.clone()))
         .build();
 
-    unpublish_global_document(&ctx).expect("unpublish global");
+    unpublish_global_document(&ctx, None).expect("unpublish global");
 
     let ev = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
         .await
@@ -304,7 +304,7 @@ return M
         .event_transport(Some(transport.clone()))
         .build();
 
-    unpublish_global_document(&ctx).expect("unpublish global");
+    unpublish_global_document(&ctx, None).expect("unpublish global");
 
     // Two events must arrive: the global's own update, and the nested
     // audit_log create queued by the before_change hook.

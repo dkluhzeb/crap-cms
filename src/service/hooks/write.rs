@@ -4,10 +4,14 @@
 mod lua;
 mod runner;
 mod shape;
+mod snapshot_keep;
+mod unreadable;
 
 pub use lua::LuaWriteHooks;
 pub use runner::RunnerWriteHooks;
 pub use shape::SnapshotLocales;
+pub use snapshot_keep::{SnapshotReadKeep, StoredByLocale};
+pub use unreadable::UpdateStored;
 
 use anyhow::Result;
 use serde_json::{Map, Value};
@@ -32,9 +36,21 @@ use shape::{
     LeafShape, drop_locale_columns_of_stripped, drop_paths, prefill_checkboxes, removed_paths,
     restore_stripped_checkboxes, unfill_kept_checkboxes,
 };
+use snapshot_keep::keep_unreadable_snapshot;
+use unreadable::{ReadJudge, keep_unreadable};
 
 /// Local alias to disambiguate from the file-wide `anyhow::Result`.
 type ValidateResult = std::result::Result<(), ValidationError>;
+
+/// Whether an update's field strip judges the stored document: some field
+/// carries an `access.update` rule (which judges the stored value), or an
+/// `access.read` rule (a write never changes a value its writer cannot read).
+/// The loaders of that stored document skip the read when this is false.
+#[must_use]
+pub(crate) fn update_strip_needs_stored(fields: &[FieldDefinition]) -> bool {
+    has_any_field_access(fields, |f| f.access.update.as_ref())
+        || has_any_field_access(fields, |f| f.access.read.as_ref())
+}
 
 /// Shared body of the create/update strips: round-trip `data` through the
 /// map-level strip, with `input.document` as `ctx.document`.
@@ -114,6 +130,12 @@ pub trait WriteHooks: FieldReadStrip {
         !hooks.before_delete.is_empty() || !hooks.after_delete.is_empty()
     }
 
+    /// Whether this surface writes with access overridden (a system write):
+    /// every access check allows and no field rule strips. Default `false`.
+    fn overrides_access(&self) -> bool {
+        false
+    }
+
     /// The registry this surface validates writes against, for the persist
     /// steps that resolve definitions beyond the collection's own (the search
     /// index reads rich text custom nodes' `searchable_attrs`). Default `None`
@@ -179,38 +201,48 @@ pub trait WriteHooks: FieldReadStrip {
         );
     }
 
-    /// Strip update-denied fields from an incoming patch in place.
+    /// Strip update-denied fields from an incoming patch in place, and keep
+    /// every stored value the writer cannot read.
     ///
-    /// Each `access.update` rule sees the STORED document as `ctx.document`.
-    /// The patch is what the rule is judging, so it cannot also be the
-    /// evidence: a rule gating a field on `ctx.document.owner` would otherwise
-    /// pass for any caller who puts their own id in `owner` in the same write.
-    /// Callers load `stored` with [`stored_fields_for_update_rules`] (or its
-    /// global twin); an empty document makes a stored-value rule deny.
+    /// Each `access.update` rule sees the stored row (`stored.row`) as
+    /// `ctx.document`. The patch is what the rule is judging, so it cannot also
+    /// be the evidence: a rule gating a field on `ctx.document.owner` would
+    /// otherwise pass for any caller who puts their own id in `owner` in the
+    /// same write. Callers load the row with [`stored_fields_for_update_rules`]
+    /// (or its global twin); an empty document makes a stored-value rule deny.
+    ///
+    /// A write never changes a value its writer cannot read: every
+    /// `access.read` rule is judged against what the write replaces
+    /// (`stored.replaced` — the pending draft for a draft save, else the row;
+    /// `ctx.data` = the stored level, per array/blocks row), and a value it
+    /// hides is kept as it is — at every depth — whatever the patch carries
+    /// for it. A row the write adds is judged against an empty row.
     ///
     /// [`stored_fields_for_update_rules`]: crate::service::stored_fields_for_update_rules
     fn strip_write_access_update(
         &self,
         fields: &[FieldDefinition],
         data: &mut DocumentFields,
-        stored: &DocumentFields,
+        stored: UpdateStored<'_>,
         collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
     ) {
-        if !has_any_field_access(fields, |f| f.access.update.as_ref()) {
+        if !update_strip_needs_stored(fields) {
             return;
         }
 
-        let document = nest_group_fields(stored, fields);
-        let stored_nested: Map<String, Value> = document.clone().into_inner().into_iter().collect();
+        let document = nest_group_fields(stored.row, fields);
+        let replaced = nest_group_fields(stored.replaced, fields);
+        let replaced_nested: Map<String, Value> =
+            replaced.clone().into_inner().into_iter().collect();
         let original: Map<String, Value> = data.clone().into_inner().into_iter().collect();
 
-        // The stored document is resolved for the write's locale, so a checkbox
-        // filled in or put back here carries that locale's stored value.
+        // The replaced content is resolved for the write's locale, so a
+        // checkbox filled in or put back here carries that locale's value.
         let shape = LeafShape::of(fields, false);
         let mut level = original.clone();
-        let filled = prefill_checkboxes(&shape, &mut level, &stored_nested);
+        let filled = prefill_checkboxes(&shape, &mut level, &replaced_nested);
         let before = level.clone();
         *data = level.into_iter().collect();
 
@@ -228,9 +260,22 @@ pub trait WriteHooks: FieldReadStrip {
         );
 
         let mut level: Map<String, Value> = std::mem::take(data).into_inner().into_iter().collect();
+
+        // After the write strip, so a value the writer can neither read nor
+        // write is judged once each way and kept either way.
+        keep_unreadable(
+            self,
+            fields,
+            &mut level,
+            &ReadJudge::builder(&replaced, collection)
+                .user(user)
+                .locale(locale)
+                .build(),
+        );
+
         let removed = removed_paths(&before, &level);
         unfill_kept_checkboxes(&filled, &removed, &mut level, &original);
-        restore_stripped_checkboxes(&shape, &removed, &mut level, &stored_nested);
+        restore_stripped_checkboxes(&shape, &removed, &mut level, &replaced_nested);
         *data = level.into_iter().collect();
     }
 
@@ -332,6 +377,39 @@ pub trait WriteHooks: FieldReadStrip {
         }
 
         *snapshot = Value::Object(level);
+    }
+
+    /// Keep, in a snapshot written back over a document — a publish making
+    /// its pending draft live, a version restore — every stored value the
+    /// writer cannot read: a write never changes a value its writer cannot
+    /// see.
+    ///
+    /// Each `access.read` rule judges the document as stored in each locale
+    /// the write-back writes (`keep.stored`), with `ctx.locale` set to that
+    /// locale; a shared value is judged once, at the locale the write runs
+    /// under. A value the rule hides is taken out of the snapshot — with its
+    /// per-locale keys and companions — so the write-back leaves the stored
+    /// value in place; inside a list, a row matched by `id` keeps its hidden
+    /// values and a row the document does not hold is judged against an empty
+    /// row. No-op for a non-object snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a configured locale code has no column form.
+    fn keep_unreadable_value(
+        &self,
+        fields: &[FieldDefinition],
+        snapshot: &mut Value,
+        keep: &SnapshotReadKeep<'_>,
+    ) -> Result<()> {
+        // Every lookup and edit below finds a value flat or inside its group
+        // object, so the snapshot is taken as stored: nesting it would move a
+        // group's per-locale keys into the group.
+        let Some(obj) = snapshot.as_object_mut() else {
+            return Ok(());
+        };
+
+        keep_unreadable_snapshot(self, fields, obj, keep)
     }
 
     /// Run schema-level field validation (required, unique, regex, type checks,

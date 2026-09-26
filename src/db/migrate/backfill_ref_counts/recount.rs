@@ -9,15 +9,43 @@ use crate::{
     config::LocaleConfig,
     core::{FieldDefinition, Registry},
     db::{
-        DbConnection,
-        migrate::{backfill_ref_counts::topology::gate_value, meta},
+        DbConnection, DbValue,
+        migrate::{
+            backfill_ref_counts::topology::gate_value,
+            helpers::{Scan, for_each_row},
+            meta,
+        },
         query::{helpers::global_table, ref_count},
     },
 };
 
+/// Leads the per-collection meta key tracking backfill status.
+const META_KEY_PREFIX: &str = "ref_count_backfilled:";
+
 /// Build the per-collection meta key for tracking backfill status.
 fn collection_meta_key(slug: &str) -> String {
-    format!("ref_count_backfilled:{slug}")
+    format!("{META_KEY_PREFIX}{slug}")
+}
+
+/// Mark every stored count stale, so the startup check recomputes them all: a
+/// pass of the schema sync removed stored references the counts were made of.
+/// Must run before [`backfill_if_needed`] in the same sync.
+///
+/// # Errors
+///
+/// Returns a backend error if the meta delete fails.
+pub(crate) fn invalidate_ref_counts(conn: &dyn DbConnection) -> Result<()> {
+    // `_` is a LIKE wildcard; escaped, the pattern matches the prefix exactly.
+    let pattern = format!("{}%", META_KEY_PREFIX.replace('_', "\\_"));
+    let sql = format!(
+        "DELETE FROM _crap_meta WHERE key LIKE {} ESCAPE '\\'",
+        conn.placeholder(1)
+    );
+
+    conn.execute(&sql, &[DbValue::Text(pattern)])
+        .context("Failed to mark the reference counts stale")?;
+
+    Ok(())
 }
 
 /// Every gated slug with the table its documents live in.
@@ -179,19 +207,17 @@ fn recompute_table(
     // reset every `_ref_count` to 0, so a silently-skipped table would keep the
     // wrong (zeroed) counts while the caller still stamps the backfill gate.
     // Aborting leaves the gate unset, so the backfill re-runs on the next start.
-    let rows = conn
-        .query_all(&format!("SELECT id FROM \"{table}\""), &[])
-        .with_context(|| format!("Backfill: failed to read ids from {table}"))?;
+    // A page at a time: the ids of a large table are never all held at once.
+    let scan = Scan::builder(table, &["id"]).build();
 
-    for row in &rows {
+    for_each_row(conn, &scan, &mut |row| {
         let Some(id) = row.text_at(0) else {
-            continue;
+            return Ok(());
         };
 
-        ref_count::backfill_after_create(conn, table, id, fields, locale_config)?;
-    }
-
-    Ok(())
+        ref_count::backfill_after_create(conn, table, id, fields, locale_config)
+    })
+    .with_context(|| format!("Backfill: failed to recount the references of {table}"))
 }
 
 #[cfg(test)]
@@ -203,7 +229,7 @@ mod tests {
         config::{CrapConfig, DatabaseConfig},
         core::{CollectionDefinition, FieldType, GlobalDefinition, RelationshipConfig, Slug},
         db::{
-            DbPool,
+            DbPool, DbValue,
             migrate::{
                 self,
                 backfill_ref_counts::{
@@ -211,6 +237,7 @@ mod tests {
                     topology::BACKFILL_VERSION,
                 },
                 collection::test_helpers::no_locale,
+                helpers::PAGE_SIZE,
             },
             pool,
         },
@@ -303,6 +330,42 @@ mod tests {
 
         assert_eq!(get_ref_count(&conn, "media", "m1"), 2);
         assert_eq!(get_ref_count(&conn, "media", "m2"), 1);
+    }
+
+    /// The recount reads a table a page at a time and reaches every document
+    /// past the first page.
+    #[test]
+    fn backfill_counts_every_document_past_the_first_page() {
+        let media = CollectionDefinition::new("media");
+        let posts = posts_with(vec![upload_to("image", "media")]);
+
+        let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
+        let conn = pool.get().unwrap();
+
+        conn.execute("INSERT INTO media (id) VALUES ('m1')", &[])
+            .unwrap();
+
+        let documents = PAGE_SIZE * 2 + 1;
+        for i in 0..documents {
+            conn.execute(
+                "INSERT INTO posts (id, image) VALUES (?1, 'm1')",
+                &[DbValue::Text(format!("p{i:05}"))],
+            )
+            .unwrap();
+        }
+
+        conn.execute(
+            "DELETE FROM _crap_meta WHERE key LIKE 'ref_count_backfilled%'",
+            &[],
+        )
+        .unwrap();
+
+        backfill_if_needed(&conn, &registry, &no_locale()).unwrap();
+
+        assert_eq!(
+            get_ref_count(&conn, "media", "m1"),
+            i64::try_from(documents).unwrap()
+        );
     }
 
     /// A stored reference whose target no longer exists (a crash between a

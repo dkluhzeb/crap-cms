@@ -24,6 +24,10 @@ pub struct UpdateGlobalArgs {
     /// Publish a mutation event for this write (request `events` flag).
     #[builder(default = true)]
     pub events: bool,
+    /// The global's revision the caller last read (`expected_revision`). Set,
+    /// the update is refused with a conflict when the global has been written
+    /// since; `None` writes unconditionally.
+    pub expected_revision: Option<i64>,
 }
 
 /// Update a global document with the full write lifecycle.
@@ -47,6 +51,7 @@ impl Operation for UpdateGlobal {
             locale_ctx,
             draft,
             events: _,
+            expected_revision,
         } = args;
 
         let locale_ctx = write_locale_ctx(locale_ctx)?;
@@ -56,6 +61,7 @@ impl Operation for UpdateGlobal {
             WriteInput::builder(data)
                 .locale_ctx(locale_ctx.as_ref())
                 .draft(draft)
+                .expected_revision(expected_revision)
                 .build(),
         )
     }
@@ -65,11 +71,24 @@ impl Operation for UpdateGlobal {
 pub struct UnpublishGlobalArgs {
     /// Publish a mutation event for this write (request `events` flag).
     pub events: bool,
+    /// The global's revision the caller last read. Set, the unpublish is
+    /// refused with a conflict when the global has been written since.
+    pub expected_revision: Option<i64>,
+}
+
+impl UnpublishGlobalArgs {
+    #[must_use]
+    pub fn new(events: bool, expected_revision: Option<i64>) -> Self {
+        Self {
+            events,
+            expected_revision,
+        }
+    }
 }
 
 impl Default for UnpublishGlobalArgs {
     fn default() -> Self {
-        Self { events: true }
+        Self::new(true, None)
     }
 }
 
@@ -89,7 +108,7 @@ impl Operation for UnpublishGlobal {
         args.events
     }
 
-    fn run(ctx: &ServiceContext<'_>, _args: Self::Args) -> Result<Self::Output, ServiceError> {
-        unpublish_global_document(ctx)
+    fn run(ctx: &ServiceContext<'_>, args: Self::Args) -> Result<Self::Output, ServiceError> {
+        unpublish_global_document(ctx, args.expected_revision)
     }
 }

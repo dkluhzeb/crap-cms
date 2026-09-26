@@ -11,8 +11,8 @@ mod wrappers;
 pub use batch::populate_relationships_batch_cached_with_singleflight;
 pub use single::populate_relationships_cached_with_singleflight;
 pub use singleflight::Singleflight;
-pub use types::{JoinAccessCheck, PopulateContext, PopulateOpts};
-pub use wrappers::{populate_relationships, populate_relationships_batch};
+pub use types::{JoinAccessCheck, JoinReaders, PopulateContext, PopulateOpts};
+pub use wrappers::{join_children, populate_relationships, populate_relationships_batch};
 
 pub(crate) use crate::db::query::poly_ref::parse as parse_poly_ref;
 pub(crate) use batch::populate_relationships_batch_cached;
@@ -67,6 +67,7 @@ pub(crate) mod test_helpers {
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 author TEXT,
                 created_at TEXT,
@@ -74,6 +75,7 @@ pub(crate) mod test_helpers {
             );
             CREATE TABLE authors (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 name TEXT,
                 created_at TEXT,
                 updated_at TEXT
@@ -112,12 +114,14 @@ pub(crate) mod test_helpers {
         conn.execute_batch(
             "CREATE TABLE authors (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 name TEXT,
                 created_at TEXT,
                 updated_at TEXT
             );
             CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 author TEXT,
                 created_at TEXT,
@@ -169,6 +173,7 @@ pub(crate) mod test_helpers {
         conn.execute_batch(
             "CREATE TABLE entries (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 related TEXT,
                 created_at TEXT,
@@ -176,12 +181,14 @@ pub(crate) mod test_helpers {
             );
             CREATE TABLE articles (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 created_at TEXT,
                 updated_at TEXT
             );
             CREATE TABLE pages (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title TEXT,
                 created_at TEXT,
                 updated_at TEXT
@@ -194,9 +201,9 @@ pub(crate) mod test_helpers {
                 _order INTEGER,
                 PRIMARY KEY (parent_id, related_id, related_collection)
             );
-            INSERT INTO articles VALUES ('a1', 'Article One', '2024-01-01', '2024-01-01');
-            INSERT INTO pages VALUES ('pg1', 'Page One', '2024-01-01', '2024-01-01');
-            INSERT INTO entries VALUES ('e1', 'Entry', 'articles/a1', '2024-01-01', '2024-01-01');",
+            INSERT INTO articles VALUES ('a1', 0, 'Article One', '2024-01-01', '2024-01-01');
+            INSERT INTO pages VALUES ('pg1', 0, 'Page One', '2024-01-01', '2024-01-01');
+            INSERT INTO entries VALUES ('e1', 0, 'Entry', 'articles/a1', '2024-01-01', '2024-01-01');",
         )
         .unwrap();
         conn

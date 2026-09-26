@@ -189,10 +189,12 @@ pub fn generate_verification_token(
     }))
 }
 
-/// Validate a reset token and update the user's password.
+/// Validate a reset token and update the user's password (which clears the
+/// token in the same statement).
 ///
-/// Clears the token on success or if it's expired/locked. Caller
-/// manages the transaction.
+/// Writes nothing on a refusal. Every surface reaches this through
+/// [`reset_password_with_token`](super::reset_password_with_token), which owns
+/// the transaction and rolls back on any failure.
 ///
 /// On success returns the affected user's id so the caller can tear down that
 /// user's live-update streams **after committing** (a reset is a
@@ -205,7 +207,7 @@ pub fn generate_verification_token(
 /// Returns `InvalidToken` when the token is missing, expired, or
 /// the user is locked. Returns a backend error if the DB
 /// connection or persistence fails.
-pub fn consume_reset_token(
+pub(super) fn consume_reset_token(
     ctx: &ServiceContext,
     token: &str,
     new_password: &str,
@@ -223,7 +225,6 @@ pub fn consume_reset_token(
     )?;
 
     if query::is_locked(conn, ctx.slug, &user.id)? {
-        query::clear_reset_token(conn, ctx.slug, &user.id)?;
         return Err(ServiceError::InvalidToken {
             kind: "reset",
             reason: "not found",
@@ -231,7 +232,6 @@ pub fn consume_reset_token(
     }
 
     if Utc::now().timestamp() >= exp {
-        query::clear_reset_token(conn, ctx.slug, &user.id)?;
         return Err(ServiceError::InvalidToken {
             kind: "reset",
             reason: "expired",

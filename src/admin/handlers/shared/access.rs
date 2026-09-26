@@ -11,20 +11,23 @@ use serde_json::{Map, Value, json};
 use tracing::{error, warn};
 
 use crate::{
-    admin::AdminState,
+    admin::{AdminState, handlers::field_context::live_condition_data},
     core::{
         AuthUser, CollectionDefinition, Document, DocumentFields, FieldChildren, FieldDefinition,
-        FieldDenial, HookRef, field_children,
+        HookRef, field_children, prefixed_name,
     },
     db::{AccessResult, DbConnection},
     hooks::{
         AccessCheckInput, ConditionContext, DisplayConditionResult, HookRunner,
-        lifecycle::access::has_any_field_access,
+        lifecycle::access::{ReadStripInput, has_any_field_access},
     },
     service::{self, ServiceContext},
 };
 
-use super::response::{forbidden, server_error};
+use super::{
+    response::{forbidden, server_error},
+    row_denials::{FormReadDenials, RowReadDenials},
+};
 
 /// Extract the user document from `AuthUser` extension (for access checks).
 #[must_use]
@@ -106,21 +109,23 @@ pub fn access_admits_row(
         .unwrap_or(false)
 }
 
-/// Returns the read-denied field paths for `document` (data-aware: each
-/// `access.read` rule sees the document as `ctx.data` / `ctx.document`), or a
-/// server-error response. Used by the edit forms to drop denied field inputs
-/// from rendering. The service read already stripped denied *values*; this
-/// yields the *names* the form must not render. Skips the check entirely
-/// (returns empty vec) when no field configures read access.
+/// Returns what an edit form of `document` may not render for its viewer, or a
+/// server-error response: the document-level fields the viewer may not read
+/// (each `access.read` rule sees the document as `ctx.data` /
+/// `ctx.document`), and the array/blocks row values it may not read, judged
+/// row by row exactly as the read strip judges them (`ctx.data` = the row).
+/// The service read already stripped denied *values*; this yields the inputs
+/// the form must not render. Skips the check entirely when no field
+/// configures read access.
 pub fn compute_denied_read_fields(
     state: &AdminState,
     auth_user: Option<&Extension<AuthUser>>,
     fields: &[FieldDefinition],
     collection: &str,
     document: &DocumentFields,
-) -> Result<Vec<FieldDenial>, Box<Response>> {
+) -> Result<FormReadDenials, Box<Response>> {
     if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
-        return Ok(Vec::new());
+        return Ok(FormReadDenials::default());
     }
 
     let user_doc = get_user_doc(auth_user);
@@ -137,57 +142,78 @@ pub fn compute_denied_read_fields(
         .inspect_err(|e| error!("Field access check tx error: {}", e))
         .map_err(|_| Box::new(server_error(state, "Database error")))?;
 
-    let denied = state
-        .infra
-        .hook_runner
-        .read_denied_names(fields, document, collection, user_doc, None, &tx);
+    let runner = &state.infra.hook_runner;
+    let denied = runner.read_denied_names(fields, document, collection, user_doc, None, &tx);
+
+    let input = ReadStripInput {
+        document,
+        collection,
+        user: user_doc,
+        locale: None,
+    };
+    let rows = RowReadDenials::judge(fields, document, |probe| {
+        runner.strip_read_access(fields, probe, &input, &tx);
+    });
 
     if let Err(e) = tx.commit() {
         warn!("tx commit failed: {e}");
     }
 
-    Ok(denied)
+    Ok(FormReadDenials::new(denied, rows))
 }
 
 /// Recursively collect all `admin.condition` hook refs from field definitions,
-/// keyed by **field name** (matching the form's `data-field-name`) so the
-/// evaluate-conditions endpoint resolves a client-sent field to *that field's*
-/// configured [`HookRef`] — and thus its own `options`. Keying by field name
-/// (not the ref string) is what lets two fields share a condition function with
-/// different options; it also hardens the endpoint, since the server uses the
-/// field's configured ref rather than trusting the client-sent ref string.
-pub fn collect_condition_refs(fields: &[FieldDefinition]) -> HashMap<&str, &HookRef> {
+/// keyed by the field's **form name** — the name the form renders as its
+/// wrapper's `data-field-name` and submits (`seo__title` for `title` inside
+/// group `seo`; a layout wrapper adds nothing) — so the evaluate-conditions
+/// endpoint resolves a client-sent field to *that field's* configured
+/// [`HookRef`] — and thus its own `options`. Keying by form name (not the ref
+/// string, not the bare name) is what lets two fields share a condition
+/// function with different options, and keeps a top-level `title` and a
+/// group's `title` apart; it also hardens the endpoint, since the server uses
+/// the field's configured ref rather than trusting the client-sent ref string.
+pub fn collect_condition_refs(fields: &[FieldDefinition]) -> HashMap<String, &HookRef> {
     let mut refs = HashMap::new();
+    collect_condition_refs_at(fields, "", &mut refs);
 
+    refs
+}
+
+/// [`collect_condition_refs`] for the fields at one group prefix.
+fn collect_condition_refs_at<'a>(
+    fields: &'a [FieldDefinition],
+    prefix: &str,
+    refs: &mut HashMap<String, &'a HookRef>,
+) {
     for field in fields {
+        let form_name = prefixed_name(prefix, &field.name);
+
         if let Some(ref cond) = field.admin.condition {
-            refs.insert(field.name.as_str(), cond);
+            refs.insert(form_name.clone(), cond);
         }
 
         match field_children(field) {
-            FieldChildren::Group(sub) | FieldChildren::Wrapper(sub) => {
-                refs.extend(collect_condition_refs(sub));
-            }
+            FieldChildren::Group(sub) => collect_condition_refs_at(sub, &form_name, refs),
+            FieldChildren::Wrapper(sub) => collect_condition_refs_at(sub, prefix, refs),
             FieldChildren::Tabs(tabs) => {
                 for tab in tabs {
-                    refs.extend(collect_condition_refs(&tab.fields));
+                    collect_condition_refs_at(&tab.fields, prefix, refs);
                 }
             }
-            // Array/Blocks rows are their own per-row condition scope (each row
-            // re-evaluated client-side), so top-level ref collection does not
-            // descend into them — matching `apply_display_conditions`.
+            // A condition inside an array/blocks row is refused at load, so
+            // there is nothing to collect there.
             FieldChildren::Array(_) | FieldChildren::Blocks(_) | FieldChildren::Leaf => {}
         }
     }
-
-    refs
 }
 
 /// Request payload for evaluating field display conditions.
 /// Shared by collection and global evaluate-conditions endpoints.
 #[derive(Deserialize)]
 pub struct EvaluateConditionsRequest {
-    /// The current form data.
+    /// The browser's snapshot of the form: each input name to its value (a
+    /// name the form carries more than once as a list) — the payload the
+    /// validate endpoint takes. Decoded server-side like a submission.
     pub form_data: DocumentFields,
     /// Map of field names to their condition function references.
     pub conditions: HashMap<String, String>,
@@ -196,6 +222,17 @@ pub struct EvaluateConditionsRequest {
     /// `"update"` for older clients that don't send it.
     #[serde(default = "default_condition_operation")]
     pub operation: String,
+    /// The document the form edits — `None` on a create form. The snapshot is
+    /// parsed against the fields the edit form rendered for its viewer, so a
+    /// field the viewer may not read — which has no input — reads as absent
+    /// (`null`), as it does on the render and in the browser, never as an
+    /// unchecked box.
+    #[serde(default)]
+    pub document_id: Option<String>,
+    /// The editor locale the form was rendered in (its `_locale` input), which
+    /// the viewer's read access is judged in.
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 fn default_condition_operation() -> String {
@@ -213,7 +250,7 @@ pub fn evaluate_condition_results(
     cond_ctx: &ConditionContext<'_>,
 ) -> Map<String, Value> {
     let by_field = collect_condition_refs(fields);
-    let form_data = json!(req.form_data);
+    let form_data = live_condition_data(fields, &req.form_data);
     let mut results = Map::new();
 
     // Iterate the client-sent field names; the field's OWN configured ref is
@@ -452,8 +489,12 @@ mod tests {
             .build()
     }
 
+    /// Regression: refs were keyed by bare name while the browser sends the
+    /// form name, so a group sub-field's live condition was never found (and
+    /// its field always shown), and a top-level `a` and a group's `a`
+    /// collided.
     #[test]
-    fn collects_condition_refs_recursively_keyed_by_field() {
+    fn collects_condition_refs_keyed_by_form_name() {
         let fields = vec![
             with_condition("a", "cond.show_a"),
             FieldDefinition::builder("plain", FieldType::Text).build(), // no condition
@@ -461,18 +502,23 @@ mod tests {
                 .fields(vec![
                     with_condition("b", "cond.show_b"),
                     with_condition("c", "cond.show_a"), // same ref, distinct field
+                    with_condition("a", "cond.grp_a"),  // same name, distinct field
                 ])
+                .build(),
+            FieldDefinition::builder("layout", FieldType::Row)
+                .fields(vec![with_condition("d", "cond.show_d")])
                 .build(),
         ];
 
         let map = collect_condition_refs(&fields);
-        // Two fields (`a`, `c`) share a ref but are kept as distinct keys; the
-        // no-condition `plain` field is absent.
+        // Two fields (`a`, `grp__c`) share a ref but are kept as distinct keys;
+        // the no-condition `plain` field is absent.
         assert_eq!(map.get("a").unwrap().reference(), "cond.show_a");
-        assert_eq!(map.get("c").unwrap().reference(), "cond.show_a");
-        let mut names: Vec<&str> = map.into_keys().collect();
+        assert_eq!(map.get("grp__c").unwrap().reference(), "cond.show_a");
+        assert_eq!(map.get("grp__a").unwrap().reference(), "cond.grp_a");
+        let mut names: Vec<String> = map.into_keys().collect();
         names.sort_unstable();
-        assert_eq!(names, vec!["a", "b", "c"]);
+        assert_eq!(names, vec!["a", "d", "grp__a", "grp__b", "grp__c"]);
     }
 
     #[test]

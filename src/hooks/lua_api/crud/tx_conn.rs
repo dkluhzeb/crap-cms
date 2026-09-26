@@ -20,6 +20,7 @@ use std::{cell::RefCell, rc::Rc};
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult};
 
 use crate::{
+    core::admit_request_commit,
     db::{DbConnection, with_savepoint},
     hooks::{
         lifecycle::{
@@ -337,7 +338,12 @@ pub(crate) fn run_step<R>(
     work: impl FnOnce(&dyn DbConnection) -> LuaResult<R>,
 ) -> LuaResult<R> {
     // Outside a transaction every statement commits on its own: there is no
-    // step to roll back, and nothing queued is undone.
+    // step to roll back, and nothing queued is undone — and the step is its
+    // own commit point, so the request it serves must still admit one.
+    if !conn.in_transaction() {
+        admit_request_commit().map_err(|e| RuntimeError(e.to_string()))?;
+    }
+
     let marks = conn.in_transaction().then(|| StepMarks::take(lua));
 
     let result = with_savepoint(conn, || work(conn))
@@ -503,13 +509,17 @@ pub(crate) fn with_lua_db_read<R>(
     clippy::used_underscore_binding
 )]
 mod tests {
+    use std::time::Instant;
+
+    use mlua::Lua;
+
     use super::*;
     use crate::{
         config::CrapConfig,
+        core::{CommitGate, in_commit_gate},
         db::pool,
         hooks::lifecycle::{ExecutionDeadline, ExecutionDeadlineGuard, ReadOnlyScopeGuard},
     };
-    use mlua::Lua;
 
     /// A throwaway pool over a temp-dir database — the tests below only need
     /// a `DbPool` value to hang a context off, not a migrated schema.
@@ -626,6 +636,31 @@ mod tests {
                 "got: {err}"
             );
         }
+    }
+
+    /// Regression: a hook writing on a borrowed connection outside any
+    /// transaction (each statement its own commit) wrote whatever became of
+    /// the request it served. Once the request's deadline passed with nothing
+    /// committed, such a write is refused before it runs.
+    #[test]
+    fn an_autocommit_write_past_the_request_deadline_is_refused() {
+        let lua = Lua::new();
+        let (_dir, pool) = test_pool();
+        let conn = pool.get().expect("connection");
+        lua.set_app_data(TxContext::new(&conn));
+
+        let late = CommitGate::new(Instant::now());
+        let result = in_commit_gate(Some(late.clone()), || {
+            with_lua_db(&lua, |_| -> LuaResult<()> {
+                panic!("the write must not run past the deadline")
+            })
+        });
+
+        assert!(result.is_err(), "the late write is refused");
+        assert!(late.expired());
+
+        let admitted = with_lua_db(&lua, |_| Ok(()));
+        assert!(admitted.is_ok(), "without a request gate the write runs");
     }
 
     /// Regression: a panic in the CRUD body must not leave a `TxContext`

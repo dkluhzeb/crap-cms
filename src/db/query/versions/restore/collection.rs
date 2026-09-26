@@ -148,6 +148,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE events (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 start_date TEXT,
                 start_date_tz TEXT,
                 _status TEXT DEFAULT 'published',
@@ -239,6 +240,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE notes (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 body TEXT,
                 created_at TEXT DEFAULT (datetime('now')),
                 updated_at TEXT DEFAULT (datetime('now'))
@@ -293,6 +295,7 @@ mod tests {
         conn.execute_batch(&format!(
             "CREATE TABLE snippets (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 snippet TEXT,
                 snippet_lang TEXT,
                 _status TEXT DEFAULT 'published',

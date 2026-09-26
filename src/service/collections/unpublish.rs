@@ -8,7 +8,7 @@ use crate::{
         Gated, ServiceContext, ServiceError, StateChange, helpers, invalidate_user_streams_if_auth,
         persist_unpublish, require_unpublish_capability, run_after_change_hooks, run_pool_write,
         run_state_before_change,
-        write::{UploadSettle, document_file_keys, settle_upload_write},
+        write::{UploadSettle, claim_revision, document_file_keys, settle_upload_write},
     },
 };
 
@@ -20,7 +20,11 @@ type Result<T> = std::result::Result<T, ServiceError>;
 /// hydrate -> after-hooks -> strip read-denied fields. Returns the stored row
 /// the unpublish event is built from alongside the document.
 /// Does NOT manage transactions — caller must open/commit.
-fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Gated<Document>> {
+fn unpublish_document_in_conn(
+    ctx: &ServiceContext,
+    id: &str,
+    expected_revision: Option<i64>,
+) -> Result<Gated<Document>> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
@@ -58,6 +62,10 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Gated<Do
     // row the status write lands on, not one a concurrent publish is about to
     // replace (Postgres; no-op on SQLite).
     conn.lock_row(ctx.slug, id)?;
+
+    // Unpublishing is a write to the document like any other: it is refused
+    // for a caller holding a stale revision, and moves the revision forward.
+    claim_revision(conn, ctx.slug, id, expected_revision)?;
 
     let doc = query::find_by_id_raw(conn, ctx.slug, def, id, locale_ctx.as_ref(), false)?
         .ok_or_else(|| {
@@ -113,29 +121,40 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Gated<Do
     Ok((doc, row))
 }
 
-/// Unpublish a versioned document.
+/// Unpublish a versioned document. With `expected_revision` set, the
+/// unpublish is refused with a conflict when the document has been written
+/// since that revision was read.
 ///
 /// **Pool mode** (`ctx.pool` set): opens a transaction, commits after success.
 /// **Conn mode** (`ctx.conn` set, Lua CRUD path): runs on the existing connection.
 ///
 /// # Errors
 ///
-/// Returns service-layer errors (access denied, document not found, hook
-/// errors) or a backend error if the DB transaction or persistence fails.
+/// Returns service-layer errors (access denied, document not found, revision
+/// conflict, hook errors) or a backend error if the DB transaction or
+/// persistence fails.
 #[cfg(not(tarpaulin_include))]
-pub fn unpublish_document(ctx: &ServiceContext, id: &str) -> Result<Document> {
+pub fn unpublish_document(
+    ctx: &ServiceContext,
+    id: &str,
+    expected_revision: Option<i64>,
+) -> Result<Document> {
     if ctx.pool.is_some() {
-        unpublish_document_pool(ctx, id)
+        unpublish_document_pool(ctx, id, expected_revision)
     } else {
-        unpublish_document_conn(ctx, id)
+        unpublish_document_conn(ctx, id, expected_revision)
     }
 }
 
-fn unpublish_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
+fn unpublish_document_pool(
+    ctx: &ServiceContext,
+    id: &str,
+    expected_revision: Option<i64>,
+) -> Result<Document> {
     let (doc, _) = run_pool_write(
         ctx,
         None,
-        |inner| unpublish_document_in_conn(inner, id),
+        |inner| unpublish_document_in_conn(inner, id, expected_revision),
         |ctx, (doc, row)| {
             ctx.publish_mutation_event(EventOperation::Unpublish, &doc.id, row.clone());
             invalidate_user_streams_if_auth(ctx, &doc.id);
@@ -145,8 +164,12 @@ fn unpublish_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
     Ok(doc)
 }
 
-fn unpublish_document_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
-    let (doc, row) = unpublish_document_in_conn(ctx, id)?;
+fn unpublish_document_conn(
+    ctx: &ServiceContext,
+    id: &str,
+    expected_revision: Option<i64>,
+) -> Result<Document> {
+    let (doc, row) = unpublish_document_in_conn(ctx, id, expected_revision)?;
 
     ctx.clear_cache();
 

@@ -109,7 +109,10 @@ changes. Listened to by the surrounding `<crap-dirty-form>` to mark
 the form as having unsaved changes.
 
 Emitting components: `<crap-tags>`, `<crap-code>`,
-`<crap-relationship-search>`, `<crap-richtext>`, `<crap-focal-point>`.
+`<crap-relationship-search>`, `<crap-richtext>`, `<crap-focal-point>`,
+and `<crap-array-field>` after every row mutation (add — from the select
+or the block card picker —, remove, duplicate, move, drag-and-drop).
+`<crap-conditions>` listens too, re-evaluating display conditions.
 (`<crap-upload-preview>` listens and relays internally; plain inputs
 fire native `input`/`change` events instead.)
 

@@ -11,7 +11,10 @@ mod delete;
 mod delete_event;
 mod event_row;
 mod group_values;
+mod held_gate;
+mod new_references;
 mod pending_draft;
+mod revision;
 mod update;
 mod update_many_single;
 mod upload_files;
@@ -21,7 +24,8 @@ mod validate;
 use crate::service::ServiceError;
 
 pub(crate) use admission::{
-    PendingDraft, admit_create_input, admit_global_update_input, admit_update_input,
+    Admission, PendingDraft, PublishStored, StoredLoader, admit_create_input,
+    admit_global_update_input, admit_update_input,
 };
 pub(crate) use create::create_document_gated;
 pub use create::create_document_in_conn;
@@ -29,12 +33,17 @@ pub(crate) use create::{check_create_access, reject_create_filter};
 pub(crate) use delete::{cancel_image_jobs, delete_document_in_conn, purge_document};
 pub use delete_event::PurgeEvents;
 pub(crate) use delete_event::{DeleteEvent, TrashedDoc, TrashedPurge, read_delete_event};
+pub use group_values::NonObjectGroups;
+pub(crate) use held_gate::WriterHeldGate;
+pub(crate) use new_references::refuse_unreadable_references;
 pub(crate) use pending_draft::{adopt_pending_draft, adopt_pending_global_draft};
+pub(crate) use revision::claim_revision;
 pub(crate) use update::update_document_gated;
 #[cfg(test)]
 pub(crate) use update::update_document_in_conn;
 pub(crate) use update::{
-    check_update_access, reject_locale_locked_fields, stored_fields_for_update_rules,
+    check_update_access, draft_save_base, reject_locale_locked_fields,
+    stored_fields_for_update_rules,
 };
 pub(crate) use update_many_single::update_many_single_in_conn;
 pub(in crate::service::write) use upload_files::stored_row;

@@ -17,6 +17,8 @@
 //! - `auth/` -- `AuthConfig`, `PasswordPolicy`, and
 //!   `SessionCookieSameSite`.
 //! - `cors.rs`, `env.rs`, `parsing.rs` -- single-purpose siblings.
+//! - `decode.rs` -- section-by-section decoding of `crap.toml`, and
+//!   `error_report.rs` -- the report that lists every problem a load found.
 //! - `mcp_api_key.rs`, `s3_secret_key.rs`, `smtp_password.rs` --
 //!   redacted-on-Debug newtype wrappers around secrets so they don't
 //!   leak via tracing, JSON dumps, or `crap.config.get` from a hook.
@@ -30,8 +32,11 @@
 //! - `#[serde(default, deny_unknown_fields)]` everywhere so a typo in
 //!   `crap.toml` fails loading rather than being silently dropped.
 
+mod decode;
 mod env;
+mod error_report;
 mod parsing;
+mod section_decode;
 
 mod auth;
 mod cors;
@@ -58,6 +63,7 @@ pub use auth::{
     SessionCookieSameSite,
 };
 pub use cors::CorsConfig;
+pub use error_report::ErrorReport;
 pub use features::{
     AccessConfig, CacheBackend, CacheConfig, DepthConfig, EmailConfig, EmailProvider, HooksConfig,
     JobsConfig, LiveConfig, LiveTransport, LocaleConfig, LogRotation, LoggingConfig, McpConfig,

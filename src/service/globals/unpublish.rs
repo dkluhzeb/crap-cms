@@ -8,6 +8,7 @@ use crate::{
         Gated, ServiceContext, ServiceError, StateChange, global_access_allowed, helpers,
         require_unpublish_capability, run_after_change_hooks, run_pool_write,
         run_state_before_change, unpublish_with_snapshot, versions::VersionSnapshotCtx,
+        write::claim_revision,
     },
 };
 
@@ -21,16 +22,22 @@ type Result<T> = std::result::Result<T, ServiceError>;
 /// **Conn mode** (`ctx.conn` set, Lua CRUD path): runs on the existing
 /// connection so an unpublish inside a hook joins the caller's transaction.
 ///
+/// With `expected_revision` set, the unpublish is refused with a conflict
+/// when the global has been written since that revision was read.
+///
 /// # Errors
 ///
-/// Returns service-layer errors (access denied, hook errors) or a backend
-/// error if the DB transaction or persistence fails.
+/// Returns service-layer errors (access denied, revision conflict, hook
+/// errors) or a backend error if the DB transaction or persistence fails.
 #[cfg(not(tarpaulin_include))]
-pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
+pub fn unpublish_global_document(
+    ctx: &ServiceContext,
+    expected_revision: Option<i64>,
+) -> Result<Document> {
     if ctx.pool.is_some() {
-        unpublish_global_pool(ctx)
+        unpublish_global_pool(ctx, expected_revision)
     } else {
-        unpublish_global_conn(ctx)
+        unpublish_global_conn(ctx, expected_revision)
     }
 }
 
@@ -56,7 +63,10 @@ fn check_unpublish_access(ctx: &ServiceContext, def: &GlobalDefinition) -> Resul
 /// Conn-mode core: everything except transaction/commit and post-commit
 /// event/cache side effects. Shared by both dispatch modes. Returns the
 /// stored row the unpublish event is built from alongside the document.
-fn unpublish_global_in_conn(ctx: &ServiceContext) -> Result<Gated<Document>> {
+fn unpublish_global_in_conn(
+    ctx: &ServiceContext,
+    expected_revision: Option<i64>,
+) -> Result<Gated<Document>> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
@@ -75,6 +85,10 @@ fn unpublish_global_in_conn(ctx: &ServiceContext) -> Result<Gated<Document>> {
     // row the status write lands on, not one a concurrent publish is about to
     // replace (Postgres; no-op on SQLite).
     conn.lock_row(&gtable, "default")?;
+
+    // The collection unpublish's revision step: refused for a stale revision,
+    // moved forward otherwise.
+    claim_revision(conn, &gtable, "default", expected_revision)?;
 
     // Same locale-aware read fix as the collection unpublish path: when the
     // global has localized fields and locales are enabled, the fallback in
@@ -118,8 +132,8 @@ fn unpublish_global_in_conn(ctx: &ServiceContext) -> Result<Gated<Document>> {
 /// Conn mode (Lua CRUD): the caller owns the transaction and the event-queue
 /// flush. Queue the mutation event and invalidate cache; the outer tx-commit
 /// flushes the queue.
-fn unpublish_global_conn(ctx: &ServiceContext) -> Result<Document> {
-    let (doc, row) = unpublish_global_in_conn(ctx)?;
+fn unpublish_global_conn(ctx: &ServiceContext, expected_revision: Option<i64>) -> Result<Document> {
+    let (doc, row) = unpublish_global_in_conn(ctx, expected_revision)?;
 
     ctx.clear_cache();
     ctx.publish_mutation_event(EventOperation::Unpublish, &doc.id, row);
@@ -130,13 +144,18 @@ fn unpublish_global_conn(ctx: &ServiceContext) -> Result<Document> {
 /// Pool mode: open a transaction, run the core, commit, then run the
 /// post-commit side effects.
 #[cfg(not(tarpaulin_include))]
-fn unpublish_global_pool(ctx: &ServiceContext) -> Result<Document> {
-    let (doc, _) = run_pool_write(ctx, None, unpublish_global_in_conn, |ctx, (doc, row)| {
-        // Same post-commit sequence as `update_global_document` / the
-        // collection unpublish path: notify subscribers of the status
-        // change; the envelope flushes nested-hook events after.
-        ctx.publish_mutation_event(EventOperation::Unpublish, &doc.id, row.clone());
-    })?;
+fn unpublish_global_pool(ctx: &ServiceContext, expected_revision: Option<i64>) -> Result<Document> {
+    let (doc, _) = run_pool_write(
+        ctx,
+        None,
+        |inner| unpublish_global_in_conn(inner, expected_revision),
+        |ctx, (doc, row)| {
+            // Same post-commit sequence as `update_global_document` / the
+            // collection unpublish path: notify subscribers of the status
+            // change; the envelope flushes nested-hook events after.
+            ctx.publish_mutation_event(EventOperation::Unpublish, &doc.id, row.clone());
+        },
+    )?;
 
     Ok(doc)
 }
@@ -228,7 +247,7 @@ mod tests {
             .write_hooks(&wh)
             .build();
 
-        let err = unpublish_global_document(&ctx).unwrap_err();
+        let err = unpublish_global_document(&ctx, None).unwrap_err();
         assert!(
             matches!(&err, ServiceError::HookError(msg) if msg.contains("versioning")),
             "expected typed versioning gate error, got {err:?}"
@@ -295,7 +314,7 @@ mod tests {
             .locale_config(Some(&locale))
             .build();
 
-        let doc = unpublish_global_document(&ctx).expect("unpublish");
+        let doc = unpublish_global_document(&ctx, None).expect("unpublish");
 
         let captions: Vec<&str> = doc
             .fields
@@ -403,7 +422,7 @@ mod tests {
             .ui_locale(Some("de".to_string()))
             .build();
 
-        let doc = unpublish_global_document(&ctx).expect("unpublish");
+        let doc = unpublish_global_document(&ctx, None).expect("unpublish");
         assert_eq!(doc.fields.get("_status"), Some(&json!("draft")));
 
         let seen = spy.seen.lock().unwrap();
@@ -415,6 +434,38 @@ mod tests {
                 .all(|(_, locale)| locale.as_deref() == Some("de")),
             "every unpublish hook sees ctx.ui_locale, got {seen:?}"
         );
+    }
+
+    /// Unpublishing is refused for an editor holding a stale revision of the
+    /// global, and an admitted one reports the revision it moved to.
+    #[test]
+    fn unpublish_global_honors_the_expected_revision() {
+        let (_tmp, db_pool, def) = drafts_global();
+        let conn = db_pool.get().unwrap();
+        let gtable = global_table("banner");
+
+        query::advance_revision(&conn, &gtable, "default", None).unwrap();
+
+        let wh = NoopWriteHooks;
+        let ctx = ServiceContext::global("banner", &def)
+            .conn(&conn)
+            .write_hooks(&wh)
+            .build();
+
+        let err = unpublish_global_document(&ctx, Some(0)).unwrap_err();
+        assert!(matches!(err, ServiceError::Conflict(_)), "{err:?}");
+        assert_eq!(
+            query::get_global(&conn, "banner", &def, None)
+                .unwrap()
+                .fields
+                .get("_status"),
+            Some(&json!("published")),
+            "the refused unpublish changed nothing"
+        );
+
+        let doc = unpublish_global_document(&ctx, Some(1)).expect("unpublish");
+        assert_eq!(doc.fields.get("_status"), Some(&json!("draft")));
+        assert_eq!(doc.fields.get("_revision"), Some(&json!(2)));
     }
 
     /// Unpublishing moves `_status`, which a global without drafts does not
@@ -440,7 +491,7 @@ mod tests {
             .write_hooks(&wh)
             .build();
 
-        let err = unpublish_global_document(&ctx).unwrap_err();
+        let err = unpublish_global_document(&ctx, None).unwrap_err();
         assert!(
             matches!(&err, ServiceError::HookError(msg) if msg.contains("drafts")),
             "expected the drafts capability error, got {err:?}"

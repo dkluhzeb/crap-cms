@@ -10,7 +10,9 @@ pub(crate) mod hx;
 mod locale;
 mod pagination;
 pub(crate) mod paths;
+mod read_denials;
 pub(crate) mod response;
+mod row_denials;
 mod versions;
 mod write_error;
 
@@ -18,15 +20,18 @@ mod write_error;
 pub(crate) use db_error::db_error_status;
 
 // write errors on the edit forms
-pub(in crate::admin::handlers) use write_error::write_error_response;
+pub(in crate::admin::handlers) use write_error::{
+    conflict_keeps_form, unpublish_conflict_response, write_error_response,
+};
 
 // breadcrumb base-chains
 pub(crate) use breadcrumbs::{collection_base, collection_item_base, global_base};
 
 // Re-export field context functions from the dedicated module.
 pub(super) use crate::admin::handlers::field_context::{
-    EnrichOptions, apply_display_conditions, build_field_contexts, date_picker_values,
-    enrich_field_contexts, split_sidebar_fields, tag_values_of,
+    EnrichOptions, apply_display_conditions, build_field_contexts, condition_data,
+    date_picker_values, default_condition_data, enrich_field_contexts, form_condition_data,
+    split_sidebar_fields, tag_values_of,
 };
 
 // what the admin form renders
@@ -44,6 +49,13 @@ pub(crate) use access::{
     compute_denied_read_fields, evaluate_condition_results, get_user_doc, has_access_with_conn,
     has_page_access, has_page_access_with_conn, is_admin_visible, is_admin_visible_with_conn,
 };
+
+// what an edit form renders for a viewer who may not read every field
+pub(crate) use read_denials::{
+    collection_form_fields, collection_read_denials, global_form_fields, global_read_denials,
+    readable_form_fields,
+};
+pub(crate) use row_denials::FormReadDenials;
 
 // document
 pub(crate) use document::{

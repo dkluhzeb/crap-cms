@@ -142,6 +142,23 @@ fn fire_if_due(conn: &dyn DbConnection, tick: &CronTick<'_>) -> Result<()> {
     insert_cron_run(conn, tick)
 }
 
+/// The registered jobs in slug order. Every due schedule's fire claim
+/// row-locks its `_crap_cron_fired` row until the tick commits, so nodes
+/// ticking at the same moment must claim in one order — hash-map order
+/// differs per process, and two nodes could each hold a row the other waits
+/// on.
+fn jobs_in_slug_order(registry: &Registry) -> Vec<(&str, &JobDefinition)> {
+    let mut jobs: Vec<(&str, &JobDefinition)> = registry
+        .jobs
+        .iter()
+        .map(|(slug, def)| (&**slug, &**def))
+        .collect();
+
+    jobs.sort_unstable_by_key(|(slug, _)| *slug);
+
+    jobs
+}
+
 /// Check cron schedules and insert pending jobs for due ones.
 ///
 /// # Errors
@@ -161,7 +178,7 @@ pub fn check_cron_schedules(
         .transaction_immediate()
         .context("Failed to start cron check transaction")?;
 
-    for (slug, def) in &registry.jobs {
+    for (slug, def) in jobs_in_slug_order(registry) {
         fire_if_due(
             &tx,
             &CronTick {
@@ -312,6 +329,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(runs_for(&pool, "fresh_job"), 1);
+    }
+
+    /// Regression: the tick walked the job map in hash order, which differs
+    /// per process — two nodes ticking together could claim two due
+    /// schedules' rows crosswise and deadlock on Postgres. Jobs are claimed
+    /// in slug order.
+    #[test]
+    fn jobs_are_claimed_in_slug_order() {
+        let registry = make_registry_with_jobs(
+            ["delta", "alpha", "charlie", "bravo"]
+                .into_iter()
+                .map(|slug| JobDefinition::builder(slug, "some.handler").build())
+                .collect(),
+        );
+
+        let slugs: Vec<&str> = jobs_in_slug_order(&registry)
+            .into_iter()
+            .map(|(slug, _)| slug)
+            .collect();
+
+        assert_eq!(slugs, ["alpha", "bravo", "charlie", "delta"]);
     }
 
     #[test]

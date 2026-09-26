@@ -6,15 +6,15 @@ use serde_json::{Map, Value};
 
 use crate::{
     core::{
-        CollectionDefinition, Document, DocumentFields, FieldDefinition, RequiredLocales,
+        CollectionDefinition, Document, DocumentFields, FieldDefinition, HookRef, RequiredLocales,
         canonicalize_text_values, collection::Hooks, nest_group_fields,
     },
     db::{DbConnection, LocaleContext},
     hooks::{HookContext, ValidationCtx},
-    service::{WriteInput, hooks::WriteHooks},
+    service::{UpdateStored, WriteInput, hooks::WriteHooks, write::WriterHeldGate},
 };
 
-use super::ServiceError;
+use super::{NonObjectGroups, ServiceError};
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -108,16 +108,25 @@ pub struct ValidateContext<'a> {
     /// the context's, as the real write hands them.
     pub ui_locale: Option<&'a str>,
     /// The stored document field-level `access.update` rules judge as
-    /// `ctx.document`, exactly as the real update does. `None` in create mode;
-    /// an update without one judges an empty document, so stored-value rules
-    /// deny.
-    pub stored_document: Option<&'a DocumentFields>,
+    /// `ctx.document`, and what the previewed write replaces (the pending
+    /// draft for a draft save) for the values its writer cannot read, exactly
+    /// as the real update judges them. `None` in create mode; an update
+    /// without one judges an empty document, so stored-value rules deny.
+    pub stored_document: Option<UpdateStored<'a>>,
     /// The pending-draft snapshot a publish writes back over the row after
     /// validation, already stripped by the caller's field-level write access —
     /// the completeness gate judges the locales it replaces from it, exactly as
     /// the real publish does. `None` unless the previewed write publishes a
     /// pending draft.
     pub locale_overlay: Option<&'a Map<String, Value>>,
+    /// The draft view rule (`access.draft ?? access.update`): whether the
+    /// caller may lean on a value the pending draft holds, as the real update
+    /// judges it.
+    pub draft_access: Option<&'a HookRef>,
+    /// The groups the request set to something other than an object, found
+    /// by the write's admission — refused once the field-level write strip has
+    /// run, exactly as the real write refuses them. `None` checks nothing.
+    pub input_groups: Option<&'a NonObjectGroups>,
 }
 
 /// Validate a document without persisting — runs the full before-write pipeline
@@ -149,7 +158,9 @@ pub fn validate_document(
     let locale = input.locale_ctx.map(LocaleContext::access_locale);
     if ctx.operation == "update" {
         let empty = DocumentFields::default();
-        let stored = ctx.stored_document.unwrap_or(&empty);
+        let stored = ctx
+            .stored_document
+            .unwrap_or_else(|| UpdateStored::of_row(&empty));
 
         write_hooks.strip_write_access_update(
             ctx.fields,
@@ -161,6 +172,10 @@ pub fn validate_document(
         );
     } else {
         write_hooks.strip_write_access_create(ctx.fields, &mut input.data, ctx.slug, user, locale);
+    }
+
+    if let Some(groups) = ctx.input_groups {
+        groups.refuse_unstripped(&input.data)?;
     }
 
     let hook_data = input.data.clone();
@@ -179,6 +194,14 @@ pub fn validate_document(
     }
     let hook_ctx = hook_ctx_builder.build();
 
+    // The stored values a resubmitted value no check would now accept may lean
+    // on — only what this caller may read, as the real update judges it.
+    let held_gate = WriterHeldGate::builder(write_hooks, ctx.slug, ctx.fields)
+        .draft_access(ctx.draft_access)
+        .user(user)
+        .locale(locale)
+        .build();
+
     let val_ctx = ValidationCtx::builder(conn, ctx.table_name)
         .exclude_id(ctx.exclude_id)
         .draft(is_draft)
@@ -189,6 +212,7 @@ pub fn validate_document(
         .ui_locale(ctx.ui_locale)
         .locale_overlay(ctx.locale_overlay)
         .versioned_drafts(ctx.supports_drafts)
+        .held_gate(Some(&held_gate))
         .build();
 
     write_hooks.run_before_write(ctx.hooks, ctx.fields, hook_ctx, &val_ctx)?;
@@ -347,16 +371,24 @@ mod hook_context_tests {
 
     use anyhow::Result as AnyResult;
     use rusqlite::Connection;
+    use serde_json::{Map, Value};
 
-    use super::{ValidateContext, validate_document};
+    use super::{NonObjectGroups, ValidateContext, validate_document};
     use crate::{
-        core::{DocumentFields, FieldDefinition, FieldType, ValidationError, collection::Hooks},
+        core::{
+            DocumentFields, FieldAccess, FieldDefinition, FieldType, HookRef, ValidationError,
+            collection::Hooks,
+        },
         db::{AccessResult, DbConnection},
-        hooks::{AccessCheckInput, HookContext, HookEvent, ValidationCtx},
-        service::{FieldReadStrip, WriteInput, hooks::WriteHooks},
+        hooks::{
+            AccessCheckInput, HookContext, HookEvent, ValidationCtx,
+            lifecycle::access::WriteStripInput,
+        },
+        service::{FieldReadStrip, ServiceError, WriteInput, hooks::WriteHooks},
     };
 
-    /// Records the `ctx.ui_locale` the before-write chain is handed.
+    /// Records the `ctx.ui_locale` the before-write chain is handed, and
+    /// denies every field-level create rule named `deny`.
     #[derive(Default)]
     struct UiLocaleSpy {
         seen: Mutex<Vec<Option<String>>>,
@@ -400,6 +432,22 @@ mod hook_context_tests {
             Ok(AccessResult::Allowed)
         }
 
+        fn strip_write_access_map(
+            &self,
+            fields: &[FieldDefinition],
+            level: &mut Map<String, Value>,
+            _input: &WriteStripInput<'_>,
+        ) {
+            let is_denied = |f: &FieldDefinition| {
+                f.access
+                    .create
+                    .as_ref()
+                    .is_some_and(|rule| rule.reference() == "deny")
+            };
+
+            level.retain(|key, _| !fields.iter().any(|f| &f.name == key && is_denied(f)));
+        }
+
         fn validate_fields(
             &self,
             _fields: &[FieldDefinition],
@@ -435,6 +483,8 @@ mod hook_context_tests {
             ui_locale: Some("de"),
             stored_document: None,
             locale_overlay: None,
+            draft_access: None,
+            input_groups: None,
         };
 
         let spy = UiLocaleSpy::default();
@@ -443,5 +493,62 @@ mod hook_context_tests {
         validate_document(&conn, &spy, &ctx, input, None).expect("validate");
 
         assert_eq!(*spy.seen.lock().unwrap(), vec![Some("de".to_string())]);
+    }
+
+    /// The dry-run refuses a non-object group exactly where the write does:
+    /// past the field-level write strip, so a group its caller may not write
+    /// is dropped silently and one it may write is refused.
+    #[test]
+    fn validate_refuses_a_null_group_only_when_the_strip_keeps_it() {
+        let conn = Connection::open_in_memory().unwrap();
+        let group = |name: &str, access: FieldAccess| {
+            FieldDefinition::builder(name, FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("band", FieldType::Text).build(),
+                ])
+                .access(access)
+                .build()
+        };
+        let denied = FieldAccess {
+            create: Some(HookRef::new("deny")),
+            ..Default::default()
+        };
+        let fields = vec![
+            group("payroll", denied),
+            group("profile", FieldAccess::default()),
+        ];
+        let hooks = Hooks::default();
+
+        let validate = |key: &str| {
+            let data: DocumentFields = [(key.to_string(), Value::Null)].into_iter().collect();
+            let groups = NonObjectGroups::of(&data, &fields);
+            let ctx = ValidateContext {
+                slug: "staff",
+                table_name: "staff",
+                fields: &fields,
+                hooks: &hooks,
+                operation: "create",
+                exclude_id: None,
+                soft_delete: false,
+                supports_drafts: false,
+                required_locales: None,
+                ui_locale: None,
+                stored_document: None,
+                locale_overlay: None,
+                draft_access: None,
+                input_groups: Some(&groups),
+            };
+
+            let spy = UiLocaleSpy::default();
+            validate_document(&conn, &spy, &ctx, WriteInput::builder(data).build(), None)
+        };
+
+        assert!(validate("payroll").is_ok(), "the denied group is stripped");
+
+        let err = validate("profile").unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(ve) if ve.to_field_map().contains_key("profile")),
+            "got {err:?}"
+        );
     }
 }

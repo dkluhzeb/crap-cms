@@ -40,6 +40,7 @@ pub(super) fn setup_db() -> (TempDir, BoxedConnection) {
     conn.execute_batch(
         "CREATE TABLE posts (
             id TEXT PRIMARY KEY,
+            _revision INTEGER NOT NULL DEFAULT 0,
             title TEXT,
             body TEXT,
             status TEXT,

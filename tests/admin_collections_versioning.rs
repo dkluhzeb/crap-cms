@@ -33,8 +33,9 @@ use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
+use crap_cms::core::upload::CollectionUpload;
 use crap_cms::core::{JwtSecret, LiveSlots, Registry};
-use crap_cms::db::{DbConnection, migrate, pool, query};
+use crap_cms::db::{DbConnection, DbValue, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 use serde_json::json;
 
@@ -574,6 +575,58 @@ async fn versioned_collection_update_unpublish() {
     );
 }
 
+/// Regression: the edit form's Unpublish posts only its action, URL-encoded
+/// (it sends none of the form's fields, so no file either). An upload
+/// collection's edit handler read every submission as multipart and refused
+/// that post, so Unpublish failed on every drafts-enabled upload collection.
+#[tokio::test]
+async fn an_upload_collection_unpublishes_from_an_encoded_post() {
+    let articles = make_versioned_posts_def();
+    let mut media = CollectionDefinition::new("media");
+    media.fields = articles.fields;
+    media.versions = articles.versions;
+    media.upload = Some(CollectionUpload::new());
+
+    let app = setup_app(vec![media, make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "unpub-media@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "unpub-media@test.com");
+
+    let def = app.registry.get_collection("media").unwrap().clone();
+    let mut conn = app.pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!("Photo"))]).into();
+    let doc = query::create(&tx, "media", &def, &data, None).unwrap();
+    tx.commit().unwrap();
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post(format!("/admin/collections/media/{}", doc.id))
+                .header("cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("_method=PUT&_action=unpublish"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    assert!(
+        status.is_success() || status.is_redirection(),
+        "the unpublish lands, got {status}"
+    );
+
+    let conn = app.pool.get().unwrap();
+    let row = conn
+        .query_one(
+            "SELECT _status FROM media WHERE id = ?1",
+            &[DbValue::Text(doc.id.to_string())],
+        )
+        .unwrap()
+        .expect("the row");
+    assert_eq!(row.get_string("_status").unwrap(), "draft");
+}
+
 /// Regression: unpublish on a versioned collection whose `title` field is
 /// `localized = true` and locales are enabled (`["en", "de"]`) used to fail
 /// silently. The handler called `service::unpublish_document(&ctx, id)`,
@@ -629,9 +682,9 @@ async fn versioned_collection_unpublish_with_localized_field() {
         "INSERT INTO articles (id, title__en, title__de, _status, created_at, updated_at) \
          VALUES (?1, ?2, ?3, 'published', '2026-01-01', '2026-01-01')",
         &[
-            crap_cms::db::DbValue::Text(id.into()),
-            crap_cms::db::DbValue::Text("Hello".into()),
-            crap_cms::db::DbValue::Text("Hallo".into()),
+            DbValue::Text(id.into()),
+            DbValue::Text("Hello".into()),
+            DbValue::Text("Hallo".into()),
         ],
     )
     .unwrap();
@@ -661,12 +714,12 @@ async fn versioned_collection_unpublish_with_localized_field() {
     let row = conn
         .query_one(
             "SELECT _status FROM articles WHERE id = ?1",
-            &[crap_cms::db::DbValue::Text(id.into())],
+            &[DbValue::Text(id.into())],
         )
         .unwrap()
         .expect("row exists");
     let status_value = match row.get_value(0) {
-        Some(crap_cms::db::DbValue::Text(s)) => s.clone(),
+        Some(DbValue::Text(s)) => s.clone(),
         other => panic!("expected text _status, got {other:?}"),
     };
     assert_eq!(
@@ -684,12 +737,12 @@ async fn versioned_collection_unpublish_with_localized_field() {
     let snapshot_row = conn
         .query_one(
             "SELECT snapshot FROM _versions_articles WHERE _parent = ?1 ORDER BY _version DESC LIMIT 1",
-            &[crap_cms::db::DbValue::Text(id.into())],
+            &[DbValue::Text(id.into())],
         )
         .unwrap()
         .expect("unpublish snapshot exists");
     let snapshot_text = match snapshot_row.get_value(0) {
-        Some(crap_cms::db::DbValue::Text(s)) => s.clone(),
+        Some(DbValue::Text(s)) => s.clone(),
         other => panic!("expected text snapshot, got {other:?}"),
     };
     let snapshot: serde_json::Value = serde_json::from_str(&snapshot_text).unwrap();

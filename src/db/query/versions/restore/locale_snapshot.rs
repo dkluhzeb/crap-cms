@@ -53,8 +53,25 @@ impl<'a> LocaleSnapshot<'a> {
     /// and the live rows are left alone — the bare key holds whichever locale
     /// the snapshotted write was made under, and taking it would copy those
     /// rows into another locale.
+    ///
+    /// The entry of a join field inside a group is found flat at the snapshot
+    /// root (`seo__items__de`) or inside the group object (`seo.items__de`),
+    /// the two places a value resolves from: a snapshot normalized to nested
+    /// groups carries it in the group.
     pub(crate) fn rows(&self, key: &str, locale: &str) -> Result<Option<&'a Value>> {
-        Ok(self.obj.get(&locale_column(key, locale)?))
+        let decorated = locale_column(key, locale)?;
+
+        // Field names never contain `__`, so the last one separates the group
+        // path from the field.
+        let (prefix, field) = key.rsplit_once("__").unwrap_or(("", key));
+        let decorated_field = locale_column(field, locale)?;
+
+        Ok(resolve_snapshot_value(
+            self.obj,
+            &decorated,
+            prefix,
+            &decorated_field,
+        ))
     }
 
     /// The value of `key` for `locale`. EVERY locale prefers the decorated key
@@ -89,6 +106,7 @@ impl<'a> LocaleSnapshot<'a> {
 mod tests {
     use serde_json::json;
 
+    use super::LocaleSnapshot;
     use crate::{
         config::LocaleConfig,
         core::{CollectionDefinition, Document, FieldDefinition, FieldType, VersionsConfig},
@@ -100,6 +118,39 @@ mod tests {
         },
     };
 
+    /// Regression: a snapshot whose groups were nested — as the write-access
+    /// strip of a restore or a publish leaves it — carried a group's
+    /// per-locale rows inside the group object, where the lookup never
+    /// looked: that locale's rows were neither restored nor published.
+    #[test]
+    fn a_groups_per_locale_rows_are_found_flat_or_nested() {
+        let config = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+        let obj = json!({
+            "seo": { "items__de": [{ "id": "nested" }] },
+            "meta__links__de": [{ "id": "flat" }],
+            "top__de": [{ "id": "top" }],
+        });
+        let snapshot = LocaleSnapshot::new(obj.as_object().unwrap(), &config);
+
+        assert_eq!(
+            snapshot.rows("seo__items", "de").unwrap(),
+            Some(&json!([{ "id": "nested" }]))
+        );
+        assert_eq!(
+            snapshot.rows("meta__links", "de").unwrap(),
+            Some(&json!([{ "id": "flat" }]))
+        );
+        assert_eq!(
+            snapshot.rows("top", "de").unwrap(),
+            Some(&json!([{ "id": "top" }]))
+        );
+        assert_eq!(snapshot.rows("seo__items", "en").unwrap(), None);
+    }
+
     /// Regression: a snapshot recorded every per-locale column as text — a
     /// localized number or checkbox read back as a string, or not at all where
     /// the backend won't read a number as text — and restore cleared a
@@ -110,6 +161,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE items (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 price__en REAL,
                 price__de REAL,
                 done__en INTEGER,
@@ -190,6 +242,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 title__en TEXT,
                 title__pt_BR TEXT,
                 _status TEXT DEFAULT 'published',
@@ -274,6 +327,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE events (
                 id TEXT PRIMARY KEY,
+                _revision INTEGER NOT NULL DEFAULT 0,
                 start_date__en TEXT,
                 start_date__de TEXT,
                 start_date_tz__en TEXT,

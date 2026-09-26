@@ -830,6 +830,13 @@ message UpdateRequest {
   // Emit a live-update event for the updated document. Default: true.
   // Set false for a quiet write.
   optional bool events = 7;
+
+  // Optimistic-locking precondition: the document's `_revision` as the caller
+  // last read it. When the document has been written since, the update is
+  // refused with ABORTED and nothing changes — re-read and retry, or resend
+  // with the current revision to overwrite. Absent = unconditional write.
+  // Also applies when `unpublish` is set.
+  optional int64 expected_revision = 8;
 }
 
 // UpdateResponse returns the document after applying the update.
@@ -929,6 +936,11 @@ message UpdateGlobalRequest {
   // Save as an unpublished draft (drafts-enabled globals only). Default:
   // false (publishes). Parity with the MCP/Lua/admin global update.
   optional bool draft = 5;
+
+  // Optimistic-locking precondition: the global's `_revision` as the caller
+  // last read it. When the global has been written since, the update is
+  // refused with ABORTED and nothing changes. Absent = unconditional write.
+  optional int64 expected_revision = 6;
 }
 
 // UpdateGlobalResponse returns the global document after the update.
@@ -1197,6 +1209,10 @@ message Document {
   // All field values as a JSON-compatible Struct.
   // Field-level access control (read) is applied before this is populated.
   // Password and other hidden columns are never included.
+  // Carries the system key "_revision" (int): the document's revision,
+  // moved forward by every write. Send it back as `expected_revision` on
+  // UpdateRequest / UpdateGlobalRequest to have a write refused (ABORTED)
+  // when someone else wrote the document in between.
   DataMap fields = 3;
 
   // ISO-8601 UTC creation timestamp (e.g., "2024-01-15T10:30:00Z").

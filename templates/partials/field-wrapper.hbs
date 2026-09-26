@@ -1,0 +1,27 @@
+{{!-- partials/field-wrapper
+     The wrapper every rendered form field sits in, and the one place its
+     markup lives: width, display-condition state, and the attributes the
+     browser components key on — `data-field-name` (the form name: error
+     placement, live conditions), `data-kind` (the field type) and
+     `data-has-many` (a list value) and `data-timezone` (a date that stores
+     the zone chosen beside it), which the display-condition evaluator
+     decodes the field's value by.
+
+     Context: a field context (`name`, `field_type`, `width`, …).
+
+     Params (optional):
+       extra_class — one more class on the wrapper (a row item)
+       no_width    — bool; ignore the field's width (the sidebar is one
+                     column) --}}
+<div
+  class="form__field{{#if extra_class}} {{extra_class}}{{/if}}{{#if (and width (not no_width))}} form__field--sized form__field--{{width}}{{/if}}{{#if (eq condition_visible false)}} form__field--hidden{{/if}}"
+  {{#if condition_json}}data-condition='{{{json condition_json}}}'{{/if}}
+  {{#if condition_ref}}data-condition-ref="{{condition_ref}}"{{/if}}
+  {{#if (and width_value (not no_width))}}data-field-width="{{width_value}}"{{/if}}
+  data-field-name="{{name}}"
+  data-kind="{{field_type}}"
+  {{#if has_many}}data-has-many{{/if}}
+  {{#if timezone_enabled}}data-timezone{{/if}}
+>
+  {{{render_field this}}}
+</div>

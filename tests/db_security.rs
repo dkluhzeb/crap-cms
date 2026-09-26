@@ -23,7 +23,7 @@ use rusqlite::Connection;
 fn test_sql_injection_locale_sanitization() {
     let conn = Connection::open_in_memory().unwrap();
     // Create a table with localized columns
-    conn.execute_batch("CREATE TABLE posts (id TEXT PRIMARY KEY, title__en TEXT, title__de TEXT)")
+    conn.execute_batch("CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title__en TEXT, title__de TEXT)")
         .unwrap();
     conn.execute(
         "INSERT INTO posts (id, title__en, title__de) VALUES ('1', 'Hello', 'Hallo')",
@@ -81,7 +81,7 @@ fn test_sql_injection_locale_sanitization() {
 #[test]
 fn test_sql_injection_via_union_in_locale() {
     let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch("CREATE TABLE posts (id TEXT PRIMARY KEY, title__en TEXT, title__de TEXT)")
+    conn.execute_batch("CREATE TABLE posts (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title__en TEXT, title__de TEXT)")
         .unwrap();
     conn.execute(
         "INSERT INTO posts (id, title__en, title__de) VALUES ('1', 'Post 1', 'Beitrag 1')",

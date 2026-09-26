@@ -13,6 +13,7 @@ use mlua::Lua;
 use tracing::warn;
 
 use crate::{
+    core::outside_commit_gate,
     db::DbPool,
     hooks::{
         HookRunner, LuaCrudInfra,
@@ -29,22 +30,25 @@ use crate::{
 /// responsible for the VM's context (`TxContextGuard`) — this only resolves
 /// and invokes. Errors are logged per effect and never propagate.
 ///
-/// A job handler's deadline is lifted while the effects run: they belong to
-/// a transaction that already resolved, so a job stopped at its timeout
-/// still delivers a committed write's side effects and a rolled-back one's
-/// compensations.
+/// A job handler's deadline — and a timed-out request's commit gate — is
+/// lifted while the effects run: they belong to a transaction that already
+/// resolved, so a job stopped at its timeout, or a request answered as timed
+/// out, still delivers a committed write's side effects and a rolled-back
+/// one's compensations.
 pub(crate) fn run_effects_on_vm(lua: &Lua, effects: &[DeferredEffect], outcome: EffectOutcome) {
     let _deadline = ExecutionDeadlineGuard::suspend(lua);
 
-    for effect in effects.iter().filter(|e| e.runs_on(outcome)) {
-        if let Err(e) = call_one_effect(lua, effect) {
-            warn!(
-                "tx {} effect '{}' failed: {e:#}",
-                effect.outcome.as_str(),
-                effect.hook_ref
-            );
+    outside_commit_gate(|| {
+        for effect in effects.iter().filter(|e| e.runs_on(outcome)) {
+            if let Err(e) = call_one_effect(lua, effect) {
+                warn!(
+                    "tx {} effect '{}' failed: {e:#}",
+                    effect.outcome.as_str(),
+                    effect.hook_ref
+                );
+            }
         }
-    }
+    });
 }
 
 /// Resolve one effect's hook ref and call it with `{ data, outcome }`, where

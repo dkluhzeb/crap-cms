@@ -19,7 +19,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tonic::Request;
+use tonic::{Code, Request};
 
 use crap_cms::api::content;
 use crap_cms::api::content::content_api_server::ContentApi;
@@ -497,5 +497,94 @@ async fn mcp_update_by_row_id_preserves_omitted_subfield() {
         variants[0]["dimensions"]["width"].as_str(),
         Some("10"),
         "the omitted nested group is preserved via the row-id match"
+    );
+}
+
+/// Optimistic locking behaves the same on every surface: an update carrying
+/// the revision the caller read lands and moves it forward, one carrying a
+/// revision someone else has written past is refused with a revision
+/// conflict (gRPC `ABORTED`) and changes nothing, and each surface reports
+/// the revision its write left the document at.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stale_expected_revision_is_refused_identically_on_every_surface() {
+    let h = harness();
+
+    let id = h.lua_eval(
+        r#"local d = crap.collections.create("articles", { title = "Rev0" }); return d.id"#,
+    );
+    let lua_revision = |h: &ParityHarness| -> String {
+        h.lua_eval(&format!(
+            r#"return tostring(crap.collections.find_by_id("articles", "{id}")._revision)"#
+        ))
+    };
+    assert_eq!(lua_revision(&h), "0", "a new document starts at revision 0");
+
+    // gRPC: the current revision lands, the stale one is ABORTED.
+    let grpc_update = |title: &str, expected: i64| {
+        h.service.update(Request::new(content::UpdateRequest {
+            collection: "articles".to_string(),
+            id: id.clone(),
+            data: Some(make_struct(&[("title", title)])),
+            expected_revision: Some(expected),
+            ..Default::default()
+        }))
+    };
+
+    let landed = grpc_update("Rev1", 0)
+        .await
+        .expect("the current revision lands")
+        .into_inner()
+        .document
+        .expect("document");
+    assert_eq!(
+        landed.fields.expect("fields").fields["_revision"].kind,
+        Some(content::field_value::Kind::IntValue(1)),
+        "the response carries the revision the write moved to"
+    );
+
+    let refused = grpc_update("Stale", 0).await.expect_err("stale revision");
+    assert_eq!(refused.code(), Code::Aborted, "{refused:?}");
+
+    // Lua: the same stale revision raises a revision conflict.
+    let lua_stale = h.lua_eval(&format!(
+        r#"local ok, err = pcall(function()
+               crap.collections.update("articles", "{id}", {{ title = "Stale" }},
+                   {{ expected_revision = 0 }})
+           end)
+           return ok and "ok" or tostring(err)"#
+    ));
+    assert!(lua_stale.contains("Revision conflict"), "{lua_stale}");
+
+    // MCP: likewise refused, then accepted at the current revision.
+    let mcp_stale = h
+        .mcp_call(
+            "update_articles",
+            &json!({ "id": id, "title": "Stale", "expected_revision": 0 }),
+        )
+        .expect_err("stale revision");
+    assert!(mcp_stale.contains("Revision conflict"), "{mcp_stale}");
+
+    let mcp_landed = h
+        .mcp_call(
+            "update_articles",
+            &json!({ "id": id, "title": "Rev2", "expected_revision": 1 }),
+        )
+        .expect("the current revision lands");
+    assert_eq!(mcp_landed["_revision"], json!(2), "{mcp_landed}");
+
+    let lua_landed = h.lua_eval(&format!(
+        r#"return tostring(crap.collections.update("articles", "{id}", {{ title = "Rev3" }},
+               {{ expected_revision = 2 }})._revision)"#
+    ));
+    assert_eq!(lua_landed, "3");
+
+    // Only the three admitted writes moved the document.
+    assert_eq!(lua_revision(&h), "3");
+    let title = h.lua_eval(&format!(
+        r#"return crap.collections.find_by_id("articles", "{id}").title"#
+    ));
+    assert!(
+        title.eq_ignore_ascii_case("Rev3"),
+        "the refused writes changed nothing: {title}"
     );
 }

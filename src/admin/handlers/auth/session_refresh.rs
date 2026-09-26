@@ -6,7 +6,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
-use tokio::task;
 use tracing::error;
 
 use crate::{
@@ -19,6 +18,7 @@ use crate::{
     core::{
         auth::{Claims, TokenUse},
         collection::Surface,
+        spawn_request_blocking,
     },
     db::{DbPool, query::is_valid_identifier},
     service::{
@@ -125,7 +125,7 @@ async fn current_session_version(state: &AdminState, claims: &Claims) -> Result<
     let slug = claims.collection.clone();
     let user_id = claims.sub.clone();
 
-    let check = task::spawn_blocking(move || check_session_status(&pool, &slug, &user_id))
+    let check = spawn_request_blocking(move || check_session_status(&pool, &slug, &user_id))
         .await
         .inspect_err(|e| error!("Session refresh task error: {}", e))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

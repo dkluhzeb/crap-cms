@@ -154,10 +154,11 @@ pub fn max_updated_at(
 /// Parameters for [`count_where_field_eq`] — a unique-constraint count query.
 ///
 /// Built via [`FieldEqCount::builder`]; `exclude_id` excludes the document
-/// being updated, `soft_delete` skips trashed rows (`_deleted_at IS NULL`),
-/// and `case_insensitive` compares `LOWER(col) = LOWER(?)` — used for email
-/// identity fields so uniqueness matches the case-insensitive login lookup
-/// (`find_by_email`); all three default off.
+/// being updated and `soft_delete` skips trashed rows (`_deleted_at IS NULL`);
+/// both default off. The value is compared exactly: it is the form a write
+/// stores (an email canonical — lowercased, NFC-composed), so a duplicate
+/// matches however it was typed, without SQL case folding whose rules need not
+/// agree with that form.
 #[derive(Builder)]
 pub struct FieldEqCount<'a> {
     #[builder(required)]
@@ -168,7 +169,6 @@ pub struct FieldEqCount<'a> {
     value: DbValue,
     exclude_id: Option<&'a str>,
     soft_delete: bool,
-    case_insensitive: bool,
 }
 
 /// Count rows where a field equals a value, optionally excluding an ID.
@@ -185,7 +185,6 @@ pub fn count_where_field_eq(conn: &dyn DbConnection, params: &FieldEqCount<'_>) 
         ref value,
         exclude_id,
         soft_delete,
-        case_insensitive,
     } = *params;
 
     if !is_valid_identifier(field) {
@@ -199,11 +198,7 @@ pub fn count_where_field_eq(conn: &dyn DbConnection, params: &FieldEqCount<'_>) 
     };
 
     let p1 = conn.placeholder(1);
-    let compare = if case_insensitive {
-        format!("LOWER(\"{field}\") = LOWER({p1})")
-    } else {
-        format!("\"{field}\" = {p1}")
-    };
+    let compare = format!("\"{field}\" = {p1}");
 
     let row = if let Some(eid) = exclude_id {
         let p2 = conn.placeholder(2);
@@ -271,6 +266,7 @@ mod tests {
             .execute_batch(
                 "CREATE TABLE posts (
                     id TEXT PRIMARY KEY,
+                    _revision INTEGER NOT NULL DEFAULT 0,
                     title TEXT,
                     status TEXT,
                     created_at TEXT,
@@ -298,7 +294,7 @@ mod tests {
     fn max_updated_at_without_timestamps_is_none() {
         let (_tmp, pool) = setup_db();
         let conn = pool.get().unwrap();
-        conn.execute_batch("CREATE TABLE logs (id TEXT PRIMARY KEY, title TEXT)")
+        conn.execute_batch("CREATE TABLE logs (id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, title TEXT)")
             .unwrap();
 
         let mut def = CollectionDefinition::new("logs");
@@ -376,42 +372,6 @@ mod tests {
         assert_eq!(c_excl, 1);
     }
 
-    /// Case-insensitive comparison (email identity fields): a value that differs
-    /// only in case must still match, so `Victim@x.com` and `victim@x.com` are
-    /// one account for uniqueness — mirroring the case-insensitive login lookup.
-    #[test]
-    fn count_where_field_eq_case_insensitive_matches_different_case() {
-        let (_tmp, pool) = setup_db();
-        let conn = pool.get().unwrap();
-        let def = test_def();
-
-        let mut d1 = DocumentFields::new();
-        d1.insert("title".to_string(), json!("Victim@X.com"));
-        d1.insert("status".to_string(), json!("draft"));
-        create(&conn, "posts", &def, &d1, None).unwrap();
-
-        // Exact match: different case does NOT match.
-        let exact = count_where_field_eq(
-            &conn,
-            &FieldEqCount::builder("posts", "title", DbValue::Text("victim@x.com".into())).build(),
-        )
-        .unwrap();
-        assert_eq!(exact, 0, "exact comparison is case-sensitive");
-
-        // Case-insensitive: the differently-cased value matches.
-        let ci = count_where_field_eq(
-            &conn,
-            &FieldEqCount::builder("posts", "title", DbValue::Text("victim@x.com".into()))
-                .case_insensitive(true)
-                .build(),
-        )
-        .unwrap();
-        assert_eq!(
-            ci, 1,
-            "case-insensitive comparison matches regardless of case"
-        );
-    }
-
     #[test]
     fn count_where_field_eq_invalid_field_name() {
         let (_tmp, pool) = setup_db();
@@ -449,6 +409,7 @@ mod tests {
             .execute_batch(
                 "CREATE TABLE articles (
                     id TEXT PRIMARY KEY,
+                    _revision INTEGER NOT NULL DEFAULT 0,
                     title TEXT,
                     status TEXT,
                     _deleted_at TEXT,

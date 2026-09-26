@@ -20,6 +20,7 @@
 - [Definition Schema](collections/definition-schema.md)
 - [Versions & Drafts](collections/versions.md)
 - [Soft Deletes](collections/soft-deletes.md)
+- [Concurrent Editing](collections/concurrent-editing.md)
 
 # Fields
 

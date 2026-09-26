@@ -1,0 +1,18 @@
+{{!-- partials/implicit-submit
+     The default button of a drafts-enabled edit form. Pressing Enter in a
+     single-line input submits the form through its FIRST submit button, and
+     the first visible one is Publish — so Enter would make the content live.
+     This button comes first in the form and saves a draft instead: Enter
+     never publishes. Visually hidden and out of the tab order; Publish stays
+     a deliberate click. --}}
+<button
+  type="submit"
+  name="_action"
+  value="save_draft"
+  formnovalidate
+  class="sr-only"
+  tabindex="-1"
+  aria-hidden="true"
+>
+  {{t "save_draft"}}
+</button>

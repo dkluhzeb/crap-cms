@@ -1,5 +1,5 @@
 //! The `soft_delete` transition of an existing collection table: the inline
-//! `UNIQUE` constraints give way to the partial unique indexes `sync_indexes`
+//! `UNIQUE` constraints give way to the partial unique indexes the schema sync
 //! manages, so a trashed row stops blocking a new one with the same value.
 //!
 //! Postgres drops the constraints in place. `SQLite` cannot, so the table is

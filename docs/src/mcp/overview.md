@@ -226,6 +226,7 @@ covers reads as well as writes:
 | `select` | `find_*`, `find_by_id_*` | Field names to return (projection); omit for all fields. |
 | `id` | `find_by_id_*`, `update_*`, `validate_*`, `delete_*`, `undelete_*`, `unpublish_*`, `list_versions_*`, `restore_version_*` | Target document ID — addressed as its own argument, never as field data. |
 | `events` | `create_*`, `update_*`, `delete_*`, `undelete_*`, `unpublish_*`, `create_many_*`, `update_many_*`, `delete_many_*`, `global_update_*` | Publish live events for this write. Defaults to `true` on single-document tools and `false` on the bulk (`*_many_*`) tools. |
+| `expected_revision` | `update_*`, `unpublish_*`, `global_update_*` | The document's `_revision` as last read: when the document was written since, the write is refused with a `Revision conflict` error and nothing changes. Omit to write unconditionally. |
 | `force_hard_delete` | `delete_*`, `delete_many_*` | Skip `soft_delete` and remove the row permanently. |
 | `documents` | `create_many_*` | The array of documents to create — each item carries that document's own field data. |
 | `hooks` | `create_many_*`, `update_many_*`, `delete_many_*` | Run lifecycle hooks per item (default `true`). Bulk-only; single-document tools always run hooks. |

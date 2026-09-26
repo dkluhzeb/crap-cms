@@ -5,29 +5,20 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use tokio::task;
 
 use crate::{
     admin::{AdminState, handlers::auth::LocaleForm},
-    core::auth::AuthUser,
+    core::{auth::AuthUser, spawn_request_blocking},
     db::DbPool,
     service::user_settings,
 };
 
-/// Read the user's settings JSON, update the `ui_locale` field, and write it back.
+/// Store the user's preferred UI locale, leaving their other settings as
+/// they are (see [`user_settings::update_user_settings`]).
 fn update_user_locale(pool: &DbPool, user_id: &str, locale: &str) -> Result<(), Error> {
-    // IMMEDIATE tx: same whole-blob read-modify-write lost-update guard as
-    // `save_column_preferences` — a concurrent column-preference save must not
-    // clobber this locale change. From the write pool, so the transaction does
-    // not hold a read connection.
-    let mut conn = pool.write()?;
-    let tx = conn.transaction_immediate()?;
-
-    let mut settings = user_settings::load_user_settings(&tx, user_id)?;
-    settings.set_ui_locale(locale);
-
-    user_settings::set_user_settings(&tx, user_id, &settings.to_json())?;
-    tx.commit()?;
+    user_settings::update_user_settings(pool, user_id, |settings| {
+        settings.set_ui_locale(locale);
+    })?;
 
     Ok(())
 }
@@ -48,7 +39,7 @@ pub async fn save_locale(
     let user_id = auth_user.claims.sub.clone();
     let locale = form.locale.clone();
 
-    let result = task::spawn_blocking(move || update_user_locale(&pool, &user_id, &locale)).await;
+    let result = spawn_request_blocking(move || update_user_locale(&pool, &user_id, &locale)).await;
 
     match result {
         Ok(Ok(())) => StatusCode::NO_CONTENT,

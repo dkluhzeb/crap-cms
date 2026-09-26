@@ -10,7 +10,7 @@ use mlua::{
 use tracing::{debug, info};
 
 use crate::{
-    config::CrapConfig,
+    config::{CrapConfig, ErrorReport},
     core::Registry,
     hooks::{
         io_jail::{IoJail, install_io_jail},
@@ -18,7 +18,7 @@ use crate::{
     },
 };
 
-use super::{config_defaults::apply_config_defaults, lua_api};
+use super::{config_defaults::apply_config_defaults, lua_api, startup_checks};
 
 /// Initialize the Lua VM, register the crap API, load collections/globals,
 /// and run init.lua. Returns an immutable `Arc<Registry>` snapshot.
@@ -57,9 +57,7 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     // init.lua so any later runtime call gets a clear error.
     lua.set_app_data(InitPhase);
 
-    let n_collections = load_def_dir(&lua, config_dir, "collection")?;
-    let n_globals = load_def_dir(&lua, config_dir, "global")?;
-    let n_jobs = load_def_dir(&lua, config_dir, "job")?;
+    let counts = load_definitions(&lua, config_dir)?;
 
     // Per-slug typing-helper factories — `crap.collections.<slug>.field_hook(...)`
     // etc. need to exist before init.lua / the hook-ref validation pass
@@ -75,9 +73,9 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
 
     info!(
         "Lua init: loaded {} collection(s), {} global(s), {} job(s){}",
-        n_collections,
-        n_globals,
-        n_jobs,
+        counts.collections,
+        counts.globals,
+        counts.jobs,
         if has_init { ", executed init.lua" } else { "" }
     );
 
@@ -88,79 +86,7 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     // instead of `&SharedRegistry`).
     let snapshot = Registry::snapshot(&registry);
 
-    // Statically-known hook/access refs are resolved at startup so typos
-    // fail to boot instead of surfacing at first request. Resolving them
-    // runs the required modules' top level, under a fresh budget.
-    reset_instruction_budget(&lua);
-    super::startup_checks::validate_hook_references(&lua, &snapshot)
-        .context("Hook/access reference validation failed")?;
-
-    // Custom route handler/access refs must resolve and not collide — fail to
-    // boot rather than 500 (or panic at router assembly) on first request.
-    super::startup_checks::validate_pages(&lua).context("Custom page validation failed")?;
-    super::startup_checks::validate_routes(&lua, &config.routes.prefix)
-        .context("Custom route validation failed")?;
-
-    // The [admin] access gate ref must resolve — the runtime gate fails
-    // closed, so a typo here would lock everyone out of the admin panel.
-    super::startup_checks::validate_admin_access_ref(&lua, config.admin.access.as_ref())
-        .context("Admin access gate validation failed")?;
-
-    // Reject field names that collide with the generated locale-suffixed
-    // column pattern `{name}__{locale}`.
-    super::startup_checks::validate_locale_field_collisions(&snapshot, &config.locale.locales)
-        .context("Locale/field-name collision detected")?;
-
-    // Reject `required_locales` settings that reference unconfigured locales,
-    // so a typo fails to boot instead of failing every non-draft write at
-    // runtime with a confusing `validation.required_locale` error.
-    super::startup_checks::validate_required_locales(&snapshot, &config.locale.locales)
-        .context("Invalid required_locales configuration")?;
-
-    // A relationship/upload/join whose target collection is not registered
-    // would fail the ref-count recompute and every reference write — reject
-    // it (and an upload targeting a non-upload collection) at load.
-    super::startup_checks::validate_relation_targets(&snapshot)
-        .context("Relationship target validation failed")?;
-
-    // A join listing more documents than `[pagination] max_limit` would
-    // populate an unbounded list on every read of its owner.
-    super::startup_checks::validate_join_limits(&snapshot, config.pagination.max_limit)
-        .context("Join limit validation failed")?;
-
-    // A rich text field naming a custom node that was never registered would
-    // silently lose that node in the editor, validation and search.
-    super::startup_checks::validate_richtext_nodes(&snapshot)
-        .context("Rich text node validation failed")?;
-
-    // Reject definitions whose generated table names collide (e.g. a
-    // collection slugged `posts_tags` vs the `tags` array field of `posts`).
-    super::startup_checks::validate_table_name_collisions(&snapshot)
-        .context("Table name collision detected")?;
-
-    // Validate per-collection auth.methods configurations: hard errors
-    // for structural issues (enabled+empty methods, duplicate password_login,
-    // etc.), warnings for footgun patterns (always-active strategies).
-    super::startup_checks::validate_auth_methods(&snapshot)
-        .context("Auth method configuration invalid")?;
-
-    // A cron `schedule` the scheduler cannot parse can only be skipped, which
-    // is indistinguishable from "not due yet" — fail the boot instead.
-    super::startup_checks::validate_job_schedules(&snapshot)
-        .context("Job schedule validation failed")?;
-
-    // A list view orders by `admin.default_sort` on every request; a column
-    // the table does not have would only fail on the first load.
-    super::startup_checks::validate_admin_default_sorts(&snapshot)
-        .context("admin.default_sort validation failed")?;
-
-    // Advisory warning (not a hard error): with default_deny = false, a
-    // collection's draft/trash view with no gating rule is world-readable.
-    super::startup_checks::warn_public_lifecycle_views(&snapshot, config.access.default_deny);
-
-    // Advisory warning: a field whose name is a reserved MCP tool argument is
-    // shadowed on that surface (its value is dropped there).
-    super::startup_checks::warn_mcp_reserved_field_shadowing(&snapshot, config.mcp.enabled);
+    startup_checks::run_startup_checks(&lua, &snapshot, config)?;
 
     // The init VM and `registry` (SharedRegistry) drop here. The
     // closures inside the VM that captured SharedRegistry clones are
@@ -169,6 +95,36 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     drop(registry);
 
     Ok(snapshot)
+}
+
+/// How many definition files of each kind the init VM loaded.
+struct DefinitionCounts {
+    collections: usize,
+    globals: usize,
+    jobs: usize,
+}
+
+/// Load every collection, global and job definition file. A file that fails
+/// does not stop the others: every failing file is reported together, so an
+/// operator fixes them in one round. With any failing, nothing after the
+/// loading runs — the registry is missing what those files define, and the
+/// checks over it would only report the gaps they left.
+fn load_definitions(lua: &Lua, config_dir: &Path) -> Result<DefinitionCounts> {
+    let mut report = ErrorReport::new();
+
+    let collections = load_def_dir_reporting(lua, config_dir, "collection", &mut report)?;
+    let globals = load_def_dir_reporting(lua, config_dir, "global", &mut report)?;
+    let jobs = load_def_dir_reporting(lua, config_dir, "job", &mut report)?;
+
+    report
+        .into_result()
+        .context("Failed to load the definition files")?;
+
+    Ok(DefinitionCounts {
+        collections,
+        globals,
+        jobs,
+    })
 }
 
 /// Execute init.lua if present. Returns whether it existed. Shared by the
@@ -220,18 +176,34 @@ pub(crate) fn load_source_file(lua: &Lua, code: &str, path: &Path) -> LuaResult<
 }
 
 /// Load definition files from `{config_dir}/{kind}s/` if the directory exists.
+/// Every file is loaded; the ones that fail are reported together.
 pub(crate) fn load_def_dir(lua: &Lua, config_dir: &Path, kind: &str) -> Result<usize> {
+    let mut report = ErrorReport::new();
+    let count = load_def_dir_reporting(lua, config_dir, kind, &mut report)?;
+
+    report.into_result()?;
+
+    Ok(count)
+}
+
+/// [`load_def_dir`], recording each file that fails in `report`.
+fn load_def_dir_reporting(
+    lua: &Lua,
+    config_dir: &Path,
+    kind: &str,
+    report: &mut ErrorReport,
+) -> Result<usize> {
     let dir_name = format!("{kind}s");
     let dir = config_dir.join(&dir_name);
 
-    if dir.exists() {
-        // Pass the plural directory name as the require-key prefix so
-        // `require("jobs.foo")` hits the cache populated here for
-        // `<config_dir>/jobs/foo.lua`.
-        load_lua_dir(lua, &dir, &dir_name)
-    } else {
-        Ok(0)
+    if !dir.exists() {
+        return Ok(0);
     }
+
+    // Pass the plural directory name as the require-key prefix so
+    // `require("jobs.foo")` hits the cache populated here for
+    // `<config_dir>/jobs/foo.lua`.
+    load_lua_dir(lua, &dir, &dir_name, report)
 }
 
 /// Chunk name for Lua error messages: the last two path components
@@ -402,7 +374,11 @@ pub(crate) fn sandbox_lua(lua: &Lua, io_jail: &Arc<IoJail>) -> Result<()> {
 /// would run again at runtime and trip the `InitPhase` guard.
 /// Files that don't `return` cache as `true` (Lua's standard
 /// require-no-return convention).
-pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
+///
+/// A file that fails is recorded in `report` and the next one loads, so every
+/// failing file is reported together. Errors only when the directory itself
+/// can't be read.
+fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str, report: &mut ErrorReport) -> Result<usize> {
     let mut entries: Vec<_> = fs::read_dir(dir)
         .with_context(|| format!("Failed to read {} directory: {}", kind, dir.display()))?
         .filter_map(std::result::Result::ok)
@@ -415,38 +391,47 @@ pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
     let loaded: Table = pkg.get("loaded")?;
 
     let count = entries.len();
+
     for entry in entries {
-        let path = entry.path();
-        let Some(name) = path.file_name() else {
-            continue;
-        };
-        let name = name.to_string_lossy();
-        debug!("[lua:{}] Loading {kind}: {name}", vm_label(lua));
-
-        let code = fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read {}", path.display()))?;
-
-        reset_instruction_budget(lua);
-
-        let returned: Value = load_source_file(lua, &code, &path)
-            .and_then(|chunk| chunk.call(()))
-            .with_context(|| format!("Failed to execute {}", path.display()))?;
-
-        let stem = path
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let module_name = format!("{kind}.{stem}");
-        let cached = match returned {
-            Value::Nil => Value::Boolean(true),
-            v => v,
-        };
-        loaded
-            .set(module_name.as_str(), cached)
-            .with_context(|| format!("Failed to cache loaded module '{module_name}'"))?;
+        report.check(load_lua_file(lua, &entry.path(), kind, &loaded));
     }
 
     Ok(count)
+}
+
+/// Evaluate one definition file and cache what it returns under
+/// `<kind>.<stem>` in `package.loaded`.
+fn load_lua_file(lua: &Lua, path: &Path, kind: &str, loaded: &Table) -> Result<()> {
+    let Some(name) = path.file_name() else {
+        return Ok(());
+    };
+    let name = name.to_string_lossy();
+    debug!("[lua:{}] Loading {kind}: {name}", vm_label(lua));
+
+    let code =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
+
+    reset_instruction_budget(lua);
+
+    let returned: Value = load_source_file(lua, &code, path)
+        .and_then(|chunk| chunk.call(()))
+        .with_context(|| format!("Failed to execute {}", path.display()))?;
+
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let module_name = format!("{kind}.{stem}");
+    let cached = match returned {
+        Value::Nil => Value::Boolean(true),
+        v => v,
+    };
+
+    loaded
+        .set(module_name.as_str(), cached)
+        .with_context(|| format!("Failed to cache loaded module '{module_name}'"))?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -697,7 +682,7 @@ mod tests {
         let err = format!("{:#}", execute_init_lua(&lua, tmp.path()).unwrap_err());
         assert!(err.contains("binary chunk"), "init.lua: {err}");
 
-        let err = format!("{:#}", load_lua_dir(&lua, &hooks, "hooks").unwrap_err());
+        let err = format!("{:#}", load_def_dir(&lua, tmp.path(), "hook").unwrap_err());
         assert!(err.contains("binary chunk"), "definition dir: {err}");
     }
 
@@ -866,6 +851,33 @@ mod tests {
             result.is_err(),
             "load() must not be usable to bypass sandbox"
         );
+    }
+
+    /// Regression: loading stopped at the first definition file that failed,
+    /// so a project with several needed one fix-and-restart cycle each. Every
+    /// failing file is reported together, and the files around them still
+    /// load.
+    #[test]
+    fn every_failing_definition_file_is_reported() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let collections = tmp.path().join("collections");
+        fs::create_dir_all(&collections).unwrap();
+        fs::write(collections.join("a_broken.lua"), "error('first mistake')").unwrap();
+        fs::write(collections.join("b_fine.lua"), "return true").unwrap();
+        fs::write(collections.join("c_broken.lua"), "this is not lua").unwrap();
+
+        let Err(err) = init_lua(tmp.path(), &CrapConfig::test_default()) else {
+            panic!("the boot must fail");
+        };
+        let err = format!("{err:#}");
+
+        assert!(err.contains("2 problems"), "{err}");
+        assert!(
+            err.contains("a_broken.lua") && err.contains("first mistake"),
+            "{err}"
+        );
+        assert!(err.contains("c_broken.lua"), "{err}");
+        assert!(!err.contains("b_fine.lua"), "{err}");
     }
 
     /// Boot `init_lua` over a config dir holding only `init.lua` = `code`,

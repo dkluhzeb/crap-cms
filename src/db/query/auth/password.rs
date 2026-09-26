@@ -38,15 +38,16 @@ pub fn find_by_email(
 ) -> Result<Option<Document>> {
     // Email values are stored in canonical form (trimmed, lowercased,
     // NFC-composed), so the typed address is canonicalized and compared as is:
-    // any capitals or accent composition find the account. `LOWER(email)` is
-    // the identity on stored values and keeps the lookup on the auth
-    // collection's case-folded unique index.
+    // any capitals or accent composition find the account, and the lookup
+    // uses the email field's unique index. No SQL case folding — the
+    // database's rules (collation, ASCII-only `LOWER`) need not agree with the
+    // canonical form.
     // Locale-aware column list: on a localized auth collection the bare
     // logical names (`title`) do not exist as columns — the same footgun the
     // read paths guard against.
     let column_exprs = select_columns(def, locale_ctx)?;
     let mut sql = format!(
-        "SELECT {} FROM \"{}\" WHERE LOWER(email) = {}",
+        "SELECT {} FROM \"{}\" WHERE email = {}",
         column_exprs.join(", "),
         slug,
         conn.placeholder(1)
@@ -161,7 +162,7 @@ mod tests {
             .unwrap();
         conn.execute_batch(
             "CREATE TABLE users (
-                id TEXT PRIMARY KEY, email TEXT UNIQUE, name TEXT,
+                id TEXT PRIMARY KEY, _revision INTEGER NOT NULL DEFAULT 0, email TEXT UNIQUE, name TEXT,
                 _password_hash TEXT, _session_version INTEGER DEFAULT 0,
                 _reset_token TEXT, _reset_token_exp INTEGER,
                 created_at TEXT, updated_at TEXT
